@@ -1,0 +1,65 @@
+{
+  "expo": {
+    "name": "JABY Secure Messenger",
+    "slug": "jaby-secure-messenger",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#090d16"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jaby.securemessenger",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "JABY uses Face ID to unlock your encrypted enclave.",
+        "NSCameraUsageDescription": "JABY needs camera access for video calls and QR safety-number verification.",
+        "NSMicrophoneUsageDescription": "JABY needs microphone access for voice notes and calls."
+      }
+    },
+    "android": {
+      "package": "com.jaby.securemessenger",
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#090d16"
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.VIBRATE",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "JABY uses Face ID to unlock your encrypted enclave."
+        }
+      ],
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "JABY needs camera access for video calls.",
+          "microphonePermission": "JABY needs microphone access for voice calls."
+        }
+      ]
+    ]
+  }
+}
