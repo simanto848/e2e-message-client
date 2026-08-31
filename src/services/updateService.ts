@@ -23,8 +23,8 @@ export interface CheckUpdateResult {
 export const CURRENT_APP_VERSION = Constants.expoConfig?.version || '1.0.0';
 
 // Default GitHub Repo for direct releases fallback
-export const GITHUB_RELEASES_API = 'https://api.github.com/repos/simanto-hasan/jaby-secure-messenger/releases/latest';
-export const GITHUB_RELEASES_WEB = 'https://github.com/simanto-hasan/jaby-secure-messenger/releases';
+export const GITHUB_RELEASES_API = 'https://api.github.com/repos/simanto848/e2e-message-client/releases/latest';
+export const GITHUB_RELEASES_WEB = 'https://github.com/simanto848/e2e-message-client/releases';
 
 /**
  * Compare two semver strings (e.g. "1.1.0" > "1.0.0")
