@@ -86,10 +86,9 @@ export function SettingsScreen({
           </View>
         </View>
 
-        {/* Security Preferences */}
-        <Text style={styles.sectionHeader}>PRIVACY & SETTINGS</Text>
+        {/* Privacy */}
+        <Text style={styles.sectionHeader}>PRIVACY</Text>
         <View style={styles.settingCard}>
-          {/* Anti-Screenshot Toggle */}
           <View style={styles.toggleRow}>
             <View style={styles.toggleTextContainer}>
               <View style={styles.rowAlign}>
@@ -107,9 +106,12 @@ export function SettingsScreen({
               thumbColor={antiScreenshotEnabled ? colors.primary : colors.textMuted}
             />
           </View>
+        </View>
 
-          {/* Invites */}
-          <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onOpenInvites}>
+        {/* Account */}
+        <Text style={styles.sectionHeader}>ACCOUNT</Text>
+        <View style={styles.settingCard}>
+          <TouchableOpacity style={styles.menuItem} onPress={onOpenInvites}>
             <View style={styles.rowAlign}>
               <Ticket size={18} color={colors.primary} />
               <Text style={styles.menuItemText}>Invite Friends</Text>
@@ -120,7 +122,6 @@ export function SettingsScreen({
             </View>
           </TouchableOpacity>
 
-          {/* Linked Devices */}
           <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onOpenLinkedDevices}>
             <View style={styles.rowAlign}>
               <Laptop size={18} color={colors.accentBlue} />
@@ -129,7 +130,6 @@ export function SettingsScreen({
             <ChevronRight size={18} color={colors.textSecondary} />
           </TouchableOpacity>
 
-          {/* Cloud Backup */}
           <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onOpenCloudBackup}>
             <View style={styles.rowAlign}>
               <Cloud size={18} color={colors.accentPurple} />
@@ -137,29 +137,35 @@ export function SettingsScreen({
             </View>
             <ChevronRight size={18} color={colors.textSecondary} />
           </TouchableOpacity>
-
-          {/* Hardware Permissions */}
-          {onOpenPermissions && (
-            <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onOpenPermissions}>
-              <View style={styles.rowAlign}>
-                <ShieldCheck size={18} color={colors.primary} />
-                <Text style={styles.menuItemText}>App Permissions</Text>
-              </View>
-              <ChevronRight size={18} color={colors.textSecondary} />
-            </TouchableOpacity>
-          )}
-
-          {/* Check for Updates */}
-          {onCheckUpdates && (
-            <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onCheckUpdates}>
-              <View style={styles.rowAlign}>
-                <Sparkles size={18} color={colors.accentBlue} />
-                <Text style={styles.menuItemText}>Check for Updates</Text>
-              </View>
-              <ChevronRight size={18} color={colors.textSecondary} />
-            </TouchableOpacity>
-          )}
         </View>
+
+        {/* App */}
+        {(onOpenPermissions || onCheckUpdates) && (
+          <>
+            <Text style={styles.sectionHeader}>APP</Text>
+            <View style={styles.settingCard}>
+              {onOpenPermissions && (
+                <TouchableOpacity style={styles.menuItem} onPress={onOpenPermissions}>
+                  <View style={styles.rowAlign}>
+                    <ShieldCheck size={18} color={colors.primary} />
+                    <Text style={styles.menuItemText}>App Permissions</Text>
+                  </View>
+                  <ChevronRight size={18} color={colors.textSecondary} />
+                </TouchableOpacity>
+              )}
+
+              {onCheckUpdates && (
+                <TouchableOpacity style={[styles.menuItem, onOpenPermissions && styles.borderTop]} onPress={onCheckUpdates}>
+                  <View style={styles.rowAlign}>
+                    <Sparkles size={18} color={colors.accentBlue} />
+                    <Text style={styles.menuItemText}>Check for Updates</Text>
+                  </View>
+                  <ChevronRight size={18} color={colors.textSecondary} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </>
+        )}
 
         {/* Lock Button */}
         <TouchableOpacity style={styles.lockButton} onPress={onLockEnclave}>

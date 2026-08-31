@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   Image,
   Platform,
   Dimensions,
+  Animated,
 } from 'react-native';
 import { RTCView, MediaStream } from '../utils/webrtcAdapter';
 import {
@@ -61,6 +62,24 @@ export function CallModal({
   if (!callState.active) return null;
 
   const [waveBars, setWaveBars] = useState([12, 24, 16, 32, 20, 28, 14]);
+  const ringPulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Pulsing avatar ring while the call is ringing (either direction) —
+  // gives a clear "something is happening" signal before the peer answers.
+  useEffect(() => {
+    if (callState.status !== 'ringing') {
+      ringPulseAnim.setValue(1);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(ringPulseAnim, { toValue: 1.12, duration: 700, useNativeDriver: true }),
+        Animated.timing(ringPulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [callState.status]);
 
   // Audio waveform animation loop
   useEffect(() => {
@@ -162,10 +181,19 @@ export function CallModal({
           </Text>
 
           {/* Telemetry Pill */}
-          {callState.status === 'connected' && (
+          {callState.status === 'connected' && !callState.isReconnecting && (
             <View style={styles.telemetryPill}>
               <Radio size={10} color={colors.primary} />
               <Text style={styles.telemetryText}>LIVE {isVideo ? 'VIDEO' : 'VOICE'}</Text>
+            </View>
+          )}
+
+          {/* Reconnecting Banner — the WebRTC connection dropped mid-call
+              (see App.tsx's onConnectionStateChange) but ICE may still
+              recover, so this doesn't end the call outright. */}
+          {callState.status === 'connected' && callState.isReconnecting && (
+            <View style={styles.reconnectingPill}>
+              <Text style={styles.reconnectingText}>Reconnecting…</Text>
             </View>
           )}
         </View>
@@ -173,10 +201,11 @@ export function CallModal({
         {/* Center Profile & Audio Waves (for Audio Calls or Video Off) */}
         {(!isVideo || callState.isVideoOff) && (
           <View style={styles.userCenter}>
-            <View
+            <Animated.View
               style={[
                 styles.avatarBorder,
-                isIncomingRinging && styles.avatarBorderRinging,
+                (isIncomingRinging || callState.status === 'ringing') && styles.avatarBorderRinging,
+                { transform: [{ scale: ringPulseAnim }] },
               ]}
             >
               <Image
@@ -187,7 +216,7 @@ export function CallModal({
                 }}
                 style={styles.avatar}
               />
-            </View>
+            </Animated.View>
 
             <Text style={styles.callerName}>{remote?.name || 'Contact'}</Text>
             <Text style={styles.callerHandle}>{remote?.handle || '@user'}</Text>
@@ -429,6 +458,23 @@ const styles = StyleSheet.create({
   },
   telemetryText: {
     color: colors.primaryDark,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  reconnectingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.warningLight,
+    borderColor: '#fde68a',
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginTop: 6,
+  },
+  reconnectingText: {
+    color: '#92400e',
     fontSize: 9,
     fontWeight: '800',
     letterSpacing: 0.5,

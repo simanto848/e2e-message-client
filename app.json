@@ -5,11 +5,11 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#090d16"
+      "backgroundColor": "#f8fafc"
     },
     "ios": {
       "supportsTablet": true,
@@ -17,7 +17,8 @@
       "infoPlist": {
         "NSFaceIDUsageDescription": "JABY uses Face ID to unlock your encrypted enclave.",
         "NSCameraUsageDescription": "JABY needs camera access for video calls and QR safety-number verification.",
-        "NSMicrophoneUsageDescription": "JABY needs microphone access for voice notes and calls."
+        "NSMicrophoneUsageDescription": "JABY needs microphone access for voice notes and calls.",
+        "NSPhotoLibraryUsageDescription": "JABY needs photo library access to send encrypted images to your contacts."
       }
     },
     "android": {

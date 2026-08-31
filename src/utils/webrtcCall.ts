@@ -36,13 +36,17 @@ import { socketService } from '../services/socket';
 // Public STUN servers get you a direct connection when both devices are on
 // reasonably open networks. In practice, a meaningful fraction of real-world
 // connections (carrier-grade NAT, symmetric NATs, restrictive Wi-Fi) need a
-// TURN relay to connect at all — add your own here before relying on this
-// for real users. See JABY_CALLING_FIX_PLAN.md for how to stand one up
-// (e.g. self-hosted coturn, or a managed provider).
+// TURN relay to connect at all. The turn: entries below are OpenRelay's free,
+// publicly-documented community credentials (no signup) — fine for personal
+// use with friends, but a best-effort service with no uptime guarantee, not
+// a production SLA. Swap in your own (self-hosted coturn or a managed
+// provider) before relying on this at any real scale.
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  // { urls: 'turn:your-turn-server:3478', username: 'CHANGE_ME', credential: 'CHANGE_ME' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
 ];
 
 interface RTCIceServer {

@@ -6,6 +6,7 @@ import { colors, shadows } from '../theme';
 
 interface Props {
   chats: ChatThread[];
+  loading?: boolean;
   incomingRequestsCount: number;
   onlineUserIds: Set<string>;
   refreshing?: boolean;
@@ -15,8 +16,21 @@ interface Props {
   onOpenSearchModal: () => void;
 }
 
+function ChatRowSkeleton() {
+  return (
+    <View style={[styles.chatCard, styles.skeletonCard]}>
+      <View style={[styles.avatar, styles.skeletonBlock]} />
+      <View style={styles.chatInfo}>
+        <View style={[styles.skeletonBlock, styles.skeletonLineWide]} />
+        <View style={[styles.skeletonBlock, styles.skeletonLineNarrow]} />
+      </View>
+    </View>
+  );
+}
+
 export function ChatListScreen({
   chats,
+  loading = false,
   incomingRequestsCount,
   onlineUserIds,
   refreshing = false,
@@ -88,17 +102,25 @@ export function ChatListScreen({
           />
         }
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <UserCheck size={36} color={colors.textMuted} />
-            <Text style={styles.emptyTitle}>No conversations yet</Text>
-            <Text style={styles.emptySubtitle}>
-              Search for people by their username to start a secure chat.
-            </Text>
-            <TouchableOpacity style={styles.emptySearchBtn} onPress={onOpenSearchModal}>
-              <UserPlus size={16} color="#ffffff" />
-              <Text style={styles.emptySearchBtnText}>Find People</Text>
-            </TouchableOpacity>
-          </View>
+          loading ? (
+            <View>
+              <ChatRowSkeleton />
+              <ChatRowSkeleton />
+              <ChatRowSkeleton />
+            </View>
+          ) : (
+            <View style={styles.emptyContainer}>
+              <UserCheck size={36} color={colors.textMuted} />
+              <Text style={styles.emptyTitle}>No conversations yet</Text>
+              <Text style={styles.emptySubtitle}>
+                Search for people by their username to start a secure chat.
+              </Text>
+              <TouchableOpacity style={styles.emptySearchBtn} onPress={onOpenSearchModal}>
+                <UserPlus size={16} color="#ffffff" />
+                <Text style={styles.emptySearchBtnText}>Find People</Text>
+              </TouchableOpacity>
+            </View>
+          )
         }
         renderItem={({ item }) => {
           const participant = item.participant;
@@ -280,6 +302,22 @@ const styles = StyleSheet.create({
   pinnedCard: {
     borderColor: '#a7f3d0',
     backgroundColor: '#f0fdf4',
+  },
+  skeletonCard: {
+    opacity: 0.6,
+  },
+  skeletonBlock: {
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: 6,
+  },
+  skeletonLineWide: {
+    height: 13,
+    width: '55%',
+    marginBottom: 8,
+  },
+  skeletonLineNarrow: {
+    height: 11,
+    width: '35%',
   },
   avatarContainer: {
     position: 'relative',

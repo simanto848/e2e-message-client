@@ -1,8 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Alert, ActivityIndicator } from 'react-native';
+import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Mic, Trash2, Send, Radio } from './Icons';
 import { Attachment } from '../types';
 import { colors, shadows } from '../theme';
+import { encryptMessage } from '../utils/crypto';
+import { startVoiceRecording, stopVoiceRecording, discardVoiceRecording } from '../utils/audioRecorder';
+import { api } from '../services/api';
+
+// Matches the server's MAX_ATTACHMENT_BYTES (server/src/routes/media.routes.ts).
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 interface Props {
   isRecording: boolean;
@@ -10,6 +18,10 @@ interface Props {
   onStopRecord: () => void;
   onCancelRecord: () => void;
   onSendVoiceNote: (attachment: Attachment) => void;
+  mySecretKey: string;
+  myPublicKey: string;
+  receiverPublicKey: string;
+  receiverId: string;
 }
 
 export function VoiceRecorder({
@@ -18,57 +30,126 @@ export function VoiceRecorder({
   onStopRecord,
   onCancelRecord,
   onSendVoiceNote,
+  mySecretKey,
+  myPublicKey,
+  receiverPublicKey,
+  receiverId,
 }: Props) {
   const [seconds, setSeconds] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const cancelledRef = useRef(false);
 
+  // This component only ever mounts while already "recording" (see
+  // ChatScreen's isRecording ? <VoiceRecorder .../> : ... branch — the mic
+  // button lives in the `false` branch and swaps to a fresh mount of this
+  // component on press), so starting the real microphone capture on mount
+  // is the right lifecycle hook.
   useEffect(() => {
+    cancelledRef.current = false;
     let interval: NodeJS.Timeout;
-    if (isRecording) {
-      setSeconds(0);
-      interval = setInterval(() => {
-        setSeconds(s => s + 1);
-      }, 1000);
 
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.3, duration: 600, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
-        ])
-      ).start();
-    } else {
-      setSeconds(0);
-      pulseAnim.setValue(1);
-    }
+    startVoiceRecording()
+      .then(recording => {
+        if (cancelledRef.current) {
+          discardVoiceRecording(recording);
+          return;
+        }
+        recordingRef.current = recording;
+        setSeconds(0);
+        interval = setInterval(() => setSeconds(s => s + 1), 1000);
+      })
+      .catch(err => {
+        console.warn('[VoiceRecorder] Failed to start recording:', err);
+        Alert.alert('Microphone unavailable', 'Could not start recording. Check microphone permissions in Settings.');
+        onCancelRecord();
+      });
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.3, duration: 600, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+      ])
+    ).start();
 
     return () => {
+      cancelledRef.current = true;
       if (interval) clearInterval(interval);
+      // If this unmounts without an explicit send (e.g. the screen changes
+      // mid-recording), stop and discard rather than leaking an open
+      // recording session.
+      if (recordingRef.current) {
+        discardVoiceRecording(recordingRef.current);
+        recordingRef.current = null;
+      }
     };
-  }, [isRecording]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleSend = () => {
+  const handleCancel = async () => {
+    const recording = recordingRef.current;
+    recordingRef.current = null;
+    if (recording) {
+      const uri = await stopVoiceRecording(recording).catch(() => null);
+      if (uri) FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+    }
+    onCancelRecord();
+  };
+
+  const handleSend = async () => {
+    const recording = recordingRef.current;
+    if (!recording || isUploading) return;
+    recordingRef.current = null;
     onStopRecord();
+
     const duration = Math.max(1, seconds);
-    const voiceNote: Attachment = {
-      id: `audio_${Date.now()}`,
-      name: `Voice Note (${duration}s)`,
-      type: 'audio',
-      size: duration * 16000,
-      url: '',
-      encrypted: true,
-      encryptedPayload: {
-        iv: `iv_${Date.now().toString(16)}`,
-        ciphertext: `VOICE_BLOB_ENC_${Date.now()}`,
-        authTag: `tag_${Date.now().toString(16)}`,
-        algorithm: 'AES-256-GCM',
-        senderPublicKey: 'EPHEMERAL_ECDH_P256',
-        keyFingerprint: 'VN_KEY_E2EE',
-      },
-      duration,
-      waveform: [10, 25, 45, 20, 60, 35, 15, 50, 40, 20, 70, 30, 10],
-      mimeType: 'audio/m4a',
-    };
-    onSendVoiceNote(voiceNote);
+    setIsUploading(true);
+
+    let uri: string | null = null;
+    try {
+      uri = await stopVoiceRecording(recording);
+      if (!uri) throw new Error('Recording produced no file');
+
+      const info = await FileSystem.getInfoAsync(uri);
+      if (info.exists && info.size > MAX_ATTACHMENT_BYTES) {
+        Alert.alert('Voice note too long', 'This recording is too large to send. Try a shorter message.');
+        return;
+      }
+
+      const base64Data = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      // Same E2E crypto used for text messages — the file's raw bytes,
+      // base64-encoded, are just the "plaintext" being encrypted.
+      const encryptedPayload = encryptMessage(base64Data, mySecretKey, receiverPublicKey, myPublicKey);
+
+      const result = await api.uploadMedia({
+        name: `Voice Note (${duration}s)`,
+        type: 'audio',
+        size: info.exists ? info.size : base64Data.length,
+        mimeType: 'audio/m4a',
+        duration,
+        // Real amplitude-based waveform extraction is a larger feature —
+        // keep the synthetic bars for the visual for now.
+        waveform: [10, 25, 45, 20, 60, 35, 15, 50, 40, 20, 70, 30, 10],
+        receiverId,
+        encryptedPayload,
+      });
+
+      if (!result.success || !result.attachment) {
+        throw new Error(result.error || 'Upload failed');
+      }
+
+      onSendVoiceNote(result.attachment);
+    } catch (err) {
+      console.warn('[VoiceRecorder] Send failed:', err);
+      Alert.alert('Could not send voice note', 'Please check your connection and try again.');
+    } finally {
+      if (uri) FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+      setIsUploading(false);
+    }
   };
 
   if (!isRecording) {
@@ -87,7 +168,7 @@ export function VoiceRecorder({
 
   return (
     <View style={styles.recordingContainer}>
-      <TouchableOpacity style={styles.cancelButton} onPress={onCancelRecord}>
+      <TouchableOpacity style={styles.cancelButton} onPress={handleCancel} disabled={isUploading}>
         <Trash2 size={18} color={colors.danger} />
       </TouchableOpacity>
 
@@ -96,11 +177,11 @@ export function VoiceRecorder({
           <Radio size={14} color={colors.danger} />
         </Animated.View>
         <Text style={styles.recordingTimer}>{formatTime(seconds)}</Text>
-        <Text style={styles.enclaveBadge}>RECORDING</Text>
+        <Text style={styles.enclaveBadge}>{isUploading ? 'ENCRYPTING…' : 'RECORDING'}</Text>
       </View>
 
-      <TouchableOpacity style={styles.sendVoiceButton} onPress={handleSend}>
-        <Send size={18} color="#ffffff" />
+      <TouchableOpacity style={styles.sendVoiceButton} onPress={handleSend} disabled={isUploading}>
+        {isUploading ? <ActivityIndicator size="small" color="#ffffff" /> : <Send size={18} color="#ffffff" />}
       </TouchableOpacity>
     </View>
   );

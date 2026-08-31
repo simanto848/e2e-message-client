@@ -10,7 +10,10 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import {
   ArrowLeft,
   Phone,
@@ -27,10 +30,16 @@ import { ChatBubble } from '../components/ChatBubble';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 import { ChatMenuModal } from '../components/ChatMenuModal';
 import { colors, shadows } from '../theme';
+import { encryptMessage, decryptMessage } from '../utils/crypto';
+import { api } from '../services/api';
+
+// Matches the server's MAX_ATTACHMENT_BYTES (server/src/routes/media.routes.ts).
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 interface Props {
   chat: ChatThread;
   currentUser: UserProfile;
+  mySecretKey: string;
   messages: Message[];
   isOnline: boolean;
   onBack: () => void;
@@ -44,11 +53,14 @@ interface Props {
   onDisconnectContact?: () => void;
 }
 
+type ImageResolution = { status: 'loading' } | { status: 'ready'; dataUri: string } | { status: 'error' };
+
 const TIMER_OPTIONS: DisappearingTimer[] = [0, 5, 15, 30, 60, 300, 3600, 86400];
 
 export function ChatScreen({
   chat,
   currentUser,
+  mySecretKey,
   messages,
   isOnline,
   onBack,
@@ -63,7 +75,9 @@ export function ChatScreen({
 }: Props) {
   const [inputText, setInputText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
+  const [isSendingImage, setIsSendingImage] = useState(false);
   const [showMenuModal, setShowMenuModal] = useState(false);
+  const [resolvedImages, setResolvedImages] = useState<Record<string, ImageResolution>>({});
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
 
@@ -77,6 +91,13 @@ export function ChatScreen({
     return () => clearTimeout(timer);
   }, [chat.id]);
 
+  // Reset the decrypted-image cache when switching chats — attachment ids
+  // are unique enough that this isn't strictly required, but avoids holding
+  // onto decrypted image data URIs for a chat that's no longer open.
+  useEffect(() => {
+    setResolvedImages({});
+  }, [chat.id]);
+
   const handleSend = () => {
     if (!inputText.trim()) return;
     onSendMessage(inputText.trim());
@@ -86,6 +107,103 @@ export function ChatScreen({
   const handleSendVoiceNote = (attachment: Attachment) => {
     onSendMessage('🎤 Encrypted Voice Message', attachment);
   };
+
+  const handleAttachImage = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Photo access needed', 'JABY needs photo library access to send encrypted images. Enable it in Settings.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+
+    const asset = result.assets[0];
+    setIsSendingImage(true);
+    try {
+      const info = await FileSystem.getInfoAsync(asset.uri);
+      if (info.exists && info.size > MAX_ATTACHMENT_BYTES) {
+        Alert.alert('Image too large', `Please choose an image under ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB.`);
+        return;
+      }
+
+      const base64Data = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      // Same E2E crypto used for text messages — the image's raw bytes,
+      // base64-encoded, are just the "plaintext" being encrypted.
+      const encryptedPayload = encryptMessage(base64Data, mySecretKey, participant.publicKey, currentUser.publicKey);
+
+      const mimeType = asset.mimeType || 'image/jpeg';
+      const uploadResult = await api.uploadMedia({
+        name: asset.fileName || 'photo.jpg',
+        type: 'image',
+        size: info.exists ? info.size : base64Data.length,
+        mimeType,
+        receiverId: participant.id,
+        encryptedPayload,
+      });
+
+      if (!uploadResult.success || !uploadResult.attachment) {
+        throw new Error(uploadResult.error || 'Upload failed');
+      }
+
+      // We already have the plaintext locally — seed the resolved-image
+      // cache immediately so the bubble we're about to send renders instantly
+      // instead of round-tripping back through the server to decrypt its own upload.
+      setResolvedImages(prev => ({
+        ...prev,
+        [uploadResult.attachment!.id]: { status: 'ready', dataUri: `data:${mimeType};base64,${base64Data}` },
+      }));
+
+      onSendMessage('📷 Encrypted Image', uploadResult.attachment);
+    } catch (err) {
+      console.warn('[ChatScreen] Image send failed:', err);
+      Alert.alert('Could not send image', 'Please check your connection and try again.');
+    } finally {
+      setIsSendingImage(false);
+    }
+  };
+
+  // Lazily decrypt every received image not yet resolved — decryption stays
+  // here (not in ChatBubble) because this screen is the one that holds the
+  // crypto keys. Runs as an effect (not during FlatList's renderItem) so it
+  // never triggers a state update mid-render.
+  useEffect(() => {
+    const pending = messages.filter(
+      m => m.attachment?.type === 'image' && !resolvedImages[m.attachment.id]
+    );
+
+    for (const msg of pending) {
+      const attachment = msg.attachment!;
+      const isSentByMe = msg.senderId === currentUser.id;
+      // Same key-selection rule as App.tsx's decryptVerified: nacl.box lets
+      // the original sender decrypt their own ciphertext with (mySecretKey,
+      // recipient's public key) — the payload's own senderPublicKey field is
+      // only the right "their key" to use when *receiving*.
+      const theirPublicKey = isSentByMe ? participant.publicKey : undefined;
+
+      setResolvedImages(prev => ({ ...prev, [attachment.id]: { status: 'loading' } }));
+      api.getMedia(attachment.id)
+        .then(res => {
+          if (!res.success || !res.attachment) throw new Error(res.error || 'Not found');
+          const key = theirPublicKey || res.attachment.encryptedPayload.senderPublicKey;
+          const plaintext = decryptMessage(res.attachment.encryptedPayload, mySecretKey, key);
+          if (!plaintext) throw new Error('Decryption failed');
+          const mimeType = attachment.mimeType || 'image/jpeg';
+          setResolvedImages(prev => ({ ...prev, [attachment.id]: { status: 'ready', dataUri: `data:${mimeType};base64,${plaintext}` } }));
+        })
+        .catch(err => {
+          console.warn('[ChatScreen] Image decrypt failed:', err);
+          setResolvedImages(prev => ({ ...prev, [attachment.id]: { status: 'error' } }));
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
 
   const cycleTimer = () => {
     const currentIndex = TIMER_OPTIONS.indexOf(chat.disappearingTimer);
@@ -166,14 +284,18 @@ export function ChatScreen({
         contentContainerStyle={styles.messagesList}
         keyboardShouldPersistTaps="handled"
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-        renderItem={({ item }) => (
-          <ChatBubble
-            message={item}
-            isMe={item.senderId === currentUser.id}
-            onInspectCiphertext={onInspectCiphertext}
-            onDeleteForEveryone={onDeleteForEveryone}
-          />
-        )}
+        renderItem={({ item }) => {
+          const imageAttachment = item.attachment?.type === 'image' ? item.attachment : undefined;
+          return (
+            <ChatBubble
+              message={item}
+              isMe={item.senderId === currentUser.id}
+              onInspectCiphertext={onInspectCiphertext}
+              onDeleteForEveryone={onDeleteForEveryone}
+              imageResolution={imageAttachment ? resolvedImages[imageAttachment.id] : undefined}
+            />
+          );
+        }}
       />
 
       {/* Input Bar */}
@@ -185,24 +307,23 @@ export function ChatScreen({
             onStopRecord={() => setIsRecording(false)}
             onCancelRecord={() => setIsRecording(false)}
             onSendVoiceNote={handleSendVoiceNote}
+            mySecretKey={mySecretKey}
+            myPublicKey={currentUser.publicKey}
+            receiverPublicKey={participant.publicKey}
+            receiverId={participant.id}
           />
         ) : (
           <View style={styles.inputRow}>
             <TouchableOpacity
               style={styles.attachButton}
-              onPress={() => {
-                Alert.alert(
-                  'Encrypted Attachment',
-                  'Select payload type to encrypt:',
-                  [
-                    { text: 'Confidential Photo', onPress: () => onSendMessage('📷 Encrypted Image Payload') },
-                    { text: 'Confidential Doc', onPress: () => onSendMessage('📄 Encrypted Document (PDF)') },
-                    { text: 'Cancel', style: 'cancel' },
-                  ]
-                );
-              }}
+              onPress={handleAttachImage}
+              disabled={isSendingImage}
             >
-              <Paperclip size={18} color={colors.textSecondary} />
+              {isSendingImage ? (
+                <ActivityIndicator size="small" color={colors.textSecondary} />
+              ) : (
+                <Paperclip size={18} color={colors.textSecondary} />
+              )}
             </TouchableOpacity>
 
             <TextInput
@@ -236,6 +357,10 @@ export function ChatScreen({
                 onStopRecord={() => setIsRecording(false)}
                 onCancelRecord={() => setIsRecording(false)}
                 onSendVoiceNote={handleSendVoiceNote}
+                mySecretKey={mySecretKey}
+                myPublicKey={currentUser.publicKey}
+                receiverPublicKey={participant.publicKey}
+                receiverId={participant.id}
               />
             )}
           </View>

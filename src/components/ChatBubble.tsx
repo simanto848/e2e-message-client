@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { ShieldCheck, Flame, Check, CheckCheck, Play, Pause, Trash2, Key } from './Icons';
+import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator } from 'react-native';
+import { ShieldCheck, Flame, Check, CheckCheck, Play, Pause, Trash2, Key, ImageIcon } from './Icons';
 import { Message } from '../types';
 import { colors, shadows } from '../theme';
+
+type ImageResolution = { status: 'loading' } | { status: 'ready'; dataUri: string } | { status: 'error' };
 
 interface Props {
   message: Message;
@@ -11,6 +13,7 @@ interface Props {
   onDeleteForEveryone?: (msgId: string) => void;
   onPlayAudio?: (msg: Message) => void;
   isPlayingAudio?: boolean;
+  imageResolution?: ImageResolution;
 }
 
 export function ChatBubble({
@@ -20,6 +23,7 @@ export function ChatBubble({
   onDeleteForEveryone,
   onPlayAudio,
   isPlayingAudio = false,
+  imageResolution,
 }: Props) {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
 
@@ -48,6 +52,7 @@ export function ChatBubble({
   }
 
   const isAudio = message.attachment?.type === 'audio';
+  const isImage = message.attachment?.type === 'image';
 
   return (
     <View style={[styles.container, isMe ? styles.myContainer : styles.theirContainer]}>
@@ -102,6 +107,21 @@ export function ChatBubble({
             <Text style={[styles.audioDuration, isMe && styles.myAudioDuration]}>
               {message.attachment?.duration || 3}s
             </Text>
+          </View>
+        ) : isImage ? (
+          <View style={styles.imageContainer}>
+            {imageResolution?.status === 'ready' ? (
+              <Image source={{ uri: imageResolution.dataUri }} style={styles.image} resizeMode="cover" />
+            ) : imageResolution?.status === 'error' ? (
+              <View style={[styles.imagePlaceholder, styles.imageErrorPlaceholder]}>
+                <ImageIcon size={22} color={colors.danger} />
+                <Text style={styles.imageErrorText}>Failed to decrypt image</Text>
+              </View>
+            ) : (
+              <View style={styles.imagePlaceholder}>
+                <ActivityIndicator size="small" color={isMe ? '#ffffff' : colors.primary} />
+              </View>
+            )}
           </View>
         ) : (
           <Text style={[styles.messageText, isMe ? styles.myText : styles.theirText]}>
@@ -204,8 +224,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 6,
-    paddingTop: 4,
+    marginTop: 8,
+    paddingTop: 6,
     gap: 12,
   },
   cipherTag: {
@@ -260,6 +280,32 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 13,
     fontStyle: 'italic',
+  },
+  imageContainer: {
+    marginBottom: 2,
+  },
+  image: {
+    width: 220,
+    height: 220,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceElevated,
+  },
+  imagePlaceholder: {
+    width: 220,
+    height: 160,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageErrorPlaceholder: {
+    backgroundColor: colors.dangerLight,
+    gap: 6,
+  },
+  imageErrorText: {
+    color: colors.dangerText,
+    fontSize: 12,
+    fontWeight: '600',
   },
   audioRow: {
     flexDirection: 'row',

@@ -15,6 +15,7 @@ import {
   Message,
   InviteCode,
   Attachment,
+  EncryptedPayload,
   ContactRequestWithUser,
   SearchOperativeResult,
   DisappearingTimer,
@@ -273,13 +274,32 @@ export const api = {
     return await res.json();
   },
 
-  // Media Upload
-  async uploadMedia(attachment: Partial<Attachment>) {
+  // Media Upload — file bytes are already encrypted client-side (same
+  // nacl.box scheme as text messages, see src/utils/crypto.ts) before this
+  // is called; the server only ever stores/relays ciphertext.
+  async uploadMedia(params: {
+    name: string;
+    type: 'image' | 'audio';
+    size: number;
+    mimeType?: string;
+    duration?: number;
+    waveform?: number[];
+    receiverId: string;
+    encryptedPayload: EncryptedPayload;
+  }): Promise<{ success: boolean; attachment?: Attachment; error?: string }> {
     const res = await fetch(`${API_BASE_URL}/media/upload`, {
       method: 'POST',
       headers: await authedJsonHeaders(),
-      body: JSON.stringify(attachment),
+      body: JSON.stringify(params),
     });
     return await res.json();
-  }
+  },
+
+  // Fetch a previously-uploaded encrypted attachment's ciphertext for decryption.
+  async getMedia(attachmentId: string): Promise<{ success: boolean; attachment?: Attachment & { encryptedPayload: EncryptedPayload }; error?: string }> {
+    const res = await fetch(`${API_BASE_URL}/media/${attachmentId}`, {
+      headers: await authHeaders(),
+    });
+    return await res.json();
+  },
 };

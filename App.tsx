@@ -69,8 +69,12 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('auth');
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
 
-  // Dynamic Data States (from SQLite Backend)
+  // Dynamic Data States (from Postgres Backend)
   const [chats, setChats] = useState<ChatThread[]>([]);
+  // True only until the very first contacts fetch after login resolves —
+  // lets the chat list show loading skeletons instead of momentarily
+  // looking identical to "you have zero contacts" during normal startup latency.
+  const [isInitialChatsLoading, setIsInitialChatsLoading] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
   const [incomingRequests, setIncomingRequests] = useState<ContactRequestWithUser[]>([]);
   const [outgoingRequests, setOutgoingRequests] = useState<ContactRequestWithUser[]>([]);
@@ -235,6 +239,7 @@ export default function App() {
     isFrontCamera: true,
     duration: 0,
     sasVerificationWords: [],
+    isReconnecting: false,
   });
 
   const callTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -319,6 +324,8 @@ export default function App() {
       setLinkedDevices(devices || []);
     } catch (err) {
       console.log('Dynamic data fetch notice:', err);
+    } finally {
+      setIsInitialChatsLoading(false);
     }
   };
 
@@ -527,6 +534,7 @@ export default function App() {
           isFrontCamera: true,
           duration: 0,
           sasVerificationWords: sas,
+          isReconnecting: false,
         });
       } else if (signal.signalType === 'answer') {
         await webrtcCallEngine.handleRemoteAnswer(signal.sdp);
@@ -750,12 +758,16 @@ export default function App() {
       isFrontCamera: true,
       duration: 0,
       sasVerificationWords: sas,
+      isReconnecting: false,
     });
 
     try {
       await webrtcCallEngine.startCall(currentUser.id, activeChat.participant.id, callId, type === 'video', {
         onRemoteStream: stream => setRemoteStream(stream),
-        onConnectionStateChange: state => console.log('[Call] connection state:', state),
+        onConnectionStateChange: state => {
+          console.log('[Call] connection state:', state);
+          setCallState(prev => ({ ...prev, isReconnecting: state === 'disconnected' || state === 'failed' }));
+        },
       });
       setLocalStream(webrtcCallEngine.getLocalStream());
     } catch (err) {
@@ -814,7 +826,10 @@ export default function App() {
         pending.sdp,
         {
           onRemoteStream: stream => setRemoteStream(stream),
-          onConnectionStateChange: state => console.log('[Call] connection state:', state),
+          onConnectionStateChange: state => {
+            console.log('[Call] connection state:', state);
+            setCallState(prev => ({ ...prev, isReconnecting: state === 'disconnected' || state === 'failed' }));
+          },
         }
       );
       setLocalStream(webrtcCallEngine.getLocalStream());
@@ -911,6 +926,7 @@ export default function App() {
             {currentScreen === 'chat_list' && (
               <ChatListScreen
                 chats={chats}
+                loading={isInitialChatsLoading}
                 incomingRequestsCount={incomingRequests.length}
                 onlineUserIds={onlineUserIds}
                 refreshing={isRefreshing}
@@ -928,6 +944,7 @@ export default function App() {
               <ChatScreen
                 chat={activeChat}
                 currentUser={currentUser}
+                mySecretKey={mySecretKey!}
                 messages={messages}
                 isOnline={onlineUserIds.has(activeChat.participant.id)}
                 onBack={() => setCurrentScreen('chat_list')}

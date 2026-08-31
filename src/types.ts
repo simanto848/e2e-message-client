@@ -143,6 +143,11 @@ export interface CallState {
   isFrontCamera: boolean;
   duration: number;
   sasVerificationWords: string[];
+  // True when the underlying WebRTC connection has dropped to 'disconnected'
+  // or 'failed' mid-call (see RTCPeerConnection.connectionState) — the call
+  // isn't necessarily over yet (ICE can recover), so this drives a
+  // "Reconnecting..." banner rather than ending the call outright.
+  isReconnecting: boolean;
 }
 
 export interface CloudBackupMetadata {

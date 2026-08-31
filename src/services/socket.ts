@@ -184,20 +184,6 @@ class SocketService {
     };
   }
 
-  // Voice stream chunk relay
-  sendVoiceChunk(targetId: string, audioData: string) {
-    if (this.socket?.connected) {
-      this.socket.emit('call_voice_chunk', { targetId, audioData });
-    }
-  }
-
-  onReceiveVoiceChunk(callback: (data: { senderId: string; targetId: string; audioData: string }) => void) {
-    this.socket?.on('call_voice_chunk', callback);
-    return () => {
-      this.socket?.off('call_voice_chunk', callback);
-    };
-  }
-
   isConnected(): boolean {
     return Boolean(this.socket?.connected);
   }
