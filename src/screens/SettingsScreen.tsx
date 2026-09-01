@@ -25,6 +25,7 @@ interface Props {
   onOpenCloudBackup: () => void;
   onOpenPermissions?: () => void;
   onCheckUpdates?: () => void;
+  onEditProfile: () => void;
   onLockEnclave: () => void;
   onSignOut?: () => void;
   onBack: () => void;
@@ -39,6 +40,7 @@ export function SettingsScreen({
   onOpenCloudBackup,
   onOpenPermissions,
   onCheckUpdates,
+  onEditProfile,
   onLockEnclave,
   onSignOut,
   onBack,
@@ -55,14 +57,15 @@ export function SettingsScreen({
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Profile Card */}
-        <View style={styles.profileCard}>
+        <TouchableOpacity style={styles.profileCard} onPress={onEditProfile} activeOpacity={0.7}>
           <Image source={{ uri: currentUser.avatar }} style={styles.avatar} />
           <View style={styles.profileInfo}>
             <Text style={styles.profileName}>{currentUser.name}</Text>
             <Text style={styles.profileHandle}>{currentUser.handle}</Text>
             <Text style={styles.profileStatus}>{currentUser.statusMessage}</Text>
           </View>
-        </View>
+          <ChevronRight size={18} color={colors.textSecondary} />
+        </TouchableOpacity>
 
         {/* Cryptographic Identity Section */}
         <Text style={styles.sectionHeader}>SECURITY KEY</Text>

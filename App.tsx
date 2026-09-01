@@ -52,6 +52,7 @@ import { CallModal } from './src/components/CallModal';
 import { InviteManagerModal } from './src/components/InviteManagerModal';
 import { LinkedDevicesModal } from './src/components/LinkedDevicesModal';
 import { CloudBackupModal } from './src/components/CloudBackupModal';
+import { EditProfileModal } from './src/components/EditProfileModal';
 import { PrivacyShield } from './src/components/PrivacyShield';
 import { ContactRequestsModal } from './src/components/ContactRequestsModal';
 import { SearchOperativeModal } from './src/components/SearchOperativeModal';
@@ -100,6 +101,7 @@ export default function App() {
   const [showInvitesModal, setShowInvitesModal] = useState(false);
   const [showLinkedDevicesModal, setShowLinkedDevicesModal] = useState(false);
   const [showCloudBackupModal, setShowCloudBackupModal] = useState(false);
+  const [showEditProfileModal, setShowEditProfileModal] = useState(false);
   const [showRequestsModal, setShowRequestsModal] = useState(false);
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);
@@ -985,6 +987,7 @@ export default function App() {
                 onOpenCloudBackup={() => setShowCloudBackupModal(true)}
                 onOpenPermissions={() => setShowPermissionsModal(true)}
                 onCheckUpdates={handleCheckUpdates}
+                onEditProfile={() => setShowEditProfileModal(true)}
                 onLockEnclave={() => setIsAppLocked(true)}
                 onSignOut={handleSignOut}
                 onBack={() => setCurrentScreen('chat_list')}
@@ -1068,7 +1071,11 @@ export default function App() {
           onToggleSpeaker={() => {
             setCallState(prev => {
               const nextSpeaker = !prev.isSpeakerOn;
-              callAudio.setSpeaker(nextSpeaker);
+              // InCallManager owns actual WebRTC audio routing during a call
+              // (see webrtcCall.ts) — expo-av's setAudioModeAsync governs a
+              // separate audio session used only for the ringtone/connect/
+              // hangup chime sounds, not the live call audio itself.
+              webrtcCallEngine.setSpeakerEnabled(nextSpeaker);
               return { ...prev, isSpeakerOn: nextSpeaker };
             });
           }}
@@ -1156,6 +1163,23 @@ export default function App() {
           }}
           onClose={() => setShowCloudBackupModal(false)}
         />
+
+        {/* Edit Profile Modal — name + avatar (Cloudinary-hosted, unencrypted:
+            avatars are public profile pictures, unlike E2E-encrypted chat
+            attachments). */}
+        {currentUser && (
+          <EditProfileModal
+            visible={showEditProfileModal}
+            currentUser={currentUser}
+            onSave={async updates => {
+              const res = await api.updateProfile(updates);
+              if (!res.success || !res.user) return false;
+              setCurrentUser(res.user);
+              return true;
+            }}
+            onClose={() => setShowEditProfileModal(false)}
+          />
+        )}
 
         {/* Privacy Shield App Lock Overlay */}
         <PrivacyShield

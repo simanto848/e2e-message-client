@@ -83,6 +83,23 @@ export const api = {
     return await res.json();
   },
 
+  // Signs a direct-to-Cloudinary avatar upload — see src/utils/avatarUpload.ts.
+  async getAvatarUploadSignature(): Promise<{
+    success: boolean;
+    timestamp: number;
+    signature: string;
+    folder: string;
+    publicId: string;
+    apiKey: string;
+    cloudName: string;
+  }> {
+    const res = await fetch(`${API_BASE_URL}/auth/avatar-signature`, {
+      method: 'POST',
+      headers: await authHeaders(),
+    });
+    return await res.json();
+  },
+
   // Contacts: Fetch Approved Contacts / Threads
   async getContacts(userId: string): Promise<ChatThread[]> {
     try {

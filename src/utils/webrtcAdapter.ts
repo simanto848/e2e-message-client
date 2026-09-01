@@ -33,3 +33,25 @@ export const RTCSessionDescription = WebRTC?.RTCSessionDescription ?? null;
 export const mediaDevices = WebRTC?.mediaDevices ?? null;
 export const RTCView = WebRTC?.RTCView ?? null;
 export type MediaStream = any;
+
+/**
+ * react-native-webrtc streams remote audio through its own native audio
+ * pipeline (Android's WebRTC AudioDeviceModule / iOS's AVAudioSession) —
+ * it does NOT go through expo-av, and nothing configures it automatically.
+ * Without explicitly starting a call audio session (InCallManager), the
+ * platform's default audio routing is inconsistent — commonly resulting in
+ * "the call connects but neither side hears anything." InCallManager is the
+ * standard fix: it puts the OS audio session into call mode and manages
+ * speaker/earpiece routing. Guarded the same way as the WebRTC module itself
+ * since it's also native code, unavailable in Expo Go/web.
+ */
+let InCallManagerModule: any = null;
+if (isWebRTCSupported) {
+  try {
+    InCallManagerModule = require('react-native-incall-manager').default;
+  } catch (error) {
+    console.warn('[WebRTC] react-native-incall-manager was expected but failed to load:', error);
+    InCallManagerModule = null;
+  }
+}
+export const InCallManager = InCallManagerModule;
