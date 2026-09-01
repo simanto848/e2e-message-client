@@ -1,24 +1,24 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { Ticket, Laptop, Cloud, Lock } from './Icons';
+import { Ticket, Lock, Settings } from './Icons';
 import { JabyLogo } from './JabyLogo';
 import { colors, shadows } from '../theme';
 
 interface Props {
   onLockPress: () => void;
   onInvitesPress: () => void;
-  onLinkedDevicesPress: () => void;
-  onBackupPress: () => void;
   onSettingsPress: () => void;
   inviteCount?: number;
   isEnclaveActive?: boolean;
 }
 
+// Linked Devices and Chat Backup used to live here too, but they're already
+// reachable from Settings (ACCOUNT section) — having them in both places was
+// redundant clutter, so this row now only keeps what's worth one-tap access:
+// invite quota at a glance, settings, and the lock button.
 export function Header({
   onLockPress,
   onInvitesPress,
-  onLinkedDevicesPress,
-  onBackupPress,
   onSettingsPress,
   inviteCount = 3,
   isEnclaveActive = true,
@@ -35,12 +35,8 @@ export function Header({
           <Text style={styles.pillText}>{inviteCount}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.iconButton} onPress={onLinkedDevicesPress}>
-          <Laptop size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.iconButton} onPress={onBackupPress}>
-          <Cloud size={18} color={colors.textSecondary} />
+        <TouchableOpacity style={styles.iconButton} onPress={onSettingsPress}>
+          <Settings size={18} color={colors.textSecondary} />
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.lockButton} onPress={onLockPress}>

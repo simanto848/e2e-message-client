@@ -64,6 +64,12 @@ import { colors } from './src/theme';
 
 type ScreenType = 'auth' | 'chat_list' | 'chat_detail' | 'settings';
 
+function formatCallDuration(totalSeconds: number): string {
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
 export default function App() {
   // App & User State
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -88,6 +94,11 @@ export default function App() {
   // Security & Privacy States
   const [isAppLocked, setIsAppLocked] = useState(false);
   const [antiScreenshotEnabled, setAntiScreenshotEnabled] = useState(true);
+  // Whether the SAS ("verification words") panel shows during calls — see
+  // CallModal.tsx. On by default (it's a real security feature: comparing
+  // these words out loud detects a man-in-the-middle on the call), but some
+  // users find it cluttering, so it's toggleable from Settings.
+  const [callVerificationEnabled, setCallVerificationEnabled] = useState(true);
   const [inspectingMessage, setInspectingMessage] = useState<Message | null>(null);
   const [safetyModalChat, setSafetyModalChat] = useState<ChatThread | null>(null);
 
@@ -255,6 +266,13 @@ export default function App() {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const pendingIncomingCallRef = useRef<{ callId: string; senderId: string; sdp: unknown } | null>(null);
   const activeCallIdRef = useRef<string | null>(null);
+  // Mirrors callState for reading inside socket-event closures without
+  // depending on callState in that effect (which would tear down and
+  // resubscribe every listener on every call-state tick) — see logCallToChat.
+  const callStateRef = useRef<CallState>(callState);
+  useEffect(() => {
+    callStateRef.current = callState;
+  }, [callState]);
 
   // 1. Authenticate user & persist the real session token + identity key
   // material to secure, OS-backed storage (never plaintext AsyncStorage).
@@ -553,6 +571,7 @@ export default function App() {
         setRemoteStream(null);
         pendingIncomingCallRef.current = null;
         activeCallIdRef.current = null;
+        logCallToChat(callStateRef.current, signal.signalType === 'reject' ? 'declined' : 'missed');
         setCallState(prev => ({ ...prev, active: false, status: 'ended', duration: 0 }));
       }
     });
@@ -661,6 +680,58 @@ export default function App() {
     api.sendMessage(newMsg).catch(err => console.warn('REST send err:', err));
 
     // 2. Real-time forward via Socket.IO
+    socketService.sendMessage(newMsg);
+  };
+
+  // Logs a finished call as a normal chat message (encrypted the same way as
+  // text — the call's outcome is genuinely the message content here, there's
+  // no separate "call log" storage). Only the caller's device sends this —
+  // both sides end up with it via the normal message sync, so it isn't
+  // logged twice. `finalState` should be the call state read from
+  // callStateRef right before it gets reset to 'ended', so duration/type/
+  // remoteUser are still populated.
+  const logCallToChat = (finalState: CallState, endReason: 'completed' | 'declined' | 'missed') => {
+    if (!currentUser || !mySecretKey || !finalState.remoteUser) return;
+    if (finalState.isIncoming) return; // only the caller logs, to avoid a duplicate entry from each side
+
+    const peer = finalState.remoteUser;
+    const status: 'completed' | 'declined' | 'missed' = finalState.duration > 0 ? 'completed' : endReason;
+    const label = finalState.type === 'video' ? 'Video call' : 'Voice call';
+    const text =
+      status === 'completed'
+        ? `📞 ${label} · ${formatCallDuration(finalState.duration)}`
+        : status === 'declined'
+        ? `📞 ${label} declined`
+        : `📞 ${label} not answered`;
+
+    const encryptedPayload = encryptMessage(text, mySecretKey, peer.publicKey, currentUser.publicKey);
+    const callAttachment: Attachment = {
+      id: `call_${Date.now()}`,
+      name: label,
+      type: 'call',
+      size: 0,
+      url: '',
+      encrypted: false,
+      duration: finalState.duration,
+      callType: finalState.type,
+      callStatus: status,
+    };
+    const newMsg: Message = {
+      id: `msg_call_${Date.now()}`,
+      chatId: peer.id,
+      senderId: currentUser.id,
+      receiverId: peer.id,
+      text,
+      encryptedPayload,
+      timestamp: Date.now(),
+      status: 'sent',
+      disappearingTimer: 0,
+      attachment: callAttachment,
+    };
+
+    setMessages(prev => (activeChatId === peer.id ? [...prev, newMsg] : prev));
+    setChats(prev => prev.map(c => (c.id === peer.id ? { ...c, lastMessage: newMsg, unreadCount: 0 } : c)));
+    api.sendMessage(newMsg).catch(err => console.warn('Call log REST send err:', err));
     socketService.sendMessage(newMsg);
   };
 
@@ -854,6 +925,10 @@ export default function App() {
     setRemoteStream(null);
     pendingIncomingCallRef.current = null;
     activeCallIdRef.current = null;
+    // No-ops when this device was the callee (logCallToChat only logs from
+    // the caller's side) — the callee declining/hanging up still reaches the
+    // caller as a 'hangup' signal (handled above), which logs it there.
+    logCallToChat(callStateRef.current, 'missed');
     setCallState(prev => ({ ...prev, active: false, status: 'ended', duration: 0 }));
   };
 
@@ -918,8 +993,6 @@ export default function App() {
               <Header
                 onLockPress={() => setIsAppLocked(true)}
                 onInvitesPress={() => setShowInvitesModal(true)}
-                onLinkedDevicesPress={() => setShowLinkedDevicesModal(true)}
-                onBackupPress={() => setShowCloudBackupModal(true)}
                 onSettingsPress={() => setCurrentScreen(currentScreen === 'settings' ? 'chat_list' : 'settings')}
                 inviteCount={currentUser.inviteCodesRemaining}
               />
@@ -982,6 +1055,8 @@ export default function App() {
                 currentUser={currentUser}
                 antiScreenshotEnabled={antiScreenshotEnabled}
                 onToggleAntiScreenshot={setAntiScreenshotEnabled}
+                callVerificationEnabled={callVerificationEnabled}
+                onToggleCallVerification={setCallVerificationEnabled}
                 onOpenInvites={() => setShowInvitesModal(true)}
                 onOpenLinkedDevices={() => setShowLinkedDevicesModal(true)}
                 onOpenCloudBackup={() => setShowCloudBackupModal(true)}
@@ -1050,6 +1125,7 @@ export default function App() {
             are rendered via RTCView inside CallModal. */}
         <CallModal
           callState={callState}
+          showVerificationWords={callVerificationEnabled}
           localStream={localStream}
           remoteStream={remoteStream}
           onHangup={handleHangupCall}

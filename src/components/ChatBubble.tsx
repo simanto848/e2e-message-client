@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator } from 'react-native';
-import { ShieldCheck, Flame, Check, CheckCheck, Play, Pause, Trash2, Key, ImageIcon } from './Icons';
+import { ShieldCheck, Flame, Check, CheckCheck, Play, Pause, Trash2, Key, ImageIcon, Phone, PhoneOff, Video } from './Icons';
 import { Message } from '../types';
 import { colors, shadows } from '../theme';
 
@@ -46,6 +46,35 @@ export function ChatBubble({
         <View style={styles.deletedBubble}>
           <Trash2 size={13} color={colors.textMuted} />
           <Text style={styles.deletedText}>This message was deleted</Text>
+        </View>
+      </View>
+    );
+  }
+
+  // Call history entries (see App.tsx's logCallToChat) render as a centered
+  // system-style row, not a left/right bubble — they're a record of what
+  // happened, not something either party "said." isMe determines caller vs
+  // receiver phrasing since only the caller ever sends this message.
+  if (message.attachment?.type === 'call') {
+    const { callType = 'audio', callStatus = 'completed', duration = 0 } = message.attachment;
+    const missed = callStatus !== 'completed';
+    const CallIcon = missed ? PhoneOff : callType === 'video' ? Video : Phone;
+    const label = isMe
+      ? callStatus === 'completed'
+        ? `${callType === 'video' ? 'Video' : 'Voice'} call · ${Math.floor(duration / 60)}:${(duration % 60).toString().padStart(2, '0')}`
+        : `${callType === 'video' ? 'Video' : 'Voice'} call not answered`
+      : callStatus === 'completed'
+      ? `Incoming ${callType === 'video' ? 'video' : 'voice'} call · ${Math.floor(duration / 60)}:${(duration % 60).toString().padStart(2, '0')}`
+      : `Missed ${callType === 'video' ? 'video' : 'voice'} call`;
+
+    return (
+      <View style={styles.callLogRow}>
+        <View style={[styles.callLogPill, missed && styles.callLogPillMissed]}>
+          <CallIcon size={13} color={missed ? colors.danger : colors.primaryDark} />
+          <Text style={[styles.callLogText, missed && styles.callLogTextMissed]}>{label}</Text>
+          <Text style={styles.callLogTime}>
+            {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </Text>
         </View>
       </View>
     );
@@ -280,6 +309,39 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 13,
     fontStyle: 'italic',
+  },
+  callLogRow: {
+    alignItems: 'center',
+    marginVertical: 4,
+    paddingHorizontal: 12,
+  },
+  callLogPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.primaryLight,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  callLogPillMissed: {
+    backgroundColor: colors.dangerLight,
+    borderColor: '#fca5a5',
+  },
+  callLogText: {
+    color: colors.primaryDark,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  callLogTextMissed: {
+    color: colors.dangerText,
+  },
+  callLogTime: {
+    color: colors.textMuted,
+    fontSize: 10,
+    marginLeft: 2,
   },
   imageContainer: {
     marginBottom: 2,

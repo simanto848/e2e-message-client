@@ -32,7 +32,10 @@ export interface EncryptedPayload {
 export interface Attachment {
   id: string;
   name: string;
-  type: 'image' | 'document' | 'audio' | 'video';
+  // 'call' is a call-history log entry (see App.tsx's logCallToChat), not a
+  // real file — reuses this field instead of a separate DB column/message
+  // type, the same way image/audio attachments already piggyback on it.
+  type: 'image' | 'document' | 'audio' | 'video' | 'call';
   size: number;
   url: string;
   encrypted: boolean;
@@ -40,6 +43,9 @@ export interface Attachment {
   duration?: number;
   waveform?: number[];
   mimeType?: string;
+  // Only set when type === 'call'.
+  callType?: 'audio' | 'video';
+  callStatus?: 'completed' | 'declined' | 'missed';
 }
 
 export interface Message {

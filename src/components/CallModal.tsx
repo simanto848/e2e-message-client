@@ -31,6 +31,12 @@ import { colors, shadows } from '../theme';
 
 interface Props {
   callState: CallState;
+  // Whether to show the SAS "verification words" panel — a real security
+  // feature (comparing these words out loud with your contact detects a
+  // man-in-the-middle on the call), but some people find it cluttering, so
+  // it's a Settings toggle (App.tsx's callVerificationEnabled). Defaults to
+  // shown if omitted.
+  showVerificationWords?: boolean;
   onHangup: () => void;
   onToggleMute: () => void;
   onToggleVideo: () => void;
@@ -50,6 +56,7 @@ const { width, height } = Dimensions.get('window');
 
 export function CallModal({
   callState,
+  showVerificationWords = true,
   onHangup,
   onToggleMute,
   onToggleVideo,
@@ -240,7 +247,8 @@ export function CallModal({
             )}
 
             {/* SAS Cryptographic Words Verification */}
-            {callState.sasVerificationWords.length > 0 &&
+            {showVerificationWords &&
+              callState.sasVerificationWords.length > 0 &&
               callState.status === 'connected' && (
                 <View style={styles.sasContainer}>
                   <View style={styles.sasHeader}>

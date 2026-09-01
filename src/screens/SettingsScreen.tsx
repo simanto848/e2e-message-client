@@ -12,6 +12,7 @@ import {
   LogOut,
   ChevronRight,
   Sparkles,
+  Phone,
 } from '../components/Icons';
 import { UserProfile } from '../types';
 import { colors, shadows } from '../theme';
@@ -20,6 +21,8 @@ interface Props {
   currentUser: UserProfile;
   antiScreenshotEnabled: boolean;
   onToggleAntiScreenshot: (val: boolean) => void;
+  callVerificationEnabled: boolean;
+  onToggleCallVerification: (val: boolean) => void;
   onOpenInvites: () => void;
   onOpenLinkedDevices: () => void;
   onOpenCloudBackup: () => void;
@@ -35,6 +38,8 @@ export function SettingsScreen({
   currentUser,
   antiScreenshotEnabled,
   onToggleAntiScreenshot,
+  callVerificationEnabled,
+  onToggleCallVerification,
   onOpenInvites,
   onOpenLinkedDevices,
   onOpenCloudBackup,
@@ -107,6 +112,24 @@ export function SettingsScreen({
               onValueChange={onToggleAntiScreenshot}
               trackColor={{ false: colors.surfaceHighlight, true: '#a7f3d0' }}
               thumbColor={antiScreenshotEnabled ? colors.primary : colors.textMuted}
+            />
+          </View>
+
+          <View style={[styles.toggleRow, styles.borderTop]}>
+            <View style={styles.toggleTextContainer}>
+              <View style={styles.rowAlign}>
+                <Phone size={18} color={colors.primary} />
+                <Text style={styles.toggleTitle}>Call Verification Words</Text>
+              </View>
+              <Text style={styles.toggleDesc}>
+                Shows security words during calls to verify no one is intercepting the connection.
+              </Text>
+            </View>
+            <Switch
+              value={callVerificationEnabled}
+              onValueChange={onToggleCallVerification}
+              trackColor={{ false: colors.surfaceHighlight, true: '#a7f3d0' }}
+              thumbColor={callVerificationEnabled ? colors.primary : colors.textMuted}
             />
           </View>
         </View>
