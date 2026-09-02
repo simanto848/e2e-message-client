@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve version from tag
         id: version
@@ -76,6 +78,29 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk "dist/JABY-Secure-Messenger-${{ steps.version.outputs.tag }}.apk"
           cp android/app/build/outputs/apk/release/app-release.apk dist/app-release.apk
 
+      # Short bullet changelog from commit subjects since the previous tag,
+      # for the in-app update notice (separate from the GitHub Release page,
+      # which gets the fuller auto-generated notes below). Multiline output
+      # goes through GITHUB_OUTPUT's heredoc form since a plain "key=value"
+      # line can't hold newlines.
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 "${{ steps.version.outputs.tag }}^" 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            LOG=$(git log "$PREV_TAG..HEAD" --pretty=format:'• %s' | head -20)
+          else
+            LOG=$(git log --pretty=format:'• %s' | head -20)
+          fi
+          if [ -z "$LOG" ]; then
+            LOG="• Bug fixes and improvements"
+          fi
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$LOG"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -87,6 +112,9 @@ jobs:
 
             Download `JABY-Secure-Messenger-${{ steps.version.outputs.tag }}.apk` below and install it on your Android device (you may need to allow installs from this source). Existing installs can update in place — just install over the current app.
 
+            ### What's changed
+            ${{ steps.changelog.outputs.notes }}
+
             ---
           files: |
             dist/JABY-Secure-Messenger-${{ steps.version.outputs.tag }}.apk
@@ -97,24 +125,30 @@ jobs:
       # (src/services/updateService.ts also falls back to checking GitHub
       # Releases directly, so this step failing doesn't block discovery —
       # it just makes it instant instead of "next time the app checks").
+      # Payload is built with jq rather than a raw heredoc so that quotes,
+      # backticks, or newlines in commit subjects can't break the JSON.
       - name: Notify backend of new release
         continue-on-error: true
         env:
           BACKEND_URL: ${{ vars.BACKEND_URL || 'https://e2e-message.onrender.com' }}
           ADMIN_TOKEN: ${{ secrets.UPDATES_ADMIN_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          NOTES: ${{ steps.changelog.outputs.notes }}
+          REPO: ${{ github.repository }}
         run: |
           if [ -z "$ADMIN_TOKEN" ]; then
             echo "UPDATES_ADMIN_TOKEN secret not set — skipping backend notify (GitHub Releases discovery still works)."
             exit 0
           fi
+          PAYLOAD=$(jq -n \
+            --arg version "$VERSION" \
+            --arg title "JABY Secure Messenger $TAG" \
+            --arg notes "$NOTES" \
+            --arg downloadUrl "https://github.com/$REPO/releases/tag/$TAG" \
+            --arg apkUrl "https://github.com/$REPO/releases/download/$TAG/app-release.apk" \
+            '{version: $version, title: $title, notes: $notes, downloadUrl: $downloadUrl, apkUrl: $apkUrl}')
           curl -sf -X POST "$BACKEND_URL/api/updates/broadcast" \
             -H "Content-Type: application/json" \
             -H "x-updates-admin-token: $ADMIN_TOKEN" \
-            -d @- <<EOF
-          {
-            "version": "${{ steps.version.outputs.version }}",
-            "title": "JABY Secure Messenger ${{ steps.version.outputs.tag }}",
-            "downloadUrl": "https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}",
-            "apkUrl": "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/app-release.apk"
-          }
-          EOF
+            -d "$PAYLOAD"
