@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Image, TextInput, RefreshControl } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput, RefreshControl } from 'react-native';
+import { Avatar } from '../components/Avatar';
 import { Search, Pin, ShieldCheck, Flame, Plus, CheckCircle2, UserPlus, X, UserCheck } from '../components/Icons';
 import { ChatThread } from '../types';
 import { colors, shadows } from '../theme';
@@ -134,7 +135,7 @@ export function ChatListScreen({
             >
               {/* Avatar */}
               <View style={styles.avatarContainer}>
-                <Image source={{ uri: participant.avatar }} style={styles.avatar} />
+                <Avatar uri={participant.avatar} name={participant.name} size={48} style={styles.avatar} />
                 {isOnline && <View style={styles.onlineDot} />}
               </View>
 

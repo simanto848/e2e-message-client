@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Switch, Image } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Switch } from 'react-native';
+import { Avatar } from '../components/Avatar';
 import {
   ArrowLeft,
   ShieldCheck,
@@ -63,7 +64,7 @@ export function SettingsScreen({
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Profile Card */}
         <TouchableOpacity style={styles.profileCard} onPress={onEditProfile} activeOpacity={0.7}>
-          <Image source={{ uri: currentUser.avatar }} style={styles.avatar} />
+          <Avatar uri={currentUser.avatar} name={currentUser.name} size={60} style={styles.avatar} />
           <View style={styles.profileInfo}>
             <Text style={styles.profileName}>{currentUser.name}</Text>
             <Text style={styles.profileHandle}>{currentUser.handle}</Text>

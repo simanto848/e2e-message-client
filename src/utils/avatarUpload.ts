@@ -14,7 +14,7 @@ import { api } from '../services/api';
 export async function uploadAvatar(localUri: string, mimeType: string = 'image/jpeg'): Promise<string> {
   const sig = await api.getAvatarUploadSignature();
   if (!sig.success) {
-    throw new Error('Could not get an upload authorization from the server');
+    throw new Error(sig.error || 'Could not get an upload authorization from the server');
   }
 
   const formData = new FormData();

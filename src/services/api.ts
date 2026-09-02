@@ -86,6 +86,7 @@ export const api = {
   // Signs a direct-to-Cloudinary avatar upload — see src/utils/avatarUpload.ts.
   async getAvatarUploadSignature(): Promise<{
     success: boolean;
+    error?: string;
     timestamp: number;
     signature: string;
     folder: string;

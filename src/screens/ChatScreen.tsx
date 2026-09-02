@@ -6,7 +6,6 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  Image,
   KeyboardAvoidingView,
   Platform,
   Alert,
@@ -14,6 +13,7 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Avatar } from '../components/Avatar';
 import {
   ArrowLeft,
   Phone,
@@ -32,6 +32,7 @@ import { ChatMenuModal } from '../components/ChatMenuModal';
 import { colors, shadows } from '../theme';
 import { encryptMessage, decryptMessage } from '../utils/crypto';
 import { api } from '../services/api';
+import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
 
 // Matches the server's MAX_ATTACHMENT_BYTES (server/src/routes/media.routes.ts).
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -109,16 +110,23 @@ export function ChatScreen({
   };
 
   const handleAttachImage = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Photo access needed', 'JABY needs photo library access to send encrypted images. Enable it in Settings.');
-      return;
-    }
+    beginExternalActivity();
+    let perm: ImagePicker.PermissionResponse;
+    let result: ImagePicker.ImagePickerResult;
+    try {
+      perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Photo access needed', 'JABY needs photo library access to send encrypted images. Enable it in Settings.');
+        return;
+      }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.7,
-    });
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.7,
+      });
+    } finally {
+      endExternalActivity();
+    }
     if (result.canceled || !result.assets?.[0]) return;
 
     const asset = result.assets[0];
@@ -226,7 +234,7 @@ export function ChatScreen({
 
         <TouchableOpacity style={styles.peerHeaderInfo} onPress={onOpenSafetyNumbers}>
           <View style={styles.avatarContainer}>
-            <Image source={{ uri: participant.avatar }} style={styles.avatar} />
+            <Avatar uri={participant.avatar} name={participant.name} size={38} style={styles.avatar} />
             {isOnline && <View style={styles.onlineDot} />}
           </View>
 

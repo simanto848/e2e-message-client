@@ -37,6 +37,7 @@ import { api, API_BASE_URL } from './src/services/api';
 import { socketService } from './src/services/socket';
 import { callAudio } from './src/utils/callAudio';
 import { webrtcCallEngine } from './src/utils/webrtcCall';
+import { isExternalActivityActive } from './src/utils/appLockGuard';
 import type { MediaStream } from './src/utils/webrtcAdapter';
 
 // Screens
@@ -165,10 +166,18 @@ export default function App() {
   // picker sheet, and keyboard focus transitions — treating it as "locked"
   // caused the lock screen to pop up just from opening a chat (which
   // auto-focuses the message input) or navigating around the app.
+  //
+  // Launching a real external Activity (image picker, camera, the media
+  // permission dialog) *also* fires a genuine 'background' event on Android
+  // — not 'inactive' — since it pauses our host Activity same as switching
+  // apps does. isExternalActivityActive() (paired with beginExternalActivity
+  // /endExternalActivity around those calls, see appLockGuard.ts) tells that
+  // apart from the user actually leaving, so picking a profile photo doesn't
+  // re-trigger the lock screen mid-pick.
   useEffect(() => {
     const sub = AppState.addEventListener('change', nextState => {
       if (nextState === 'background') {
-        if (currentUser) setIsAppLocked(true);
+        if (currentUser && !isExternalActivityActive()) setIsAppLocked(true);
       }
     });
     return () => sub.remove();

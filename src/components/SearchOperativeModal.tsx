@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Modal, TextInput, TouchableOpacity, StyleSheet, FlatList, Image, ActivityIndicator } from 'react-native';
+import { View, Text, Modal, TextInput, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { Search, UserPlus, X, Clock, CheckCircle2 } from './Icons';
 import { SearchOperativeResult } from '../types';
 import { api } from '../services/api';
 import { colors, shadows } from '../theme';
+import { Avatar } from './Avatar';
 
 interface Props {
   visible: boolean;
@@ -64,7 +65,10 @@ export function SearchOperativeModal({
 
   return (
     <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
-      <View style={styles.backdrop}>
+      <KeyboardAvoidingView
+        style={styles.backdrop}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
         <View style={styles.sheetContainer}>
           {/* Header */}
           <View style={styles.header}>
@@ -106,7 +110,7 @@ export function SearchOperativeModal({
               contentContainerStyle={{ paddingVertical: 8 }}
               renderItem={({ item }) => (
                 <View style={styles.resultCard}>
-                  <Image source={{ uri: item.avatar }} style={styles.avatar} />
+                  <Avatar uri={item.avatar} name={item.name} size={44} style={styles.avatar} />
                   <View style={styles.infoCol}>
                     <Text style={styles.nameText}>{item.name}</Text>
                     <Text style={styles.handleText}>{item.handle}</Text>
@@ -147,7 +151,7 @@ export function SearchOperativeModal({
             />
           )}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

@@ -1,8 +1,9 @@
 import React from 'react';
-import { View, Text, Modal, TouchableOpacity, StyleSheet, FlatList, Image } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, StyleSheet, FlatList } from 'react-native';
 import { UserPlus, X, Check, ShieldCheck, Clock } from './Icons';
 import { ContactRequestWithUser } from '../types';
 import { colors, shadows } from '../theme';
+import { Avatar } from './Avatar';
 
 interface Props {
   visible: boolean;
@@ -56,7 +57,7 @@ export function ContactRequestsModal({
               keyExtractor={item => item.id}
               renderItem={({ item }) => (
                 <View style={styles.requestCard}>
-                  <Image source={{ uri: item.sender.avatar }} style={styles.avatar} />
+                  <Avatar uri={item.sender.avatar} name={item.sender.name} size={44} style={styles.avatar} />
                   <View style={styles.requestInfo}>
                     <Text style={styles.nameText}>{item.sender.name}</Text>
                     <Text style={styles.handleText}>{item.sender.handle}</Text>
@@ -98,7 +99,7 @@ export function ContactRequestsModal({
                 keyExtractor={item => item.id}
                 renderItem={({ item }) => (
                   <View style={[styles.requestCard, styles.outgoingCard]}>
-                    <Image source={{ uri: item.receiver.avatar }} style={styles.avatar} />
+                    <Avatar uri={item.receiver.avatar} name={item.receiver.name} size={44} style={styles.avatar} />
                     <View style={styles.requestInfo}>
                       <Text style={styles.nameText}>{item.receiver.name}</Text>
                       <Text style={styles.handleText}>{item.receiver.handle}</Text>

@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Modal, TouchableOpacity, StyleSheet, TextInput, ScrollView, Image, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, StyleSheet, TextInput, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { X, User, Camera, ShieldCheck } from './Icons';
 import { UserProfile } from '../types';
 import { colors, shadows } from '../theme';
 import { uploadAvatar } from '../utils/avatarUpload';
+import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
+import { Avatar } from './Avatar';
 
 interface Props {
   visible: boolean;
@@ -33,18 +35,25 @@ export function EditProfileModal({ visible, currentUser, onSave, onClose }: Prop
   }, [visible, currentUser.name]);
 
   const handlePickPhoto = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Photo access needed', 'JABY needs photo library access to set a profile picture.');
-      return;
-    }
+    beginExternalActivity();
+    let perm: ImagePicker.PermissionResponse;
+    let result: ImagePicker.ImagePickerResult;
+    try {
+      perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Photo access needed', 'JABY needs photo library access to set a profile picture.');
+        return;
+      }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.7,
-      allowsEditing: true,
-      aspect: [1, 1],
-    });
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.7,
+        allowsEditing: true,
+        aspect: [1, 1],
+      });
+    } finally {
+      endExternalActivity();
+    }
     if (result.canceled || !result.assets?.[0]) return;
 
     const asset = result.assets[0];
@@ -55,7 +64,8 @@ export function EditProfileModal({ visible, currentUser, onSave, onClose }: Prop
       setUploadedAvatarUrl(url);
     } catch (err) {
       console.warn('[EditProfile] Avatar upload failed:', err);
-      Alert.alert('Upload failed', 'Could not upload your photo. Please check your connection and try again.');
+      const message = err instanceof Error ? err.message : 'Could not upload your photo. Please check your connection and try again.';
+      Alert.alert('Upload failed', message);
       setLocalPreviewUri(null);
     } finally {
       setIsUploadingPhoto(false);
@@ -105,7 +115,7 @@ export function EditProfileModal({ visible, currentUser, onSave, onClose }: Prop
           <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
             <View style={styles.avatarSection}>
               <TouchableOpacity style={styles.avatarWrapper} onPress={handlePickPhoto} disabled={isUploadingPhoto}>
-                <Image source={{ uri: displayedAvatar }} style={styles.avatar} />
+                <Avatar uri={displayedAvatar} name={currentUser.name} size={96} style={styles.avatar} />
                 <View style={styles.avatarEditBadge}>
                   {isUploadingPhoto ? (
                     <ActivityIndicator size="small" color="#ffffff" />
