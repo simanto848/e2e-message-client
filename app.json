@@ -19,7 +19,9 @@
         "NSCameraUsageDescription": "JABY needs camera access for video calls and QR safety-number verification.",
         "NSMicrophoneUsageDescription": "JABY needs microphone access for voice notes and calls.",
         "NSPhotoLibraryUsageDescription": "JABY needs photo library access to send encrypted images to your contacts."
-      }
+      },
+      "bitcode": false,
+      "runtimeVersion": "1.0.0"
     },
     "android": {
       "package": "com.jaby.securemessenger",
@@ -41,8 +43,28 @@
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.USE_BIOMETRIC",
-        "android.permission.USE_FINGERPRINT"
-      ]
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WAKE_LOCK",
+        "android.permission.BLUETOOTH",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.VIBRATE",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WAKE_LOCK",
+        "android.permission.BLUETOOTH"
+      ],
+      "runtimeVersion": "1.0.0"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -61,6 +83,18 @@
           "microphonePermission": "JABY needs microphone access for voice calls."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "5fb1608f-a30a-4a27-aafd-83fac17286c9"
+      }
+    },
+    "owner": "simanto",
+    "updates": {
+      "url": "https://u.expo.dev/5fb1608f-a30a-4a27-aafd-83fac17286c9",
+      "requestHeaders": {
+        "expo-channel-name": "production"
+      }
+    }
   }
 }

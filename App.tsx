@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, View, StatusBar, Alert, AppState } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ScreenCapture from 'expo-screen-capture';
+import * as Updates from 'expo-updates';
 import {
   UserProfile,
   ChatThread,
@@ -280,6 +281,33 @@ export default function App() {
   useEffect(() => {
     callStateRef.current = callState;
   }, [callState]);
+
+  // Silently check for and apply OTA (JS-only) updates published via EAS
+  // Update — on launch and whenever the app returns to foreground. This
+  // only covers JS/asset changes; native changes still need a new build,
+  // which is what the GitHub-release check above (checkForAppUpdates) is
+  // for. Skips reloading while a call is active so it doesn't get yanked.
+  useEffect(() => {
+    if (__DEV__ || !Updates.isEnabled) return;
+    const applyUpdateIfAvailable = async () => {
+      try {
+        const result = await Updates.checkForUpdateAsync();
+        if (result.isAvailable) {
+          await Updates.fetchUpdateAsync();
+          if (!callStateRef.current.active) {
+            await Updates.reloadAsync();
+          }
+        }
+      } catch (err) {
+        console.log('[Updates] OTA check notice:', err);
+      }
+    };
+    applyUpdateIfAvailable();
+    const sub = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') applyUpdateIfAvailable();
+    });
+    return () => sub.remove();
+  }, []);
 
   // 1. Authenticate user & persist the real session token + identity key
   // material to secure, OS-backed storage (never plaintext AsyncStorage).
