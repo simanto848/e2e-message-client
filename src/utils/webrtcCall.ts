@@ -67,6 +67,15 @@ class WebRTCCallEngine {
   private myUserId: string | null = null;
   private peerId: string | null = null;
   private callId: string | null = null;
+  // ICE candidates routinely arrive from the peer before setRemoteDescription
+  // has run (e.g. while the callee is still ringing, before they've tapped
+  // Accept and created their own RTCPeerConnection). addIceCandidate isn't
+  // safe to call yet at that point, so anything that arrives early is queued
+  // here and flushed once the remote description is set — otherwise those
+  // candidates are just lost and ICE can fail to find any usable pair,
+  // leaving the call showing "Connected" with no audio ever flowing.
+  private pendingIceCandidates: any[] = [];
+  private remoteDescriptionSet = false;
 
   /** Check if native WebRTC module is linked and ready */
   isSupported(): boolean {
@@ -95,6 +104,8 @@ class WebRTCCallEngine {
     this.myUserId = myUserId;
     this.peerId = peerId;
     this.callId = callId;
+    this.pendingIceCandidates = [];
+    this.remoteDescriptionSet = false;
 
     // react-native-webrtc's RTCPeerConnection mirrors the browser API.
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS as any });
@@ -153,6 +164,8 @@ class WebRTCCallEngine {
     this.startAudioRouting(video);
     const pc = this.createPeerConnection(myUserId, peerId, callId, video ? 'video' : 'audio', handlers);
     await pc.setRemoteDescription(new RTCSessionDescription(remoteOfferSdp));
+    this.remoteDescriptionSet = true;
+    await this.flushPendingIceCandidates();
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
@@ -170,15 +183,41 @@ class WebRTCCallEngine {
   async handleRemoteAnswer(sdp: any): Promise<void> {
     if (!this.pc) return;
     await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    this.remoteDescriptionSet = true;
+    await this.flushPendingIceCandidates();
   }
 
-  /** Both sides: feed in ICE candidates as they arrive from the peer. */
+  /**
+   * Both sides: feed in ICE candidates as they arrive from the peer. These
+   * can arrive well before our own RTCPeerConnection exists (e.g. the
+   * offer's ICE candidates trickle in while the callee is still ringing),
+   * and addIceCandidate isn't safe until setRemoteDescription has run — so
+   * anything that arrives early is queued and flushed from acceptCall /
+   * handleRemoteAnswer instead of being dropped.
+   */
   async handleRemoteIceCandidate(candidate: any): Promise<void> {
-    if (!this.pc || !candidate) return;
+    if (!candidate) return;
+    if (!this.pc || !this.remoteDescriptionSet) {
+      this.pendingIceCandidates.push(candidate);
+      return;
+    }
     try {
       await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (err) {
       console.warn('[WebRTC] Failed to add ICE candidate:', err);
+    }
+  }
+
+  private async flushPendingIceCandidates(): Promise<void> {
+    if (!this.pc) return;
+    const queued = this.pendingIceCandidates;
+    this.pendingIceCandidates = [];
+    for (const candidate of queued) {
+      try {
+        await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn('[WebRTC] Failed to add queued ICE candidate:', err);
+      }
     }
   }
 
@@ -250,6 +289,8 @@ class WebRTCCallEngine {
     this.myUserId = null;
     this.peerId = null;
     this.callId = null;
+    this.pendingIceCandidates = [];
+    this.remoteDescriptionSet = false;
     try {
       InCallManager?.stop();
     } catch (err) {
