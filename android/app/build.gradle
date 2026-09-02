@@ -130,6 +130,15 @@ android {
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
+    lint {
+        // assembleRelease pulls in lintVital (fatal-severity lint) on every
+        // module by default. On a fresh CI runner building ~20 Expo modules
+        // it spins up enough parallel lint analysis JVMs to exhaust
+        // Metaspace and fail the build outright. This is a sideloaded APK,
+        // not a Play Store submission lint gate, so skip it rather than
+        // fight the memory ceiling.
+        checkReleaseBuilds false
+    }
 }
 
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
