@@ -1,0 +1,120 @@
+name: Release APK
+
+# Cutting a release is just: pick a version, tag it, push the tag.
+#   git tag v1.2.0
+#   git push origin v1.2.0
+# This builds a release APK and publishes it as a GitHub Release with
+# auto-generated release notes (commits since the previous tag) plus the
+# APK attached as a downloadable asset. The in-app update check
+# (src/services/updateService.ts) reads this repo's Releases API directly,
+# so nothing else needs to run for the app to notice the new version.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_code=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      # versionName is the human-facing app version (from the tag);
+      # versionCode must strictly increase on every release for Android to
+      # accept it as an update over an existing install, so it's derived
+      # from the ever-increasing GitHub Actions run number rather than the
+      # tag. Neither edit is committed back to the repo — it only affects
+      # this build.
+      - name: Stamp version into the Android build
+        run: |
+          sed -i "s/versionCode [0-9]\+/versionCode ${{ steps.version.outputs.version_code }}/" android/app/build.gradle
+          sed -i "s/versionName \"[^\"]*\"/versionName \"${{ steps.version.outputs.version }}\"/" android/app/build.gradle
+
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+
+      # Two copies of the same APK: a versioned name for the release page's
+      # history, and a stable "app-release.apk" name so the static URL
+      # https://github.com/<repo>/releases/latest/download/app-release.apk
+      # (what the server's default apkUrl and the in-app updater point at)
+      # always resolves to whatever the newest release is, without the
+      # server needing to be told a new URL every time.
+      - name: Prepare release assets
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/JABY-Secure-Messenger-${{ steps.version.outputs.tag }}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk dist/app-release.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: JABY Secure Messenger ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            ## JABY Secure Messenger ${{ steps.version.outputs.tag }}
+
+            Download `JABY-Secure-Messenger-${{ steps.version.outputs.tag }}.apk` below and install it on your Android device (you may need to allow installs from this source). Existing installs can update in place — just install over the current app.
+
+            ---
+          files: |
+            dist/JABY-Secure-Messenger-${{ steps.version.outputs.tag }}.apk
+            dist/app-release.apk
+
+      # Tells the backend about the new release so it can push an instant
+      # "update available" notice to every connected client over the socket
+      # (src/services/updateService.ts also falls back to checking GitHub
+      # Releases directly, so this step failing doesn't block discovery —
+      # it just makes it instant instead of "next time the app checks").
+      - name: Notify backend of new release
+        continue-on-error: true
+        env:
+          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://e2e-message.onrender.com' }}
+          ADMIN_TOKEN: ${{ secrets.UPDATES_ADMIN_TOKEN }}
+        run: |
+          if [ -z "$ADMIN_TOKEN" ]; then
+            echo "UPDATES_ADMIN_TOKEN secret not set — skipping backend notify (GitHub Releases discovery still works)."
+            exit 0
+          fi
+          curl -sf -X POST "$BACKEND_URL/api/updates/broadcast" \
+            -H "Content-Type: application/json" \
+            -H "x-updates-admin-token: $ADMIN_TOKEN" \
+            -d @- <<EOF
+          {
+            "version": "${{ steps.version.outputs.version }}",
+            "title": "JABY Secure Messenger ${{ steps.version.outputs.tag }}",
+            "downloadUrl": "https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}",
+            "apkUrl": "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/app-release.apk"
+          }
+          EOF
