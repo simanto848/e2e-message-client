@@ -157,9 +157,16 @@ export default function App() {
   // Re-lock the enclave whenever the app leaves the foreground, so the
   // "biometric unlock" screen actually gates re-entry rather than only
   // appearing when manually triggered.
+  //
+  // Only 'background' means the app is truly backgrounded (home button,
+  // app switcher, screen off). 'inactive' is a transient state that also
+  // fires for in-app UI like Alert dialogs, permission prompts, the image
+  // picker sheet, and keyboard focus transitions — treating it as "locked"
+  // caused the lock screen to pop up just from opening a chat (which
+  // auto-focuses the message input) or navigating around the app.
   useEffect(() => {
     const sub = AppState.addEventListener('change', nextState => {
-      if (nextState === 'background' || nextState === 'inactive') {
+      if (nextState === 'background') {
         if (currentUser) setIsAppLocked(true);
       }
     });
