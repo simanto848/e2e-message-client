@@ -58,6 +58,20 @@ export async function getIdentityKeyPair(userId: string): Promise<IdentityKeyPai
   }
 }
 
+const PRIMARY_PIN_KEY = 'jaby_primary_pin';
+
+export async function savePrimaryPin(pin: string): Promise<void> {
+  await SecureStore.setItemAsync(PRIMARY_PIN_KEY, pin);
+}
+
+export async function getPrimaryPin(): Promise<string | null> {
+  return SecureStore.getItemAsync(PRIMARY_PIN_KEY);
+}
+
+export async function clearPrimaryPin(): Promise<void> {
+  await SecureStore.deleteItemAsync(PRIMARY_PIN_KEY);
+}
+
 /**
  * Clear everything for a full sign-out. Identity keypairs are intentionally
  * NOT cleared here (they stay namespaced per-account on this device) — a
@@ -65,5 +79,5 @@ export async function getIdentityKeyPair(userId: string): Promise<IdentityKeyPai
  * decrypt their own message history.
  */
 export async function clearSession(): Promise<void> {
-  await Promise.all([clearSessionToken(), clearCurrentUserId()]);
+  await Promise.all([clearSessionToken(), clearCurrentUserId(), clearPrimaryPin()]);
 }

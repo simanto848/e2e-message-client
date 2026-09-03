@@ -18,6 +18,7 @@ import { X, KeyRound, Lock, ShieldCheck, Eye, EyeOff, Check } from './Icons';
 import { colors, shadows } from '../theme';
 import { api } from '../services/api';
 import { saveSessionToken } from '../utils/keyStore';
+import { evaluatePasswordStrength } from '../utils/passwordStrength';
 
 interface Props {
   visible: boolean;
@@ -36,6 +37,8 @@ export function ChangePasswordModal({ visible, onClose, onPasswordUpdated }: Pro
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const strength = evaluatePasswordStrength(newPassword);
 
   useEffect(() => {
     if (visible) {
@@ -212,6 +215,29 @@ export function ChangePasswordModal({ visible, onClose, onPasswordUpdated }: Pro
                       )}
                     </TouchableOpacity>
                   </View>
+
+                  {/* Password Strength Meter */}
+                  {newPassword.length > 0 && (
+                    <View style={styles.strengthContainer}>
+                      <View style={styles.strengthBars}>
+                        {[1, 2, 3, 4].map(level => (
+                          <View
+                            key={level}
+                            style={[
+                              styles.strengthBar,
+                              strength.score >= level && { backgroundColor: strength.color },
+                            ]}
+                          />
+                        ))}
+                      </View>
+                      <View style={styles.strengthTextRow}>
+                        <Text style={[styles.strengthLabel, { color: strength.color }]}>
+                          {strength.label}
+                        </Text>
+                        <Text style={styles.strengthFeedback}>{strength.feedback}</Text>
+                      </View>
+                    </View>
+                  )}
                 </View>
 
                 {/* Confirm New Password */}
@@ -467,5 +493,32 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '600',
+  },
+  strengthContainer: {
+    marginTop: 8,
+    gap: 6,
+  },
+  strengthBars: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  strengthBar: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.surfaceHighlight,
+  },
+  strengthTextRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  strengthLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  strengthFeedback: {
+    fontSize: 11,
+    color: colors.textMuted,
   },
 });

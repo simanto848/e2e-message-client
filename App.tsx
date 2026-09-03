@@ -32,6 +32,7 @@ import {
   clearSession,
   saveIdentityKeyPair,
   getIdentityKeyPair,
+  savePrimaryPin,
 } from './src/utils/keyStore';
 import { encryptBackup, decryptBackup, BackupPayload } from './src/utils/backupCrypto';
 import { api, API_BASE_URL } from './src/services/api';
@@ -57,6 +58,7 @@ import { LinkedDevicesModal } from './src/components/LinkedDevicesModal';
 import { CloudBackupModal } from './src/components/CloudBackupModal';
 import { EditProfileModal } from './src/components/EditProfileModal';
 import { ChangePasswordModal } from './src/components/ChangePasswordModal';
+import { DuressSettingsModal } from './src/components/DuressSettingsModal';
 import { PrivacyShield } from './src/components/PrivacyShield';
 import { ContactRequestsModal } from './src/components/ContactRequestsModal';
 import { SearchOperativeModal } from './src/components/SearchOperativeModal';
@@ -79,11 +81,170 @@ function formatCallDuration(totalSeconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+// Benign decoy profile & threads displayed when unlocked via Duress PIN
+const DECOY_ENCRYPTED_PAYLOAD: EncryptedPayload = {
+  iv: 'decoy_iv',
+  ciphertext: 'decoy_cipher',
+  authTag: 'decoy_auth_tag',
+  algorithm: 'x25519-xsalsa20-poly1305',
+  senderPublicKey: 'decoy_pk',
+  keyFingerprint: 'decoy_fp',
+};
+
+const DECOY_USER: UserProfile = {
+  id: 'decoy_operative',
+  name: 'Alex Vance',
+  handle: '@alex_v',
+  avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+  statusMessage: 'Available for work',
+  publicKey: 'decoy_public_key_77x89q21',
+  fingerprintHash: 'D901 8832 4410 7621',
+  inviteCodesRemaining: 0,
+  isVerifiedMember: true,
+  memberSince: 'Jan 2026',
+  twoFactorEnabled: false,
+  passkeyRegistered: false,
+};
+
+const DECOY_PARTICIPANT_1: UserProfile = {
+  id: 'decoy_p1',
+  name: 'Sam Taylor',
+  handle: '@sam_t',
+  avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80',
+  statusMessage: 'In a meeting',
+  publicKey: 'decoy_pk_sam',
+  fingerprintHash: '4481 9920 1123',
+  inviteCodesRemaining: 0,
+  isVerifiedMember: true,
+  memberSince: 'Jan 2026',
+  twoFactorEnabled: false,
+  passkeyRegistered: false,
+};
+
+const DECOY_PARTICIPANT_2: UserProfile = {
+  id: 'decoy_p2',
+  name: 'Project Notes',
+  handle: '@notes_sync',
+  avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=150&q=80',
+  statusMessage: 'Cloud archives',
+  publicKey: 'decoy_pk_notes',
+  fingerprintHash: '7721 3302 9901',
+  inviteCodesRemaining: 0,
+  isVerifiedMember: true,
+  memberSince: 'Jan 2026',
+  twoFactorEnabled: false,
+  passkeyRegistered: false,
+};
+
+const INITIAL_DECOY_CHATS: ChatThread[] = [
+  {
+    id: 'decoy_c1',
+    participant: DECOY_PARTICIPANT_1,
+    unreadCount: 0,
+    disappearingTimer: 0,
+    safetyNumber: '4481 9920 1123',
+    isVerifiedSafetyNumber: true,
+    notificationSettings: { muted: false, sound: 'default', showPreview: true, vibrate: true },
+    privacySettings: { antiScreenshot: false, readReceipts: true, typingIndicator: true, incognitoKeyboard: false },
+    pinned: true,
+    lastMessage: {
+      id: 'dm3',
+      chatId: 'decoy_c1',
+      senderId: 'decoy_p1',
+      receiverId: 'decoy_operative',
+      text: 'Sounds good, see you at the cafe tomorrow!',
+      encryptedPayload: DECOY_ENCRYPTED_PAYLOAD,
+      timestamp: Date.now() - 1000 * 60 * 35,
+      status: 'read',
+      disappearingTimer: 0,
+    },
+  },
+  {
+    id: 'decoy_c2',
+    participant: DECOY_PARTICIPANT_2,
+    unreadCount: 0,
+    disappearingTimer: 0,
+    safetyNumber: '7721 3302 9901',
+    isVerifiedSafetyNumber: false,
+    notificationSettings: { muted: true, sound: 'silent', showPreview: false, vibrate: false },
+    privacySettings: { antiScreenshot: false, readReceipts: true, typingIndicator: false, incognitoKeyboard: false },
+    pinned: false,
+    lastMessage: {
+      id: 'dn1',
+      chatId: 'decoy_c2',
+      senderId: 'decoy_operative',
+      receiverId: 'decoy_p2',
+      text: 'Remember to pick up the package on Friday.',
+      encryptedPayload: DECOY_ENCRYPTED_PAYLOAD,
+      timestamp: Date.now() - 1000 * 60 * 60 * 20,
+      status: 'read',
+      disappearingTimer: 0,
+    },
+  },
+];
+
+const INITIAL_DECOY_MESSAGES: Record<string, Message[]> = {
+  decoy_c1: [
+    {
+      id: 'dm1',
+      chatId: 'decoy_c1',
+      senderId: 'decoy_p1',
+      receiverId: 'decoy_operative',
+      text: 'Hey Alex! Are we still on for lunch tomorrow?',
+      encryptedPayload: DECOY_ENCRYPTED_PAYLOAD,
+      timestamp: Date.now() - 1000 * 60 * 45,
+      status: 'read',
+      disappearingTimer: 0,
+    },
+    {
+      id: 'dm2',
+      chatId: 'decoy_c1',
+      senderId: 'decoy_operative',
+      receiverId: 'decoy_p1',
+      text: "Yes! Let's meet at the downtown cafe around 12:30.",
+      encryptedPayload: DECOY_ENCRYPTED_PAYLOAD,
+      timestamp: Date.now() - 1000 * 60 * 40,
+      status: 'read',
+      disappearingTimer: 0,
+    },
+    {
+      id: 'dm3',
+      chatId: 'decoy_c1',
+      senderId: 'decoy_p1',
+      receiverId: 'decoy_operative',
+      text: 'Sounds good, see you at the cafe tomorrow!',
+      encryptedPayload: DECOY_ENCRYPTED_PAYLOAD,
+      timestamp: Date.now() - 1000 * 60 * 35,
+      status: 'read',
+      disappearingTimer: 0,
+    },
+  ],
+  decoy_c2: [
+    {
+      id: 'dn1',
+      chatId: 'decoy_c2',
+      senderId: 'decoy_operative',
+      receiverId: 'decoy_p2',
+      text: 'Remember to pick up the package on Friday.',
+      encryptedPayload: DECOY_ENCRYPTED_PAYLOAD,
+      timestamp: Date.now() - 1000 * 60 * 60 * 20,
+      status: 'read',
+      disappearingTimer: 0,
+    },
+  ],
+};
+
 export default function App() {
   // App & User State
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('auth');
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+
+  // Duress & Decoy State
+  const [showDuressModal, setShowDuressModal] = useState(false);
+  const [isDecoyMode, setIsDecoyMode] = useState(false);
+  const [decoyChats, setDecoyChats] = useState<ChatThread[]>(INITIAL_DECOY_CHATS);
+  const [decoyMessages, setDecoyMessages] = useState<Record<string, Message[]>>(INITIAL_DECOY_MESSAGES);
 
   // Dynamic Data States (from Postgres Backend)
   const [chats, setChats] = useState<ChatThread[]>([]);
@@ -427,9 +588,17 @@ export default function App() {
   // server. That's real key rotation, not a workaround — existing contacts
   // will see their safety number change and need to re-verify, which is the
   // correct security behavior when the underlying key material changes.
-  const handleAuthenticated = async (user: UserProfile, token: string, freshKeyPair?: IdentityKeyPair) => {
+  const handleAuthenticated = async (
+    user: UserProfile,
+    token: string,
+    freshKeyPair?: IdentityKeyPair,
+    pinCode?: string
+  ) => {
     await saveSessionToken(token);
     await saveCurrentUserId(user.id);
+    if (pinCode) {
+      await savePrimaryPin(pinCode);
+    }
 
     let keyPair = freshKeyPair || (await getIdentityKeyPair(user.id));
     if (!keyPair) {
@@ -548,6 +717,13 @@ export default function App() {
         });
 
         setMessages(decryptedList);
+
+        const hasUnread = decryptedList.some(m => m.senderId === activeChatId && m.status !== 'read');
+        if (hasUnread) {
+          socketService.markRead(activeChatId, activeChatId);
+          api.markMessagesAsRead(activeChatId, activeChatId).catch(() => {});
+          setChats(prev => prev.map(c => (c.id === activeChatId ? { ...c, unreadCount: 0 } : c)));
+        }
       } catch (err) {
         console.error('Failed to load thread messages:', err);
       }
@@ -615,16 +791,24 @@ export default function App() {
 
         setMessages(prev => [...prev, msg]);
 
+        const isCurrentlyOpen = activeChatId === msg.senderId && currentScreen === 'chat_detail';
+
         // Update chat list last message dynamically
         setChats(prev =>
           prev.map(c =>
             c.id === msg.senderId
-              ? { ...c, lastMessage: msg, unreadCount: c.id === activeChatId ? 0 : c.unreadCount + 1 }
+              ? { ...c, lastMessage: msg, unreadCount: isCurrentlyOpen ? 0 : c.unreadCount + 1 }
               : c
           )
         );
 
-        socketService.sendStatus(msg.id, msg.chatId, 'read');
+        if (isCurrentlyOpen) {
+          socketService.sendStatus(msg.id, msg.chatId, 'read');
+          socketService.markRead(msg.senderId, msg.chatId);
+          api.markMessagesAsRead(msg.senderId, msg.chatId).catch(() => {});
+        } else {
+          socketService.sendStatus(msg.id, msg.chatId, 'delivered');
+        }
       }
     });
 
@@ -632,6 +816,13 @@ export default function App() {
     const unsubStatus = socketService.onMessageStatusUpdate(data => {
       setMessages(prev =>
         prev.map(m => (m.id === data.messageId ? { ...m, status: data.status } : m))
+      );
+      setChats(prev =>
+        prev.map(c =>
+          c.lastMessage?.id === data.messageId
+            ? { ...c, lastMessage: { ...c.lastMessage, status: data.status } }
+            : c
+        )
       );
     });
 
@@ -793,7 +984,32 @@ export default function App() {
   }, [callState.active, callState.status]);
 
   // Handler: Send Message
-  const handleSendMessage = async (text: string, attachment?: Attachment) => {
+  const handleSendMessage = async (text: string, attachment?: Attachment, replyToId?: string) => {
+    if (isDecoyMode) {
+      if (!activeChatId) return;
+      const newDecoyMsg: Message = {
+        id: `decoy_msg_${Date.now()}`,
+        chatId: activeChatId,
+        senderId: 'decoy_operative',
+        receiverId: activeChatId,
+        text,
+        encryptedPayload: DECOY_ENCRYPTED_PAYLOAD,
+        timestamp: Date.now(),
+        status: 'read',
+        disappearingTimer: 0,
+        attachment,
+        replyToId,
+      };
+      setDecoyMessages(prev => ({
+        ...prev,
+        [activeChatId]: [...(prev[activeChatId] || []), newDecoyMsg],
+      }));
+      setDecoyChats(prev =>
+        prev.map(c => (c.id === activeChatId ? { ...c, lastMessage: newDecoyMsg } : c))
+      );
+      return;
+    }
+
     if (!currentUser || !activeChatId || !mySecretKey) return;
 
     const activeChat = chats.find(c => c.id === activeChatId);
@@ -824,6 +1040,7 @@ export default function App() {
       disappearingTimer: disappearingSecs,
       expiresAt: disappearingSecs > 0 ? Date.now() + disappearingSecs * 1000 : undefined,
       attachment,
+      replyToId,
     };
 
     setMessages(prev => [...prev, newMsg]);
@@ -1205,7 +1422,12 @@ export default function App() {
     setMessages([]);
   };
 
-  const activeChat = chats.find(c => c.id === activeChatId);
+  const displayedUser = isDecoyMode ? DECOY_USER : currentUser;
+  const displayedChats = isDecoyMode ? decoyChats : chats;
+  const displayedMessages = isDecoyMode
+    ? (activeChatId ? decoyMessages[activeChatId] || [] : [])
+    : messages;
+  const activeChat = displayedChats.find(c => c.id === activeChatId);
 
   return (
     <SafeAreaProvider>
@@ -1213,31 +1435,44 @@ export default function App() {
         <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
 
         {/* Screen Render */}
-        {currentScreen === 'auth' || !currentUser ? (
+        {currentScreen === 'auth' || !displayedUser ? (
           <AuthScreen onAuthenticated={handleAuthenticated} />
         ) : (
           <View style={styles.appContainer}>
             {/* Top Header */}
             {currentScreen !== 'chat_detail' && (
               <Header
-                onLockPress={() => setIsAppLocked(true)}
+                onLockPress={() => {
+                  if (isDecoyMode) setIsDecoyMode(false);
+                  setIsAppLocked(true);
+                }}
                 onInvitesPress={() => setShowInvitesModal(true)}
                 onSettingsPress={() => setCurrentScreen(currentScreen === 'settings' ? 'chat_list' : 'settings')}
-                inviteCount={currentUser.inviteCodesRemaining}
+                inviteCount={displayedUser.inviteCodesRemaining}
               />
             )}
 
             {currentScreen === 'chat_list' && (
               <ChatListScreen
-                chats={chats}
-                loading={isInitialChatsLoading}
-                incomingRequestsCount={incomingRequests.length}
+                chats={displayedChats}
+                loading={isDecoyMode ? false : isInitialChatsLoading}
+                incomingRequestsCount={isDecoyMode ? 0 : incomingRequests.length}
                 onlineUserIds={onlineUserIds}
                 refreshing={isRefreshing}
                 onRefresh={handleRefresh}
                 onSelectChat={chatId => {
                   setActiveChatId(chatId);
                   setCurrentScreen('chat_detail');
+                  if (!isDecoyMode && currentUser) {
+                    const targetChat = chats.find(c => c.id === chatId);
+                    const peerId = targetChat ? targetChat.participant.id : chatId;
+                    socketService.markRead(peerId, chatId);
+                    api.markMessagesAsRead(peerId, chatId).catch(() => {});
+                    setChats(prev => prev.map(c => (c.id === chatId ? { ...c, unreadCount: 0 } : c)));
+                    setMessages(prev =>
+                      prev.map(m => (m.chatId === chatId && m.senderId !== currentUser.id ? { ...m, status: 'read' } : m))
+                    );
+                  }
                 }}
                 onOpenRequestsModal={() => setShowRequestsModal(true)}
                 onOpenSearchModal={() => setShowSearchModal(true)}
@@ -1247,9 +1482,9 @@ export default function App() {
             {currentScreen === 'chat_detail' && activeChat && (
               <ChatScreen
                 chat={activeChat}
-                currentUser={currentUser}
-                mySecretKey={mySecretKey!}
-                messages={messages}
+                currentUser={displayedUser}
+                mySecretKey={mySecretKey || 'decoy_ephemeral_key'}
+                messages={displayedMessages}
                 isOnline={onlineUserIds.has(activeChat.participant.id)}
                 onBack={() => setCurrentScreen('chat_list')}
                 onSendMessage={handleSendMessage}
@@ -1258,12 +1493,22 @@ export default function App() {
                 onInspectCiphertext={msg => setInspectingMessage(msg)}
                 onOpenSafetyNumbers={() => setSafetyModalChat(activeChat)}
                 onUpdateDisappearingTimer={async timer => {
+                  if (isDecoyMode) return;
                   await api.updateDisappearingTimer(activeChat.participant.id, timer);
                   setChats(prev =>
                     prev.map(c => (c.id === activeChat.id ? { ...c, disappearingTimer: timer } : c))
                   );
                 }}
                 onClearHistory={async () => {
+                  if (isDecoyMode) {
+                    if (activeChatId) {
+                      setDecoyMessages(prev => ({ ...prev, [activeChatId]: [] }));
+                      setDecoyChats(prev =>
+                        prev.map(c => (c.id === activeChatId ? { ...c, lastMessage: undefined, unreadCount: 0 } : c))
+                      );
+                    }
+                    return;
+                  }
                   await api.clearChatHistory(activeChat.participant.id);
                   setMessages([]);
                   setChats(prev =>
@@ -1271,8 +1516,13 @@ export default function App() {
                   );
                 }}
                 onDisconnectContact={async () => {
+                  if (isDecoyMode) {
+                    setActiveChatId(null);
+                    setCurrentScreen('chat_list');
+                    return;
+                  }
                   await api.disconnectContact(activeChat.participant.id);
-                  await reloadDynamicData(currentUser.id);
+                  await reloadDynamicData(currentUser!.id);
                   setActiveChatId(null);
                   setCurrentScreen('chat_list');
                 }}
@@ -1281,7 +1531,7 @@ export default function App() {
 
             {currentScreen === 'settings' && (
               <SettingsScreen
-                currentUser={currentUser}
+                currentUser={displayedUser}
                 antiScreenshotEnabled={antiScreenshotEnabled}
                 onToggleAntiScreenshot={setAntiScreenshotEnabled}
                 callVerificationEnabled={callVerificationEnabled}
@@ -1292,10 +1542,14 @@ export default function App() {
                 onOpenLinkedDevices={() => setShowLinkedDevicesModal(true)}
                 onOpenCloudBackup={() => setShowCloudBackupModal(true)}
                 onOpenChangePassword={() => setShowChangePasswordModal(true)}
+                onOpenDuressSettings={() => setShowDuressModal(true)}
                 onOpenPermissions={() => setShowPermissionsModal(true)}
                 onCheckUpdates={handleCheckUpdates}
                 onEditProfile={() => setShowEditProfileModal(true)}
-                onLockEnclave={() => setIsAppLocked(true)}
+                onLockEnclave={() => {
+                  if (isDecoyMode) setIsDecoyMode(false);
+                  setIsAppLocked(true);
+                }}
                 onEmergencyWipe={handleEmergencyWipe}
                 onSignOut={handleSignOut}
                 onBack={() => setCurrentScreen('chat_list')}
@@ -1496,10 +1750,22 @@ export default function App() {
           onClose={() => setShowChangePasswordModal(false)}
         />
 
+        {/* Duress Protocol Settings Modal */}
+        <DuressSettingsModal
+          visible={showDuressModal}
+          onClose={() => setShowDuressModal(false)}
+        />
+
         {/* Privacy Shield App Lock Overlay */}
         <PrivacyShield
           isLocked={isAppLocked}
           onUnlock={() => setIsAppLocked(false)}
+          onUnlockDecoy={() => {
+            setIsDecoyMode(true);
+            setIsAppLocked(false);
+            setActiveChatId(null);
+            setCurrentScreen('chat_list');
+          }}
           onEmergencyWipe={handleEmergencyWipe}
         />
 

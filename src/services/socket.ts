@@ -111,6 +111,12 @@ class SocketService {
     }
   }
 
+  markRead(peerId: string, chatId: string) {
+    if (this.socket?.connected) {
+      this.socket.emit('mark_read', { peerId, chatId });
+    }
+  }
+
   sendTyping(chatId: string, receiverId: string, isTyping: boolean) {
     if (this.socket?.connected) {
       this.socket.emit('typing_indicator', { chatId, receiverId, isTyping });

@@ -5,10 +5,16 @@ import { JabyLogo } from '../components/JabyLogo';
 import { UserProfile } from '../types';
 import { computeFingerprint, generateIdentityKeyPair, IdentityKeyPair } from '../utils/crypto';
 import { api } from '../services/api';
+import { evaluatePasswordStrength } from '../utils/passwordStrength';
 import { colors, shadows } from '../theme';
 
 interface Props {
-  onAuthenticated: (user: UserProfile, token: string, freshKeyPair?: IdentityKeyPair) => void;
+  onAuthenticated: (
+    user: UserProfile,
+    token: string,
+    freshKeyPair?: IdentityKeyPair,
+    pinCode?: string
+  ) => void;
 }
 
 export function AuthScreen({ onAuthenticated }: Props) {
@@ -19,9 +25,11 @@ export function AuthScreen({ onAuthenticated }: Props) {
   const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const registerStrength = evaluatePasswordStrength(pinCode);
+
   const handleLogin = async () => {
     if (!handle || !pinCode) {
-      Alert.alert('Error', 'Please enter your handle and PIN/passphrase.');
+      Alert.alert('Missing Details', 'Please enter your handle and PIN code.');
       return;
     }
 
@@ -29,7 +37,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
     try {
       const res = await api.login(handle, pinCode);
       if (res.success && res.user && res.token) {
-        onAuthenticated(res.user, res.token);
+        onAuthenticated(res.user, res.token, undefined, pinCode);
       } else {
         Alert.alert('Authentication Failed', res.error || 'Invalid credentials, or the server is unreachable.');
       }
@@ -66,7 +74,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
 
       if (res.success && res.user && res.token) {
         Alert.alert('Account Created', `Welcome, ${name}!`);
-        onAuthenticated(res.user, res.token, keyPair);
+        onAuthenticated(res.user, res.token, keyPair, pinCode);
       } else {
         Alert.alert('Registration Error', res.error || 'Failed to redeem invite code');
       }
@@ -154,11 +162,32 @@ export function AuthScreen({ onAuthenticated }: Props) {
                   placeholder="Choose a PIN (4-6 digits)"
                   placeholderTextColor={colors.textMuted}
                   secureTextEntry={true}
-                  keyboardType="numeric"
                   value={pinCode}
                   onChangeText={setPinCode}
                 />
               </View>
+
+              {pinCode.length > 0 && (
+                <View style={styles.strengthContainer}>
+                  <View style={styles.strengthBars}>
+                    {[1, 2, 3, 4].map(level => (
+                      <View
+                        key={level}
+                        style={[
+                          styles.strengthBar,
+                          registerStrength.score >= level && { backgroundColor: registerStrength.color },
+                        ]}
+                      />
+                    ))}
+                  </View>
+                  <View style={styles.strengthTextRow}>
+                    <Text style={[styles.strengthLabel, { color: registerStrength.color }]}>
+                      {registerStrength.label}
+                    </Text>
+                    <Text style={styles.strengthFeedback}>{registerStrength.feedback}</Text>
+                  </View>
+                </View>
+              )}
 
               <TouchableOpacity
                 style={[styles.primaryBtn, loading && styles.disabledBtn]}
@@ -397,5 +426,32 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     textAlign: 'center',
+  },
+  strengthContainer: {
+    marginBottom: 16,
+    gap: 6,
+  },
+  strengthBars: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  strengthBar: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.surfaceHighlight,
+  },
+  strengthTextRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  strengthLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  strengthFeedback: {
+    fontSize: 11,
+    color: colors.textMuted,
   },
 });

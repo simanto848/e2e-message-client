@@ -189,6 +189,21 @@ export const api = {
     }
   },
 
+  // Messages: Mark Conversation Messages as Read
+  async markMessagesAsRead(peerId: string, chatId?: string) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/contacts/messages/read`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify({ peerId, chatId }),
+      });
+      return await res.json();
+    } catch (err) {
+      console.warn('REST markMessagesAsRead failed:', err);
+      return { success: false };
+    }
+  },
+
   // Messages: Fetch History for Contact
   async getMessages(chatId: string, userId: string): Promise<Message[]> {
     try {

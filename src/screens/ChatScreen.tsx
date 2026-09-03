@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   Lock,
   MoreVertical,
+  X,
 } from '../components/Icons';
 import { ChatThread, Message, UserProfile, Attachment, DisappearingTimer } from '../types';
 import { ChatBubble } from '../components/ChatBubble';
@@ -45,7 +46,7 @@ interface Props {
   messages: Message[];
   isOnline: boolean;
   onBack: () => void;
-  onSendMessage: (text: string, attachment?: Attachment) => void;
+  onSendMessage: (text: string, attachment?: Attachment, replyToId?: string) => void;
   onDeleteForEveryone: (messageId: string) => void;
   onStartCall: (type: 'audio' | 'video') => void;
   onInspectCiphertext: (message: Message) => void;
@@ -76,6 +77,7 @@ export function ChatScreen({
   onDisconnectContact,
 }: Props) {
   const [inputText, setInputText] = useState('');
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isSendingImage, setIsSendingImage] = useState(false);
   const [showMenuModal, setShowMenuModal] = useState(false);
@@ -106,8 +108,9 @@ export function ChatScreen({
 
   const handleSend = () => {
     if (!inputText.trim()) return;
-    onSendMessage(inputText.trim());
+    onSendMessage(inputText.trim(), undefined, replyingTo?.id);
     setInputText('');
+    setReplyingTo(null);
   };
 
   const handleSendVoiceNote = (attachment: Attachment) => {
@@ -400,6 +403,8 @@ export function ChatScreen({
               playbackSpeed={playbackSpeed}
               onToggleSpeed={handleToggleSpeed}
               onReact={handleReact}
+              replyMessage={item.replyToId ? messages.find(m => m.id === item.replyToId) : undefined}
+              onReply={setReplyingTo}
               imageResolution={imageAttachment ? resolvedImages[imageAttachment.id] : undefined}
             />
           );
@@ -408,6 +413,28 @@ export function ChatScreen({
 
       {/* Input Bar */}
       <View style={styles.inputContainer}>
+        {/* Reply Quote Preview Bar */}
+        {replyingTo && (
+          <View style={styles.replyBar}>
+            <View style={styles.replyBarBorder} />
+            <View style={styles.replyBarContent}>
+              <Text style={styles.replyBarHeader}>
+                Replying to {replyingTo.senderId === currentUser.id ? 'yourself' : participant.name}
+              </Text>
+              <Text style={styles.replyBarText} numberOfLines={1}>
+                {replyingTo.attachment?.type === 'image'
+                  ? '📷 Photo'
+                  : replyingTo.attachment?.type === 'audio'
+                  ? '🎤 Voice Message'
+                  : replyingTo.text}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setReplyingTo(null)} style={styles.replyBarClose}>
+              <X size={16} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        )}
+
         {isRecording ? (
           <VoiceRecorder
             isRecording={isRecording}
@@ -642,5 +669,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     ...shadows.sm,
+  },
+  replyBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: 10,
+    padding: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  replyBarBorder: {
+    width: 3,
+    height: '100%',
+    backgroundColor: colors.primary,
+    borderRadius: 2,
+    marginRight: 8,
+  },
+  replyBarContent: {
+    flex: 1,
+  },
+  replyBarHeader: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primaryDark,
+    marginBottom: 2,
+  },
+  replyBarText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  replyBarClose: {
+    padding: 6,
   },
 });

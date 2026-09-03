@@ -16,6 +16,7 @@ import {
   Sparkles,
   Phone,
   Trash2,
+  ShieldAlert,
 } from '../components/Icons';
 import { UserProfile } from '../types';
 import { colors, shadows } from '../theme';
@@ -32,6 +33,7 @@ interface Props {
   onOpenLinkedDevices: () => void;
   onOpenCloudBackup: () => void;
   onOpenChangePassword?: () => void;
+  onOpenDuressSettings?: () => void;
   onOpenPermissions?: () => void;
   onCheckUpdates?: () => void;
   onEditProfile: () => void;
@@ -53,6 +55,7 @@ export function SettingsScreen({
   onOpenLinkedDevices,
   onOpenCloudBackup,
   onOpenChangePassword,
+  onOpenDuressSettings,
   onOpenPermissions,
   onCheckUpdates,
   onEditProfile,
@@ -178,6 +181,17 @@ export function SettingsScreen({
               })}
             </View>
           </View>
+
+          {/* Duress Protocol & Decoy Vault */}
+          {onOpenDuressSettings && (
+            <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onOpenDuressSettings}>
+              <View style={styles.rowAlign}>
+                <ShieldAlert size={18} color={colors.warning} />
+                <Text style={styles.menuItemText}>Duress Protocol & Decoy</Text>
+              </View>
+              <ChevronRight size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
 
           {/* Emergency Panic Wipe */}
           {onEmergencyWipe && (

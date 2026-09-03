@@ -16,6 +16,8 @@ interface Props {
   playbackSpeed?: number;
   onToggleSpeed?: () => void;
   onReact?: (msgId: string, emoji: string) => void;
+  replyMessage?: Message;
+  onReply?: (msg: Message) => void;
   imageResolution?: ImageResolution;
 }
 
@@ -29,6 +31,8 @@ export function ChatBubble({
   playbackSpeed = 1,
   onToggleSpeed,
   onReact,
+  replyMessage,
+  onReply,
   imageResolution,
 }: Props) {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
@@ -108,6 +112,17 @@ export function ChatBubble({
               <Text style={styles.reactionEmoji}>{emoji}</Text>
             </TouchableOpacity>
           ))}
+          {onReply && (
+            <TouchableOpacity
+              style={styles.reactionBtn}
+              onPress={() => {
+                onReply(message);
+                setShowReactions(false);
+              }}
+            >
+              <Text style={styles.reactionEmoji}>↩️</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -121,6 +136,25 @@ export function ChatBubble({
           message.disappearingTimer > 0 && styles.ephemeralBorder,
         ]}
       >
+        {/* Reply Quote Block */}
+        {replyMessage && (
+          <View style={[styles.replyQuote, isMe ? styles.myReplyQuote : styles.theirReplyQuote]}>
+            <View style={[styles.replyQuoteBar, isMe ? styles.myReplyQuoteBar : styles.theirReplyQuoteBar]} />
+            <View style={styles.replyQuoteContent}>
+              <Text style={[styles.replyQuoteSender, isMe ? styles.myReplyQuoteSender : styles.theirReplyQuoteSender]}>
+                {replyMessage.senderId === message.senderId ? (isMe ? 'You' : 'Original message') : 'Reply'}
+              </Text>
+              <Text style={[styles.replyQuoteText, isMe ? styles.myReplyQuoteText : styles.theirReplyQuoteText]} numberOfLines={1}>
+                {replyMessage.attachment?.type === 'image'
+                  ? '📷 Photo'
+                  : replyMessage.attachment?.type === 'audio'
+                  ? '🎤 Voice Message'
+                  : replyMessage.text}
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* Ephemeral Timer Tag */}
         {message.disappearingTimer > 0 && (
           <View style={styles.ephemeralHeader}>
@@ -518,5 +552,52 @@ const styles = StyleSheet.create({
   },
   reactionBadgeText: {
     fontSize: 12,
+  },
+  replyQuote: {
+    flexDirection: 'row',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  myReplyQuote: {
+    backgroundColor: 'rgba(0, 0, 0, 0.15)',
+  },
+  theirReplyQuote: {
+    backgroundColor: colors.surfaceElevated,
+  },
+  replyQuoteBar: {
+    width: 3,
+    borderRadius: 2,
+    marginRight: 8,
+  },
+  myReplyQuoteBar: {
+    backgroundColor: '#ffffff',
+  },
+  theirReplyQuoteBar: {
+    backgroundColor: colors.primary,
+  },
+  replyQuoteContent: {
+    flex: 1,
+  },
+  replyQuoteSender: {
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  myReplyQuoteSender: {
+    color: '#ffffff',
+  },
+  theirReplyQuoteSender: {
+    color: colors.primaryDark,
+  },
+  replyQuoteText: {
+    fontSize: 12,
+  },
+  myReplyQuoteText: {
+    color: 'rgba(255, 255, 255, 0.85)',
+  },
+  theirReplyQuoteText: {
+    color: colors.textSecondary,
   },
 });
