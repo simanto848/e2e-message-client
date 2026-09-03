@@ -64,6 +64,7 @@ export interface Message {
   attachment?: Attachment;
   replyToId?: string;
   reactions?: { [emoji: string]: string[] };
+  reaction?: string;
 }
 
 export type ChatThemeColor = 'emerald' | 'cyan' | 'indigo' | 'purple' | 'amber' | 'rose' | 'slate';

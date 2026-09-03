@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Audio } from 'expo-av';
 import { Avatar } from '../components/Avatar';
 import {
   ArrowLeft,
@@ -79,6 +80,10 @@ export function ChatScreen({
   const [isSendingImage, setIsSendingImage] = useState(false);
   const [showMenuModal, setShowMenuModal] = useState(false);
   const [resolvedImages, setResolvedImages] = useState<Record<string, ImageResolution>>({});
+  const [playingAudioMsgId, setPlayingAudioMsgId] = useState<string | null>(null);
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
+  const [localReactions, setLocalReactions] = useState<Record<string, string>>({});
+  const soundRef = useRef<Audio.Sound | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
 
@@ -213,6 +218,93 @@ export function ChatScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
 
+  // Clean up sound instance on unmount
+  useEffect(() => {
+    return () => {
+      if (soundRef.current) {
+        soundRef.current.unloadAsync().catch(() => {});
+        soundRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleToggleSpeed = async () => {
+    const speeds = [1.0, 1.5, 2.0];
+    const nextIndex = (speeds.indexOf(playbackSpeed) + 1) % speeds.length;
+    const nextSpeed = speeds[nextIndex];
+    setPlaybackSpeed(nextSpeed);
+    if (soundRef.current) {
+      await soundRef.current.setRateAsync(nextSpeed, true).catch(() => {});
+    }
+  };
+
+  const handlePlayAudio = async (msg: Message) => {
+    if (!msg.attachment || msg.attachment.type !== 'audio') return;
+
+    if (playingAudioMsgId === msg.id && soundRef.current) {
+      await soundRef.current.stopAsync().catch(() => {});
+      await soundRef.current.unloadAsync().catch(() => {});
+      soundRef.current = null;
+      setPlayingAudioMsgId(null);
+      return;
+    }
+
+    if (soundRef.current) {
+      await soundRef.current.stopAsync().catch(() => {});
+      await soundRef.current.unloadAsync().catch(() => {});
+      soundRef.current = null;
+    }
+
+    setPlayingAudioMsgId(msg.id);
+
+    try {
+      const res = await api.getMedia(msg.attachment.id);
+      if (!res.success || !res.attachment) {
+        throw new Error(res.error || 'Media not found');
+      }
+
+      const isSentByMe = msg.senderId === currentUser.id;
+      const theirPublicKey = isSentByMe ? participant.publicKey : undefined;
+      const key = theirPublicKey || res.attachment.encryptedPayload.senderPublicKey;
+      const base64Audio = decryptMessage(res.attachment.encryptedPayload, mySecretKey, key);
+
+      if (!base64Audio) {
+        throw new Error('Audio decryption failed');
+      }
+
+      const tempFileUri = `${FileSystem.cacheDirectory}voice_${msg.id}.m4a`;
+      await FileSystem.writeAsStringAsync(tempFileUri, base64Audio, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: tempFileUri },
+        { shouldPlay: true, rate: playbackSpeed, shouldCorrectPitch: true },
+        status => {
+          if (status.isLoaded && status.didJustFinish) {
+            sound.unloadAsync().catch(() => {});
+            soundRef.current = null;
+            setPlayingAudioMsgId(null);
+          }
+        }
+      );
+
+      soundRef.current = sound;
+    } catch (err) {
+      console.warn('[ChatScreen] Failed to play voice note:', err);
+      Alert.alert('Playback Failed', 'Could not decrypt or play this voice message.');
+      setPlayingAudioMsgId(null);
+      if (soundRef.current) {
+        soundRef.current.unloadAsync().catch(() => {});
+        soundRef.current = null;
+      }
+    }
+  };
+
+  const handleReact = (msgId: string, emoji: string) => {
+    setLocalReactions(prev => ({ ...prev, [msgId]: emoji }));
+  };
+
   const cycleTimer = () => {
     const currentIndex = TIMER_OPTIONS.indexOf(chat.disappearingTimer);
     const nextIndex = (currentIndex + 1) % TIMER_OPTIONS.length;
@@ -294,12 +386,20 @@ export function ChatScreen({
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
         renderItem={({ item }) => {
           const imageAttachment = item.attachment?.type === 'image' ? item.attachment : undefined;
+          const displayMessage = localReactions[item.id]
+            ? { ...item, reaction: localReactions[item.id] }
+            : item;
           return (
             <ChatBubble
-              message={item}
+              message={displayMessage}
               isMe={item.senderId === currentUser.id}
               onInspectCiphertext={onInspectCiphertext}
               onDeleteForEveryone={onDeleteForEveryone}
+              onPlayAudio={handlePlayAudio}
+              isPlayingAudio={playingAudioMsgId === item.id}
+              playbackSpeed={playbackSpeed}
+              onToggleSpeed={handleToggleSpeed}
+              onReact={handleReact}
               imageResolution={imageAttachment ? resolvedImages[imageAttachment.id] : undefined}
             />
           );

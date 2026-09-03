@@ -13,6 +13,9 @@ interface Props {
   onDeleteForEveryone?: (msgId: string) => void;
   onPlayAudio?: (msg: Message) => void;
   isPlayingAudio?: boolean;
+  playbackSpeed?: number;
+  onToggleSpeed?: () => void;
+  onReact?: (msgId: string, emoji: string) => void;
   imageResolution?: ImageResolution;
 }
 
@@ -23,9 +26,14 @@ export function ChatBubble({
   onDeleteForEveryone,
   onPlayAudio,
   isPlayingAudio = false,
+  playbackSpeed = 1,
+  onToggleSpeed,
+  onReact,
   imageResolution,
 }: Props) {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [showReactions, setShowReactions] = useState(false);
+  const QUICK_EMOJIS = ['👍', '❤️', '🔥', '🔒', '😂', '👀'];
 
   useEffect(() => {
     if (!message.expiresAt) return;
@@ -85,7 +93,28 @@ export function ChatBubble({
 
   return (
     <View style={[styles.container, isMe ? styles.myContainer : styles.theirContainer]}>
-      <View
+      {/* Floating Quick Reaction Bar */}
+      {showReactions && (
+        <View style={[styles.reactionsBar, isMe ? styles.reactionsBarRight : styles.reactionsBarLeft]}>
+          {QUICK_EMOJIS.map(emoji => (
+            <TouchableOpacity
+              key={emoji}
+              style={styles.reactionBtn}
+              onPress={() => {
+                onReact?.(message.id, emoji);
+                setShowReactions(false);
+              }}
+            >
+              <Text style={styles.reactionEmoji}>{emoji}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      <TouchableOpacity
+        activeOpacity={0.95}
+        onLongPress={() => setShowReactions(prev => !prev)}
+        delayLongPress={250}
         style={[
           styles.bubble,
           isMe ? styles.myBubble : styles.theirBubble,
@@ -133,9 +162,21 @@ export function ChatBubble({
                 />
               ))}
             </View>
+
             <Text style={[styles.audioDuration, isMe && styles.myAudioDuration]}>
               {message.attachment?.duration || 3}s
             </Text>
+
+            {isPlayingAudio && onToggleSpeed && (
+              <TouchableOpacity
+                style={[styles.speedBtn, isMe && styles.mySpeedBtn]}
+                onPress={onToggleSpeed}
+              >
+                <Text style={[styles.speedBtnText, isMe && styles.mySpeedBtnText]}>
+                  {playbackSpeed}x
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : isImage ? (
           <View style={styles.imageContainer}>
@@ -187,7 +228,16 @@ export function ChatBubble({
             )}
           </View>
         </View>
-      </View>
+
+        {/* Reaction Badge */}
+        {(message.reaction || (message.reactions && Object.keys(message.reactions).length > 0)) && (
+          <View style={[styles.reactionBadge, isMe ? styles.reactionBadgeRight : styles.reactionBadgeLeft]}>
+            <Text style={styles.reactionBadgeText}>
+              {message.reaction || Object.keys(message.reactions || {})[0]}
+            </Text>
+          </View>
+        )}
+      </TouchableOpacity>
     </View>
   );
 }
@@ -404,5 +454,69 @@ const styles = StyleSheet.create({
   },
   myAudioDuration: {
     color: 'rgba(255,255,255,0.9)',
+  },
+  speedBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: colors.surfaceElevated,
+    marginLeft: 4,
+  },
+  mySpeedBtn: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
+  speedBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primaryDark,
+  },
+  mySpeedBtnText: {
+    color: '#ffffff',
+  },
+  reactionsBar: {
+    position: 'absolute',
+    top: -38,
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    zIndex: 100,
+    ...shadows.md,
+  },
+  reactionsBarRight: {
+    right: 16,
+  },
+  reactionsBarLeft: {
+    left: 16,
+  },
+  reactionBtn: {
+    padding: 2,
+  },
+  reactionEmoji: {
+    fontSize: 18,
+  },
+  reactionBadge: {
+    position: 'absolute',
+    bottom: -10,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...shadows.sm,
+  },
+  reactionBadgeRight: {
+    right: 12,
+  },
+  reactionBadgeLeft: {
+    left: 12,
+  },
+  reactionBadgeText: {
+    fontSize: 12,
   },
 });

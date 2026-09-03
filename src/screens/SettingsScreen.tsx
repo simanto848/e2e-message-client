@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Switch } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Switch, Alert } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import {
   ArrowLeft,
@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Sparkles,
   Phone,
+  Trash2,
 } from '../components/Icons';
 import { UserProfile } from '../types';
 import { colors, shadows } from '../theme';
@@ -25,6 +26,8 @@ interface Props {
   onToggleAntiScreenshot: (val: boolean) => void;
   callVerificationEnabled: boolean;
   onToggleCallVerification: (val: boolean) => void;
+  autoLockDelay: number;
+  onChangeAutoLockDelay: (val: number) => void;
   onOpenInvites: () => void;
   onOpenLinkedDevices: () => void;
   onOpenCloudBackup: () => void;
@@ -33,6 +36,7 @@ interface Props {
   onCheckUpdates?: () => void;
   onEditProfile: () => void;
   onLockEnclave: () => void;
+  onEmergencyWipe?: () => void;
   onSignOut?: () => void;
   onBack: () => void;
 }
@@ -43,6 +47,8 @@ export function SettingsScreen({
   onToggleAntiScreenshot,
   callVerificationEnabled,
   onToggleCallVerification,
+  autoLockDelay,
+  onChangeAutoLockDelay,
   onOpenInvites,
   onOpenLinkedDevices,
   onOpenCloudBackup,
@@ -51,6 +57,7 @@ export function SettingsScreen({
   onCheckUpdates,
   onEditProfile,
   onLockEnclave,
+  onEmergencyWipe,
   onSignOut,
   onBack,
 }: Props) {
@@ -136,6 +143,64 @@ export function SettingsScreen({
               thumbColor={callVerificationEnabled ? colors.primary : colors.textMuted}
             />
           </View>
+
+          {/* Auto-Lock Delay Selector */}
+          <View style={[styles.customRow, styles.borderTop]}>
+            <View style={styles.toggleTextContainer}>
+              <View style={styles.rowAlign}>
+                <Lock size={18} color={colors.accentPurple} />
+                <Text style={styles.toggleTitle}>Auto-Lock Delay</Text>
+              </View>
+              <Text style={styles.toggleDesc}>
+                Locks the enclave after being in the background for this duration.
+              </Text>
+            </View>
+            <View style={styles.chipsContainer}>
+              {[
+                { label: '5s', value: 5 },
+                { label: '1m', value: 60 },
+                { label: '5m', value: 300 },
+                { label: '15m', value: 900 },
+                { label: 'Never', value: 0 },
+              ].map(opt => {
+                const isActive = autoLockDelay === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.label}
+                    style={[styles.chip, isActive && styles.activeChip]}
+                    onPress={() => onChangeAutoLockDelay(opt.value)}
+                  >
+                    <Text style={[styles.chipText, isActive && styles.activeChipText]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Emergency Panic Wipe */}
+          {onEmergencyWipe && (
+            <TouchableOpacity
+              style={[styles.menuItem, styles.borderTop]}
+              onPress={() => {
+                Alert.alert(
+                  'Emergency Enclave Wipe',
+                  'This will permanently erase all encryption keys, session tokens, and cached messages from this device. Are you sure you want to proceed?',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Erase Enclave', style: 'destructive', onPress: onEmergencyWipe },
+                  ]
+                );
+              }}
+            >
+              <View style={styles.rowAlign}>
+                <Trash2 size={18} color={colors.danger} />
+                <Text style={[styles.menuItemText, { color: colors.danger }]}>Emergency Enclave Wipe</Text>
+              </View>
+              <ChevronRight size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Account */}
@@ -429,5 +494,35 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: colors.textMuted,
     marginTop: 2,
+  },
+  customRow: {
+    padding: 16,
+    gap: 12,
+  },
+  chipsContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+    flexWrap: 'wrap',
+  },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  activeChip: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  chipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  activeChipText: {
+    color: '#ffffff',
   },
 });

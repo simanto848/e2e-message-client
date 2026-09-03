@@ -1,16 +1,17 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { ShieldAlert, Fingerprint } from './Icons';
+import { ShieldAlert, Fingerprint, Trash2 } from './Icons';
 import { colors, shadows } from '../theme';
 import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
 
 interface Props {
   isLocked: boolean;
   onUnlock: () => void;
+  onEmergencyWipe?: () => void;
 }
 
-export function PrivacyShield({ isLocked, onUnlock }: Props) {
+export function PrivacyShield({ isLocked, onUnlock, onEmergencyWipe }: Props) {
   const [authenticating, setAuthenticating] = useState(false);
 
   if (!isLocked) return null;
@@ -63,6 +64,29 @@ export function PrivacyShield({ isLocked, onUnlock }: Props) {
           <Fingerprint size={20} color="#ffffff" />
           <Text style={styles.unlockBtnText}>{authenticating ? 'Verifying…' : 'Unlock App'}</Text>
         </TouchableOpacity>
+
+        {onEmergencyWipe && (
+          <TouchableOpacity
+            style={styles.emergencyWipeBtn}
+            onPress={() => {
+              Alert.alert(
+                'Emergency Enclave Wipe',
+                'This will immediately purge all cryptographic keys, session tokens, and cached credentials from this device. Are you sure?',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Wipe Enclave',
+                    style: 'destructive',
+                    onPress: onEmergencyWipe,
+                  },
+                ]
+              );
+            }}
+          >
+            <Trash2 size={14} color={colors.danger} />
+            <Text style={styles.emergencyWipeText}>Emergency Enclave Wipe</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -129,5 +153,18 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '800',
+  },
+  emergencyWipeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  emergencyWipeText: {
+    color: colors.danger,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

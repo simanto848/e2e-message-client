@@ -3,6 +3,7 @@ import { StyleSheet, View, StatusBar, Alert, AppState } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ScreenCapture from 'expo-screen-capture';
 import * as Updates from 'expo-updates';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   UserProfile,
   ChatThread,
@@ -101,6 +102,9 @@ export default function App() {
 
   // Security & Privacy States
   const [isAppLocked, setIsAppLocked] = useState(false);
+  const [autoLockDelay, setAutoLockDelay] = useState<number>(5);
+  const autoLockDelayRef = useRef<number>(5);
+  autoLockDelayRef.current = autoLockDelay;
   const [antiScreenshotEnabled, setAntiScreenshotEnabled] = useState(true);
   // Whether the SAS ("verification words") panel shows during calls — see
   // CallModal.tsx. On by default (it's a real security feature: comparing
@@ -177,10 +181,61 @@ export default function App() {
   // Launching a real external Activity (image picker, camera, the media
   // permission dialog) *also* fires a genuine 'background' event on Android
   // — not 'inactive' — since it pauses our host Activity same as switching
-  // apps does. isExternalActivityActive() (paired with beginExternalActivity
-  // /endExternalActivity around those calls, see appLockGuard.ts) tells that
-  // Re-lock the enclave whenever the app leaves the foreground, with a grace period
-  // and immunity for active calls / in-progress system activities (pickers, permissions, biometrics).
+  // Load saved auto-lock delay preference
+  useEffect(() => {
+    AsyncStorage.getItem('jaby_autolock_delay')
+      .then(val => {
+        if (val !== null) {
+          const parsed = parseInt(val, 10);
+          if (!isNaN(parsed)) setAutoLockDelay(parsed);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleUpdateAutoLockDelay = async (seconds: number) => {
+    setAutoLockDelay(seconds);
+    await AsyncStorage.setItem('jaby_autolock_delay', seconds.toString()).catch(() => {});
+  };
+
+  const handleEmergencyWipe = async () => {
+    try {
+      if (callStateRef.current.active) {
+        webrtcCallEngine.endCall();
+        callAudio.playHangup();
+        callAudio.releaseAudioSession();
+        setCallState({
+          active: false,
+          type: 'audio',
+          status: 'ended',
+          isIncoming: false,
+          isMuted: false,
+          isVideoOff: false,
+          isSpeakerOn: true,
+          isFrontCamera: true,
+          duration: 0,
+          sasVerificationWords: [],
+          isReconnecting: false,
+        });
+      }
+      socketService.disconnect();
+      await clearSession();
+      await AsyncStorage.clear().catch(() => {});
+      setCurrentUser(null);
+      setMySecretKey(null);
+      setChats([]);
+      setMessages([]);
+      setActiveChatId(null);
+      setIsAppLocked(false);
+      setCurrentScreen('auth');
+      Alert.alert('Enclave Zeroized', 'All keys, sessions, and cached data have been completely wiped.');
+    } catch (err) {
+      console.warn('[EmergencyWipe] Error:', err);
+    }
+  };
+
+  // Re-lock the enclave whenever the app leaves the foreground, respecting the user's
+  // configured auto-lock delay (or remaining unlocked if set to Never/0).
   useEffect(() => {
     let backgroundTimer: NodeJS.Timeout | null = null;
 
@@ -190,13 +245,17 @@ export default function App() {
           return;
         }
 
-        // 5-second grace window prevents transient OS switches (notification drawer,
-        // dialog transitions, or quick app swaps) from locking the user out mid-activity.
+        // If configured delay is 0, user chose 'Never' — keep enclave unlocked
+        if (autoLockDelayRef.current === 0) {
+          return;
+        }
+
+        const delayMs = autoLockDelayRef.current * 1000;
         backgroundTimer = setTimeout(() => {
           if (AppState.currentState === 'background' && !isExternalActivityActive() && !callStateRef.current.active) {
             setIsAppLocked(true);
           }
-        }, 5000);
+        }, delayMs);
       } else if (nextState === 'active') {
         if (backgroundTimer) {
           clearTimeout(backgroundTimer);
@@ -1227,6 +1286,8 @@ export default function App() {
                 onToggleAntiScreenshot={setAntiScreenshotEnabled}
                 callVerificationEnabled={callVerificationEnabled}
                 onToggleCallVerification={setCallVerificationEnabled}
+                autoLockDelay={autoLockDelay}
+                onChangeAutoLockDelay={handleUpdateAutoLockDelay}
                 onOpenInvites={() => setShowInvitesModal(true)}
                 onOpenLinkedDevices={() => setShowLinkedDevicesModal(true)}
                 onOpenCloudBackup={() => setShowCloudBackupModal(true)}
@@ -1235,6 +1296,7 @@ export default function App() {
                 onCheckUpdates={handleCheckUpdates}
                 onEditProfile={() => setShowEditProfileModal(true)}
                 onLockEnclave={() => setIsAppLocked(true)}
+                onEmergencyWipe={handleEmergencyWipe}
                 onSignOut={handleSignOut}
                 onBack={() => setCurrentScreen('chat_list')}
               />
@@ -1438,6 +1500,7 @@ export default function App() {
         <PrivacyShield
           isLocked={isAppLocked}
           onUnlock={() => setIsAppLocked(false)}
+          onEmergencyWipe={handleEmergencyWipe}
         />
 
         {/* Hardware Permissions Onboarding Modal */}
