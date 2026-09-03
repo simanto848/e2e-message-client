@@ -1,5 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Modal, TextInput, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  Modal,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  FlatList,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Keyboard,
+  TouchableWithoutFeedback,
+} from 'react-native';
 import { Search, UserPlus, X, Clock, CheckCircle2 } from './Icons';
 import { SearchOperativeResult } from '../types';
 import { api } from '../services/api';
@@ -67,8 +80,11 @@ export function SearchOperativeModal({
     <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
       <KeyboardAvoidingView
         style={styles.backdrop}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={StyleSheet.absoluteFillObject} />
+        </TouchableWithoutFeedback>
         <View style={styles.sheetContainer}>
           {/* Header */}
           <View style={styles.header}>
@@ -91,7 +107,7 @@ export function SearchOperativeModal({
               value={query}
               onChangeText={setQuery}
               autoCapitalize="none"
-              autoFocus={true}
+              autoCorrect={false}
             />
           </View>
 

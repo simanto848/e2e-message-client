@@ -1,4 +1,5 @@
 import { Platform, PermissionsAndroid, Alert, Linking } from 'react-native';
+import { beginExternalActivity, endExternalActivity } from './appLockGuard';
 
 export interface AppPermissionsStatus {
   camera: boolean;
@@ -11,10 +12,13 @@ export interface AppPermissionsStatus {
  * Open system app settings if permissions are permanently denied
  */
 export async function openAppSettings() {
+  beginExternalActivity();
   try {
     await Linking.openSettings();
   } catch (err) {
     console.warn('Cannot open settings:', err);
+  } finally {
+    endExternalActivity();
   }
 }
 
@@ -24,6 +28,7 @@ export async function openAppSettings() {
 export async function requestSinglePermission(type: 'camera' | 'microphone' | 'photos'): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
 
+  beginExternalActivity();
   try {
     let perm: any = null;
     if (type === 'camera') {
@@ -58,14 +63,17 @@ export async function requestSinglePermission(type: 'camera' | 'microphone' | 'p
   } catch (err) {
     console.warn(`Failed to request ${type} permission:`, err);
     return false;
+  } finally {
+    endExternalActivity();
   }
 }
 
 /**
- * Request Camera, Microphone, and Photos permissions on app startup
+ * Request Camera, Microphone, and Photos permissions
  */
 export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
   if (Platform.OS === 'android') {
+    beginExternalActivity();
     try {
       const permissionsToRequest: any[] = [
         PermissionsAndroid.PERMISSIONS.CAMERA,
@@ -120,6 +128,8 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
     } catch (err) {
       console.warn('Failed to request Android permissions:', err);
       return checkAppPermissions();
+    } finally {
+      endExternalActivity();
     }
   }
 

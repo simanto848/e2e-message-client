@@ -31,6 +31,7 @@ import {
   mediaDevices,
   InCallManager,
   MediaStream,
+  RNMediaStream,
 } from './webrtcAdapter';
 import { socketService } from '../services/socket';
 
@@ -137,7 +138,14 @@ class WebRTCCallEngine {
     });
 
     pc.addEventListener('track', (event: any) => {
-      const stream = event.streams && event.streams[0];
+      let stream = event.streams && event.streams[0];
+      if (!stream && event.track && RNMediaStream) {
+        try {
+          stream = new RNMediaStream([event.track]);
+        } catch (err) {
+          console.warn('[WebRTC] Failed to create stream from track fallback:', err);
+        }
+      }
       if (stream) handlers.onRemoteStream(stream);
     });
 
@@ -154,11 +162,21 @@ class WebRTCCallEngine {
   }
 
   /** Caller side: capture media, create+send an SDP offer. */
-  async startCall(myUserId: string, peerId: string, callId: string, video: boolean, handlers: CallEngineHandlers): Promise<void> {
+  async startCall(
+    myUserId: string,
+    peerId: string,
+    callId: string,
+    video: boolean,
+    handlers: CallEngineHandlers,
+    isSpeakerOn = true
+  ): Promise<void> {
     await this.startLocalMedia(video);
-    this.startAudioRouting(video);
+    this.startAudioRouting(video, isSpeakerOn);
     const pc = this.createPeerConnection(myUserId, peerId, callId, video ? 'video' : 'audio', handlers);
-    const offer = await pc.createOffer({});
+    const offer = await pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: video,
+    });
     await pc.setLocalDescription(offer);
 
     socketService.sendCallSignal({
@@ -172,14 +190,25 @@ class WebRTCCallEngine {
   }
 
   /** Callee side: capture media, accept the remote offer, create+send an SDP answer. */
-  async acceptCall(myUserId: string, peerId: string, callId: string, video: boolean, remoteOfferSdp: any, handlers: CallEngineHandlers): Promise<void> {
+  async acceptCall(
+    myUserId: string,
+    peerId: string,
+    callId: string,
+    video: boolean,
+    remoteOfferSdp: any,
+    handlers: CallEngineHandlers,
+    isSpeakerOn = true
+  ): Promise<void> {
     await this.startLocalMedia(video);
-    this.startAudioRouting(video);
+    this.startAudioRouting(video, isSpeakerOn);
     const pc = this.createPeerConnection(myUserId, peerId, callId, video ? 'video' : 'audio', handlers);
     await pc.setRemoteDescription(new RTCSessionDescription(remoteOfferSdp));
     this.remoteDescriptionSet = true;
     await this.flushPendingIceCandidates();
-    const answer = await pc.createAnswer();
+    const answer = await pc.createAnswer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: video,
+    });
     await pc.setLocalDescription(answer);
 
     socketService.sendCallSignal({
@@ -236,15 +265,13 @@ class WebRTCCallEngine {
 
   /**
    * Puts the OS audio session into "in call" mode so react-native-webrtc's
-   * remote audio track actually routes somewhere audible — see the comment
-   * on InCallManager in webrtcAdapter.ts for why this is required. `auto:
-   * true` routes audio calls to the earpiece and video calls to the speaker
-   * by default, matching standard calling-app behavior; the user can still
-   * override via the speaker toggle (setSpeakerEnabled).
+   * remote audio track actually routes somewhere audible.
    */
-  private startAudioRouting(video: boolean): void {
+  private startAudioRouting(video: boolean, isSpeakerOn = true): void {
     try {
-      InCallManager?.start({ media: video ? 'video' : 'audio', auto: true });
+      InCallManager?.start({ media: video ? 'video' : 'audio', auto: false });
+      InCallManager?.setKeepScreenOn(true);
+      this.setSpeakerEnabled(isSpeakerOn);
     } catch (err) {
       console.warn('[WebRTC] InCallManager.start failed:', err);
     }
@@ -253,6 +280,9 @@ class WebRTCCallEngine {
   setSpeakerEnabled(enabled: boolean): void {
     try {
       InCallManager?.setForceSpeakerphoneOn(enabled);
+      if (typeof InCallManager?.chooseAudioRoute === 'function') {
+        InCallManager.chooseAudioRoute(enabled ? 'SPEAKER_PHONE' : 'EARPIECE');
+      }
     } catch (err) {
       console.warn('[WebRTC] InCallManager.setForceSpeakerphoneOn failed:', err);
     }
@@ -324,6 +354,7 @@ class WebRTCCallEngine {
     this.pendingIceCandidates = [];
     this.remoteDescriptionSet = false;
     try {
+      InCallManager?.setKeepScreenOn(false);
       InCallManager?.stop();
     } catch (err) {
       console.warn('[WebRTC] InCallManager.stop failed:', err);

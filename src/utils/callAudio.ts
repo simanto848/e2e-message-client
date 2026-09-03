@@ -38,13 +38,21 @@ class CallAudioManager {
   async playConnected() {
     try {
       await this.stopAudio();
-      await this.setupAudio(true);
       const connectUrl = `${API_BASE_URL}/sounds/connect`;
       const { sound } = await Audio.Sound.createAsync(
         { uri: connectUrl },
-        { shouldPlay: true, isLooping: false, volume: 1.0 }
+        { shouldPlay: true, isLooping: false, volume: 0.8 }
       );
       this.currentSound = sound;
+      setTimeout(async () => {
+        try {
+          await sound.stopAsync();
+          await sound.unloadAsync();
+          if (this.currentSound === sound) {
+            this.currentSound = null;
+          }
+        } catch {}
+      }, 700);
     } catch (err) {
       console.warn('[CallAudio] Connect tone error:', err);
     }
@@ -68,18 +76,18 @@ class CallAudioManager {
     }
   }
 
-  async setSpeaker(enabled: boolean) {
+  async releaseAudioSession() {
+    await this.stopAudio();
     try {
+      // Turn off ducking so WebRTC AudioDeviceModule / InCallManager has full audio pipeline control
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
         staysActiveInBackground: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: !enabled,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
       });
-    } catch (err) {
-      console.warn('[CallAudio] Speaker toggle error:', err);
-    }
+    } catch {}
   }
 
   async stopAudio() {

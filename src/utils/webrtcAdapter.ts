@@ -32,6 +32,7 @@ export const RTCIceCandidate = WebRTC?.RTCIceCandidate ?? null;
 export const RTCSessionDescription = WebRTC?.RTCSessionDescription ?? null;
 export const mediaDevices = WebRTC?.mediaDevices ?? null;
 export const RTCView = WebRTC?.RTCView ?? null;
+export const RNMediaStream = WebRTC?.MediaStream ?? null;
 export type MediaStream = any;
 
 /**
@@ -48,7 +49,8 @@ export type MediaStream = any;
 let InCallManagerModule: any = null;
 if (isWebRTCSupported) {
   try {
-    InCallManagerModule = require('react-native-incall-manager').default;
+    const incall = require('react-native-incall-manager');
+    InCallManagerModule = incall.default || incall;
   } catch (error) {
     console.warn('[WebRTC] react-native-incall-manager was expected but failed to load:', error);
     InCallManagerModule = null;

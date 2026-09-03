@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { ShieldAlert, Fingerprint } from './Icons';
 import { colors, shadows } from '../theme';
+import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
 
 interface Props {
   isLocked: boolean;
@@ -17,6 +18,7 @@ export function PrivacyShield({ isLocked, onUnlock }: Props) {
   const handleUnlockPress = async () => {
     if (authenticating) return;
     setAuthenticating(true);
+    beginExternalActivity();
     try {
       const hasHardware = await LocalAuthentication.hasHardwareAsync();
       const isEnrolled = await LocalAuthentication.isEnrolledAsync();
@@ -40,6 +42,7 @@ export function PrivacyShield({ isLocked, onUnlock }: Props) {
         onUnlock();
       }
     } finally {
+      endExternalActivity();
       setAuthenticating(false);
     }
   };

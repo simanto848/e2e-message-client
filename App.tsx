@@ -61,7 +61,12 @@ import { SearchOperativeModal } from './src/components/SearchOperativeModal';
 import { PermissionsModal } from './src/components/PermissionsModal';
 import { UpdateNotificationModal } from './src/components/UpdateNotificationModal';
 import { checkForAppUpdates, ReleaseInfo } from './src/services/updateService';
-import { requestAppPermissions, checkAppPermissions, AppPermissionsStatus } from './src/utils/permissions';
+import {
+  requestAppPermissions,
+  checkAppPermissions,
+  requestSinglePermission,
+  AppPermissionsStatus,
+} from './src/utils/permissions';
 import { colors } from './src/theme';
 
 type ScreenType = 'auth' | 'chat_list' | 'chat_detail' | 'settings';
@@ -172,15 +177,36 @@ export default function App() {
   // — not 'inactive' — since it pauses our host Activity same as switching
   // apps does. isExternalActivityActive() (paired with beginExternalActivity
   // /endExternalActivity around those calls, see appLockGuard.ts) tells that
-  // apart from the user actually leaving, so picking a profile photo doesn't
-  // re-trigger the lock screen mid-pick.
+  // Re-lock the enclave whenever the app leaves the foreground, with a grace period
+  // and immunity for active calls / in-progress system activities (pickers, permissions, biometrics).
   useEffect(() => {
+    let backgroundTimer: NodeJS.Timeout | null = null;
+
     const sub = AppState.addEventListener('change', nextState => {
       if (nextState === 'background') {
-        if (currentUser && !isExternalActivityActive()) setIsAppLocked(true);
+        if (!currentUser || isExternalActivityActive() || callStateRef.current.active) {
+          return;
+        }
+
+        // 5-second grace window prevents transient OS switches (notification drawer,
+        // dialog transitions, or quick app swaps) from locking the user out mid-activity.
+        backgroundTimer = setTimeout(() => {
+          if (AppState.currentState === 'background' && !isExternalActivityActive() && !callStateRef.current.active) {
+            setIsAppLocked(true);
+          }
+        }, 5000);
+      } else if (nextState === 'active') {
+        if (backgroundTimer) {
+          clearTimeout(backgroundTimer);
+          backgroundTimer = null;
+        }
       }
     });
-    return () => sub.remove();
+
+    return () => {
+      if (backgroundTimer) clearTimeout(backgroundTimer);
+      sub.remove();
+    };
   }, [currentUser]);
 
   // Recover the realtime socket whenever the app returns to the foreground.
@@ -198,18 +224,14 @@ export default function App() {
     return () => sub.remove();
   }, [currentUser]);
 
-  // Request Permissions on App Launch
+  // Silently check hardware permissions on app launch without popping up modal
   useEffect(() => {
     const initPermissions = async () => {
-      const status = await checkAppPermissions();
-      setPermissionsStatus(status);
-      if (!status.allGranted) {
-        // Automatically prompt hardware permissions on app launch
-        const requested = await requestAppPermissions();
-        setPermissionsStatus(requested);
-        if (!requested.allGranted) {
-          setShowPermissionsModal(true);
-        }
+      try {
+        const status = await checkAppPermissions();
+        setPermissionsStatus(status);
+      } catch (err) {
+        console.warn('Initial permissions check notice:', err);
       }
     };
     initPermissions();
@@ -633,6 +655,7 @@ export default function App() {
       } else if (signal.signalType === 'answer') {
         await webrtcCallEngine.handleRemoteAnswer(signal.sdp);
         callAudio.playConnected();
+        callAudio.releaseAudioSession();
         setCallState(prev => ({ ...prev, status: 'connected' }));
         startCallTimer();
       } else if (signal.signalType === 'ice-candidate') {
@@ -891,6 +914,19 @@ export default function App() {
       return;
     }
 
+    const micGranted = await requestSinglePermission('microphone');
+    if (!micGranted) {
+      Alert.alert('Microphone Access Needed', 'JABY needs microphone access to place voice and video calls.');
+      return;
+    }
+    if (type === 'video') {
+      const camGranted = await requestSinglePermission('camera');
+      if (!camGranted) {
+        Alert.alert('Camera Access Needed', 'JABY needs camera access for video calls.');
+        return;
+      }
+    }
+
     const sas = await generateCallSasWords(mySecretKey, activeChat.participant.publicKey, Date.now());
     const callId = `call_${Date.now()}_${currentUser.id}`;
     activeCallIdRef.current = callId;
@@ -913,10 +949,17 @@ export default function App() {
     });
 
     try {
-      await webrtcCallEngine.startCall(currentUser.id, activeChat.participant.id, callId, type === 'video', {
-        onRemoteStream: stream => setRemoteStream(stream),
-        onConnectionStateChange: handleCallConnectionStateChange,
-      });
+      await webrtcCallEngine.startCall(
+        currentUser.id,
+        activeChat.participant.id,
+        callId,
+        type === 'video',
+        {
+          onRemoteStream: stream => setRemoteStream(stream),
+          onConnectionStateChange: handleCallConnectionStateChange,
+        },
+        true
+      );
       setLocalStream(webrtcCallEngine.getLocalStream());
     } catch (err) {
       console.error('[Call] Failed to start call:', err);
@@ -977,9 +1020,26 @@ export default function App() {
       handleHangupCall();
       return;
     }
+
+    const micGranted = await requestSinglePermission('microphone');
+    if (!micGranted) {
+      Alert.alert('Microphone Access Needed', 'JABY needs microphone access to answer calls.');
+      handleHangupCall();
+      return;
+    }
+    if (callState.type === 'video') {
+      const camGranted = await requestSinglePermission('camera');
+      if (!camGranted) {
+        Alert.alert('Camera Access Needed', 'JABY needs camera access for video calls.');
+        handleHangupCall();
+        return;
+      }
+    }
+
     activeCallIdRef.current = pending.callId;
 
     callAudio.playConnected();
+    callAudio.releaseAudioSession();
     setCallState(prev => ({ ...prev, status: 'connected' }));
     startCallTimer();
 
@@ -993,7 +1053,8 @@ export default function App() {
         {
           onRemoteStream: stream => setRemoteStream(stream),
           onConnectionStateChange: handleCallConnectionStateChange,
-        }
+        },
+        callState.isSpeakerOn
       );
       setLocalStream(webrtcCallEngine.getLocalStream());
     } catch (err) {

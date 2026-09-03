@@ -21,7 +21,12 @@ export function beginExternalActivity(): void {
 }
 
 export function endExternalActivity(): void {
-  activeExternalActivities = Math.max(0, activeExternalActivities - 1);
+  // Give a 2.5-second grace window so that returning Android Activity transitions
+  // (which can fire AppState 'background'/'inactive' slightly after the promise resolves)
+  // do not immediately trigger the biometric lock screen.
+  setTimeout(() => {
+    activeExternalActivities = Math.max(0, activeExternalActivities - 1);
+  }, 2500);
 }
 
 export function isExternalActivityActive(): boolean {
