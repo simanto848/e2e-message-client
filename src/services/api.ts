@@ -83,6 +83,16 @@ export const api = {
     return await res.json();
   },
 
+  // Auth: Update password/PIN
+  async updatePassword(currentPassword: string, newPassword: string): Promise<{ success: boolean; error?: string; message?: string; token?: string }> {
+    const res = await fetch(`${API_BASE_URL}/auth/password`, {
+      method: 'PUT',
+      headers: await authedJsonHeaders(),
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    return await res.json();
+  },
+
   // Signs a direct-to-Cloudinary avatar upload — see src/utils/avatarUpload.ts.
   async getAvatarUploadSignature(): Promise<{
     success: boolean;

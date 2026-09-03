@@ -374,6 +374,13 @@ export const QrCode = createIcon(() => (
   </>
 ));
 
+export const Eye = createIcon(() => (
+  <>
+    <Path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+    <Circle cx="12" cy="12" r="3" />
+  </>
+));
+
 export const EyeOff = createIcon(() => (
   <>
     <Path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />

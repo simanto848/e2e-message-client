@@ -55,6 +55,7 @@ import { InviteManagerModal } from './src/components/InviteManagerModal';
 import { LinkedDevicesModal } from './src/components/LinkedDevicesModal';
 import { CloudBackupModal } from './src/components/CloudBackupModal';
 import { EditProfileModal } from './src/components/EditProfileModal';
+import { ChangePasswordModal } from './src/components/ChangePasswordModal';
 import { PrivacyShield } from './src/components/PrivacyShield';
 import { ContactRequestsModal } from './src/components/ContactRequestsModal';
 import { SearchOperativeModal } from './src/components/SearchOperativeModal';
@@ -120,6 +121,7 @@ export default function App() {
   const [showLinkedDevicesModal, setShowLinkedDevicesModal] = useState(false);
   const [showCloudBackupModal, setShowCloudBackupModal] = useState(false);
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [showRequestsModal, setShowRequestsModal] = useState(false);
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);
@@ -1228,6 +1230,7 @@ export default function App() {
                 onOpenInvites={() => setShowInvitesModal(true)}
                 onOpenLinkedDevices={() => setShowLinkedDevicesModal(true)}
                 onOpenCloudBackup={() => setShowCloudBackupModal(true)}
+                onOpenChangePassword={() => setShowChangePasswordModal(true)}
                 onOpenPermissions={() => setShowPermissionsModal(true)}
                 onCheckUpdates={handleCheckUpdates}
                 onEditProfile={() => setShowEditProfileModal(true)}
@@ -1424,6 +1427,12 @@ export default function App() {
             onClose={() => setShowEditProfileModal(false)}
           />
         )}
+
+        {/* Change Password Modal */}
+        <ChangePasswordModal
+          visible={showChangePasswordModal}
+          onClose={() => setShowChangePasswordModal(false)}
+        />
 
         {/* Privacy Shield App Lock Overlay */}
         <PrivacyShield

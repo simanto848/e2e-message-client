@@ -8,6 +8,7 @@ import {
   Laptop,
   Cloud,
   Key,
+  KeyRound,
   Ticket,
   EyeOff,
   LogOut,
@@ -27,6 +28,7 @@ interface Props {
   onOpenInvites: () => void;
   onOpenLinkedDevices: () => void;
   onOpenCloudBackup: () => void;
+  onOpenChangePassword?: () => void;
   onOpenPermissions?: () => void;
   onCheckUpdates?: () => void;
   onEditProfile: () => void;
@@ -44,6 +46,7 @@ export function SettingsScreen({
   onOpenInvites,
   onOpenLinkedDevices,
   onOpenCloudBackup,
+  onOpenChangePassword,
   onOpenPermissions,
   onCheckUpdates,
   onEditProfile,
@@ -164,6 +167,16 @@ export function SettingsScreen({
             </View>
             <ChevronRight size={18} color={colors.textSecondary} />
           </TouchableOpacity>
+
+          {onOpenChangePassword && (
+            <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onOpenChangePassword}>
+              <View style={styles.rowAlign}>
+                <KeyRound size={18} color={colors.primary} />
+                <Text style={styles.menuItemText}>Change Password</Text>
+              </View>
+              <ChevronRight size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* App */}
