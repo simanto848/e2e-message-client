@@ -72,6 +72,8 @@ import {
   AppPermissionsStatus,
 } from './src/utils/permissions';
 import { colors } from './src/theme';
+import { useAppSecurity } from './src/hooks/useAppSecurity';
+import { useWebRTCCall } from './src/hooks/useWebRTCCall';
 
 type ScreenType = 'auth' | 'chat_list' | 'chat_detail' | 'settings';
 
@@ -242,7 +244,6 @@ export default function App() {
 
   // Duress & Decoy State
   const [showDuressModal, setShowDuressModal] = useState(false);
-  const [isDecoyMode, setIsDecoyMode] = useState(false);
   const [decoyChats, setDecoyChats] = useState<ChatThread[]>(INITIAL_DECOY_CHATS);
   const [decoyMessages, setDecoyMessages] = useState<Record<string, Message[]>>(INITIAL_DECOY_MESSAGES);
 
@@ -261,25 +262,101 @@ export default function App() {
   // connecting, then kept current by individual online/offline events.
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
 
-  // Security & Privacy States
-  const [isAppLocked, setIsAppLocked] = useState(false);
-  const [autoLockDelay, setAutoLockDelay] = useState<number>(5);
-  const autoLockDelayRef = useRef<number>(5);
-  autoLockDelayRef.current = autoLockDelay;
-  const [antiScreenshotEnabled, setAntiScreenshotEnabled] = useState(true);
-  // Whether the SAS ("verification words") panel shows during calls — see
-  // CallModal.tsx. On by default (it's a real security feature: comparing
-  // these words out loud detects a man-in-the-middle on the call), but some
-  // users find it cluttering, so it's toggleable from Settings.
-  const [callVerificationEnabled, setCallVerificationEnabled] = useState(true);
   const [inspectingMessage, setInspectingMessage] = useState<Message | null>(null);
   const [safetyModalChat, setSafetyModalChat] = useState<ChatThread | null>(null);
-
-  // This device's real X25519 identity private key, held only in memory for
-  // the lifetime of the session (never written to AsyncStorage). The
-  // persisted copy lives in expo-secure-store (Keychain/Keystore-backed) —
-  // see src/utils/keystore.ts. Every encrypt/decrypt call needs this.
   const [mySecretKey, setMySecretKey] = useState<string | null>(null);
+
+  const logCallToChat = (finalState: CallState, endReason: 'completed' | 'declined' | 'missed') => {
+    if (!currentUser || !mySecretKey || !finalState.remoteUser) return;
+    if (finalState.isIncoming) return;
+
+    const peer = finalState.remoteUser;
+    const status: 'completed' | 'declined' | 'missed' = finalState.duration > 0 ? 'completed' : endReason;
+    const label = finalState.type === 'video' ? 'Video call' : 'Voice call';
+    const text =
+      status === 'completed'
+        ? `📞 ${label} · ${formatCallDuration(finalState.duration)}`
+        : status === 'declined'
+        ? `📞 ${label} declined`
+        : `📞 ${label} not answered`;
+
+    const encryptedPayload = encryptMessage(text, mySecretKey, peer.publicKey, currentUser.publicKey);
+    const callAttachment: Attachment = {
+      id: `call_${Date.now()}`,
+      name: label,
+      type: 'call',
+      size: 0,
+      url: '',
+      encrypted: false,
+      duration: finalState.duration,
+      callType: finalState.type,
+      callStatus: status,
+    };
+    const newMsg: Message = {
+      id: `msg_call_${Date.now()}`,
+      chatId: peer.id,
+      senderId: currentUser.id,
+      receiverId: peer.id,
+      text,
+      encryptedPayload,
+      timestamp: Date.now(),
+      status: 'sent',
+      disappearingTimer: 0,
+      attachment: callAttachment,
+    };
+
+    setMessages(prev => (activeChatId === peer.id ? [...prev, newMsg] : prev));
+    setChats(prev => prev.map(c => (c.id === peer.id ? { ...c, lastMessage: newMsg, unreadCount: 0 } : c)));
+    api.sendMessage(newMsg).catch(err => console.warn('Call log REST send err:', err));
+    socketService.sendMessage(newMsg);
+  };
+
+  // WebRTC Calling Hook
+  const {
+    callState,
+    setCallState,
+    callStateRef,
+    localStream,
+    setLocalStream,
+    remoteStream,
+    setRemoteStream,
+    activeCallIdRef,
+    pendingIncomingCallRef,
+    startCallTimer,
+    stopCallTimer,
+    handleStartCall,
+    handleAcceptIncomingCall,
+    handleHangupCall,
+    handleToggleMute,
+    handleToggleVideo,
+    handleToggleSpeaker,
+    handleFlipCamera,
+    resetCallState,
+  } = useWebRTCCall({
+    currentUser,
+    mySecretKey,
+    activeChatId,
+    chats,
+    onLogCallToChat: (state, status) => logCallToChat(state, status),
+  });
+
+  // Security & Privacy Hook
+  const {
+    isAppLocked,
+    setIsAppLocked,
+    autoLockDelay,
+    handleUpdateAutoLockDelay,
+    antiScreenshotEnabled,
+    setAntiScreenshotEnabled,
+    callVerificationEnabled,
+    setCallVerificationEnabled,
+    isDecoyMode,
+    setIsDecoyMode,
+    handleUnlockDecoy,
+  } = useAppSecurity({
+    isAuthenticated: Boolean(currentUser),
+    isCallActive: Boolean(callStateRef.current?.active),
+  });
 
   // Modals
   const [showInvitesModal, setShowInvitesModal] = useState(false);
@@ -343,41 +420,13 @@ export default function App() {
   // permission dialog) *also* fires a genuine 'background' event on Android
   // — not 'inactive' — since it pauses our host Activity same as switching
   // Load saved auto-lock delay preference
-  useEffect(() => {
-    AsyncStorage.getItem('jaby_autolock_delay')
-      .then(val => {
-        if (val !== null) {
-          const parsed = parseInt(val, 10);
-          if (!isNaN(parsed)) setAutoLockDelay(parsed);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  const handleUpdateAutoLockDelay = async (seconds: number) => {
-    setAutoLockDelay(seconds);
-    await AsyncStorage.setItem('jaby_autolock_delay', seconds.toString()).catch(() => {});
-  };
-
   const handleEmergencyWipe = async () => {
     try {
       if (callStateRef.current.active) {
         webrtcCallEngine.endCall();
         callAudio.playHangup();
         callAudio.releaseAudioSession();
-        setCallState({
-          active: false,
-          type: 'audio',
-          status: 'ended',
-          isIncoming: false,
-          isMuted: false,
-          isVideoOff: false,
-          isSpeakerOn: true,
-          isFrontCamera: true,
-          duration: 0,
-          sasVerificationWords: [],
-          isReconnecting: false,
-        });
+        resetCallState();
       }
       socketService.disconnect();
       await clearSession();
@@ -394,42 +443,6 @@ export default function App() {
       console.warn('[EmergencyWipe] Error:', err);
     }
   };
-
-  // Re-lock the enclave whenever the app leaves the foreground, respecting the user's
-  // configured auto-lock delay (or remaining unlocked if set to Never/0).
-  useEffect(() => {
-    let backgroundTimer: NodeJS.Timeout | null = null;
-
-    const sub = AppState.addEventListener('change', nextState => {
-      if (nextState === 'background') {
-        if (!currentUser || isExternalActivityActive() || callStateRef.current.active) {
-          return;
-        }
-
-        // If configured delay is 0, user chose 'Never' — keep enclave unlocked
-        if (autoLockDelayRef.current === 0) {
-          return;
-        }
-
-        const delayMs = autoLockDelayRef.current * 1000;
-        backgroundTimer = setTimeout(() => {
-          if (AppState.currentState === 'background' && !isExternalActivityActive() && !callStateRef.current.active) {
-            setIsAppLocked(true);
-          }
-        }, delayMs);
-      } else if (nextState === 'active') {
-        if (backgroundTimer) {
-          clearTimeout(backgroundTimer);
-          backgroundTimer = null;
-        }
-      }
-    });
-
-    return () => {
-      if (backgroundTimer) clearTimeout(backgroundTimer);
-      sub.remove();
-    };
-  }, [currentUser]);
 
   // Recover the realtime socket whenever the app returns to the foreground.
   // Mobile OSes commonly suspend a backgrounded app's network sockets, and
@@ -515,40 +528,6 @@ export default function App() {
     encryptionAlgorithm: 'PBKDF2-100K-AES-256-GCM',
     keyFingerprint: '',
   });
-
-  // Calling State
-  const [callState, setCallState] = useState<CallState>({
-    active: false,
-    type: 'audio',
-    status: 'ended',
-    isIncoming: false,
-    isMuted: false,
-    isVideoOff: false,
-    isSpeakerOn: true,
-    isFrontCamera: true,
-    duration: 0,
-    sasVerificationWords: [],
-    isReconnecting: false,
-  });
-
-  const callTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // WebRTC call transport state — real peer-to-peer audio/video (SRTP,
-  // ~100-300ms latency) via src/utils/webrtcCall.ts, replacing the old
-  // 1-second-chunk relay through the app server. `pendingIncomingCall` holds
-  // the caller's SDP offer + call id between "ringing" and the user tapping
-  // Accept, since acceptCall() needs the original offer to answer it.
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const pendingIncomingCallRef = useRef<{ callId: string; senderId: string; sdp: unknown } | null>(null);
-  const activeCallIdRef = useRef<string | null>(null);
-  // Mirrors callState for reading inside socket-event closures without
-  // depending on callState in that effect (which would tear down and
-  // resubscribe every listener on every call-state tick) — see logCallToChat.
-  const callStateRef = useRef<CallState>(callState);
-  useEffect(() => {
-    callStateRef.current = callState;
-  }, [callState]);
 
   // Silently check for and apply OTA (JS-only) updates published via EAS
   // Update — on launch and whenever the app returns to foreground. This
@@ -968,21 +947,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // 6. Call Timer
-  useEffect(() => {
-    if (callState.active && callState.status === 'connected') {
-      callTimerRef.current = setInterval(() => {
-        setCallState(prev => ({ ...prev, duration: prev.duration + 1 }));
-      }, 1000);
-    } else {
-      if (callTimerRef.current) clearInterval(callTimerRef.current);
-    }
-
-    return () => {
-      if (callTimerRef.current) clearInterval(callTimerRef.current);
-    };
-  }, [callState.active, callState.status]);
-
   // Handler: Send Message
   const handleSendMessage = async (text: string, attachment?: Attachment, replyToId?: string) => {
     if (isDecoyMode) {
@@ -1058,58 +1022,6 @@ export default function App() {
     socketService.sendMessage(newMsg);
   };
 
-  // Logs a finished call as a normal chat message (encrypted the same way as
-  // text — the call's outcome is genuinely the message content here, there's
-  // no separate "call log" storage). Only the caller's device sends this —
-  // both sides end up with it via the normal message sync, so it isn't
-  // logged twice. `finalState` should be the call state read from
-  // callStateRef right before it gets reset to 'ended', so duration/type/
-  // remoteUser are still populated.
-  const logCallToChat = (finalState: CallState, endReason: 'completed' | 'declined' | 'missed') => {
-    if (!currentUser || !mySecretKey || !finalState.remoteUser) return;
-    if (finalState.isIncoming) return; // only the caller logs, to avoid a duplicate entry from each side
-
-    const peer = finalState.remoteUser;
-    const status: 'completed' | 'declined' | 'missed' = finalState.duration > 0 ? 'completed' : endReason;
-    const label = finalState.type === 'video' ? 'Video call' : 'Voice call';
-    const text =
-      status === 'completed'
-        ? `📞 ${label} · ${formatCallDuration(finalState.duration)}`
-        : status === 'declined'
-        ? `📞 ${label} declined`
-        : `📞 ${label} not answered`;
-
-    const encryptedPayload = encryptMessage(text, mySecretKey, peer.publicKey, currentUser.publicKey);
-    const callAttachment: Attachment = {
-      id: `call_${Date.now()}`,
-      name: label,
-      type: 'call',
-      size: 0,
-      url: '',
-      encrypted: false,
-      duration: finalState.duration,
-      callType: finalState.type,
-      callStatus: status,
-    };
-    const newMsg: Message = {
-      id: `msg_call_${Date.now()}`,
-      chatId: peer.id,
-      senderId: currentUser.id,
-      receiverId: peer.id,
-      text,
-      encryptedPayload,
-      timestamp: Date.now(),
-      status: 'sent',
-      disappearingTimer: 0,
-      attachment: callAttachment,
-    };
-
-    setMessages(prev => (activeChatId === peer.id ? [...prev, newMsg] : prev));
-    setChats(prev => prev.map(c => (c.id === peer.id ? { ...c, lastMessage: newMsg, unreadCount: 0 } : c)));
-    api.sendMessage(newMsg).catch(err => console.warn('Call log REST send err:', err));
-    socketService.sendMessage(newMsg);
-  };
-
   // Handler: Delete for Everyone
   const handleDeleteForEveryone = (messageId: string) => {
     if (!activeChatId || !currentUser) return;
@@ -1170,212 +1082,6 @@ export default function App() {
     } catch {
       console.error('Error declining request');
     }
-  };
-
-  // Handler: Start Call. webrtcCallEngine.startCall() captures the mic/camera,
-  // builds the real RTCPeerConnection, and sends the SDP offer itself — this
-  // handler just drives the UI state around that.
-  const handleStartCall = async (type: 'audio' | 'video') => {
-    if (!activeChatId || !currentUser || !mySecretKey) return;
-    // Guards a double-tap on the call button (or any other re-entrant call)
-    // from spinning up a second RTCPeerConnection/getUserMedia capture while
-    // one is already active/ringing.
-    if (callState.active) return;
-    const activeChat = chats.find(c => c.id === activeChatId);
-    if (!activeChat) return;
-
-    if (!webrtcCallEngine.isSupported()) {
-      Alert.alert(
-        'Development Build Required',
-        'WebRTC real-time voice and video calling requires native code (not included in standard Expo Go).\n\nPlease run "npx expo run:android" or "npx expo run:ios" to test calling.'
-      );
-      return;
-    }
-
-    const micGranted = await requestSinglePermission('microphone');
-    if (!micGranted) {
-      Alert.alert('Microphone Access Needed', 'JABY needs microphone access to place voice and video calls.');
-      return;
-    }
-    if (type === 'video') {
-      const camGranted = await requestSinglePermission('camera');
-      if (!camGranted) {
-        Alert.alert('Camera Access Needed', 'JABY needs camera access for video calls.');
-        return;
-      }
-    }
-
-    const sas = await generateCallSasWords(mySecretKey, activeChat.participant.publicKey, Date.now());
-    const callId = `call_${Date.now()}_${currentUser.id}`;
-    activeCallIdRef.current = callId;
-
-    callAudio.playRingtone();
-
-    setCallState({
-      active: true,
-      type,
-      status: 'ringing',
-      remoteUser: activeChat.participant,
-      isIncoming: false,
-      isMuted: false,
-      isVideoOff: false,
-      isSpeakerOn: true,
-      isFrontCamera: true,
-      duration: 0,
-      sasVerificationWords: sas,
-      isReconnecting: false,
-    });
-
-    try {
-      await webrtcCallEngine.startCall(
-        currentUser.id,
-        activeChat.participant.id,
-        callId,
-        type === 'video',
-        {
-          onRemoteStream: stream => setRemoteStream(stream),
-          onConnectionStateChange: handleCallConnectionStateChange,
-        },
-        true
-      );
-      setLocalStream(webrtcCallEngine.getLocalStream());
-    } catch (err) {
-      console.error('[Call] Failed to start call:', err);
-      Alert.alert('Call Failed', 'Could not access the microphone/camera, or the connection failed to establish.');
-      handleHangupCall();
-    }
-  };
-
-  // Shared ICE/peer-connection state handler for both the caller and callee
-  // paths. 'disconnected' is often a brief network blip that recovers on its
-  // own, so it just raises the "Reconnecting…" banner. 'failed' is terminal
-  // — ICE has given up finding any usable candidate pair, most likely no
-  // TURN relay could be reached on either side — so leaving the call sitting
-  // there would just be a silent, dead connection; end it with a clear
-  // reason instead of hanging forever in "Reconnecting…".
-  const handleCallConnectionStateChange = (state: string) => {
-    console.log('[Call] connection state:', state);
-    if (state === 'failed') {
-      setCallState(prev => ({ ...prev, isReconnecting: false }));
-      Alert.alert('Call Disconnected', 'The connection was lost and could not be recovered.');
-      handleHangupCall();
-      return;
-    }
-    setCallState(prev => ({ ...prev, isReconnecting: state === 'disconnected' }));
-  };
-
-  // Start Call Duration Timer
-  const startCallTimer = () => {
-    if (callTimerRef.current) clearInterval(callTimerRef.current);
-    callTimerRef.current = setInterval(() => {
-      setCallState(prev => (prev.active ? { ...prev, duration: prev.duration + 1 } : prev));
-    }, 1000);
-  };
-
-  // Stop Call Duration Timer
-  const stopCallTimer = () => {
-    if (callTimerRef.current) {
-      clearInterval(callTimerRef.current);
-      callTimerRef.current = null;
-    }
-  };
-
-  // Handler: Accept Incoming Call. Uses the offer captured by the
-  // 'call_signal' listener above (pendingIncomingCallRef) to answer for real.
-  const handleAcceptIncomingCall = async () => {
-    if (!currentUser || !callState.remoteUser) return;
-    if (!webrtcCallEngine.isSupported()) {
-      Alert.alert(
-        'Development Build Required',
-        'WebRTC real-time voice and video calling requires native code (not included in standard Expo Go).\n\nPlease run "npx expo run:android" or "npx expo run:ios" to test calling.'
-      );
-      handleHangupCall();
-      return;
-    }
-    const pending = pendingIncomingCallRef.current;
-    if (!pending) {
-      Alert.alert('Call Error', 'The incoming call offer expired. Ask the caller to try again.');
-      handleHangupCall();
-      return;
-    }
-
-    const micGranted = await requestSinglePermission('microphone');
-    if (!micGranted) {
-      Alert.alert('Microphone Access Needed', 'JABY needs microphone access to answer calls.');
-      handleHangupCall();
-      return;
-    }
-    if (callState.type === 'video') {
-      const camGranted = await requestSinglePermission('camera');
-      if (!camGranted) {
-        Alert.alert('Camera Access Needed', 'JABY needs camera access for video calls.');
-        handleHangupCall();
-        return;
-      }
-    }
-
-    activeCallIdRef.current = pending.callId;
-
-    callAudio.playConnected();
-    callAudio.releaseAudioSession();
-    setCallState(prev => ({ ...prev, status: 'connected' }));
-    startCallTimer();
-
-    try {
-      await webrtcCallEngine.acceptCall(
-        currentUser.id,
-        callState.remoteUser.id,
-        pending.callId,
-        callState.type === 'video',
-        pending.sdp,
-        {
-          onRemoteStream: stream => setRemoteStream(stream),
-          onConnectionStateChange: handleCallConnectionStateChange,
-        },
-        callState.isSpeakerOn
-      );
-      setLocalStream(webrtcCallEngine.getLocalStream());
-    } catch (err) {
-      console.error('[Call] Failed to accept call:', err);
-      Alert.alert('Call Failed', 'Could not access the microphone/camera.');
-      handleHangupCall();
-    } finally {
-      pendingIncomingCallRef.current = null;
-    }
-  };
-
-  // Handler: Hangup / Decline Call.
-  //
-  // A still-ringing incoming call that was never accepted has no
-  // RTCPeerConnection yet (pendingIncomingCallRef.current is only cleared
-  // once acceptCall() runs) — myUserId/peerId/callId inside webrtcCallEngine
-  // are still null in that case, since they're only set from
-  // createPeerConnection(). Calling endCall() there was a no-op: it checks
-  // those same fields before sending anything, so tapping "Decline" cleared
-  // the local ringing UI while the caller's phone kept ringing with no idea
-  // the call had been rejected. rejectIncoming() sends the 'reject' signal
-  // directly from the data captured when the offer arrived, independent of
-  // whether a peer connection was ever created.
-  const handleHangupCall = () => {
-    stopCallTimer();
-    callAudio.playHangup();
-
-    const pending = pendingIncomingCallRef.current;
-    if (pending && callState.isIncoming && callState.status === 'ringing' && currentUser) {
-      webrtcCallEngine.rejectIncoming(currentUser.id, pending.senderId, pending.callId, callState.type);
-    } else {
-      webrtcCallEngine.endCall();
-    }
-
-    setLocalStream(null);
-    setRemoteStream(null);
-    pendingIncomingCallRef.current = null;
-    activeCallIdRef.current = null;
-    // No-ops when this device was the callee (logCallToChat only logs from
-    // the caller's side) — the callee declining/hanging up still reaches the
-    // caller as a 'hangup'/'reject' signal (handled above), which logs it there.
-    logCallToChat(callStateRef.current, 'missed');
-    setCallState(prev => ({ ...prev, active: false, status: 'ended', duration: 0 }));
   };
 
   // Handler: Generate VIP Invite
@@ -1455,6 +1161,7 @@ export default function App() {
             {currentScreen === 'chat_list' && (
               <ChatListScreen
                 chats={displayedChats}
+                currentUserId={displayedUser?.id}
                 loading={isDecoyMode ? false : isInitialChatsLoading}
                 incomingRequestsCount={isDecoyMode ? 0 : incomingRequests.length}
                 onlineUserIds={onlineUserIds}
@@ -1617,32 +1324,10 @@ export default function App() {
           remoteStream={remoteStream}
           onHangup={handleHangupCall}
           onAcceptIncoming={handleAcceptIncomingCall}
-          onToggleMute={() => {
-            setCallState(prev => {
-              const nextMute = !prev.isMuted;
-              webrtcCallEngine.setMuted(nextMute);
-              return { ...prev, isMuted: nextMute };
-            });
-          }}
-          onToggleVideo={() => {
-            setCallState(prev => {
-              const nextVideoOff = !prev.isVideoOff;
-              webrtcCallEngine.setVideoEnabled(!nextVideoOff);
-              return { ...prev, isVideoOff: nextVideoOff };
-            });
-          }}
-          onToggleSpeaker={() => {
-            setCallState(prev => {
-              const nextSpeaker = !prev.isSpeakerOn;
-              // InCallManager owns actual WebRTC audio routing during a call
-              // (see webrtcCall.ts) — expo-av's setAudioModeAsync governs a
-              // separate audio session used only for the ringtone/connect/
-              // hangup chime sounds, not the live call audio itself.
-              webrtcCallEngine.setSpeakerEnabled(nextSpeaker);
-              return { ...prev, isSpeakerOn: nextSpeaker };
-            });
-          }}
-          onToggleCameraFlip={() => setCallState(prev => ({ ...prev, isFrontCamera: !prev.isFrontCamera }))}
+          onToggleMute={handleToggleMute}
+          onToggleVideo={handleToggleVideo}
+          onToggleSpeaker={handleToggleSpeaker}
+          onToggleCameraFlip={handleFlipCamera}
         />
 
         {/* VIP Invite Manager Modal */}

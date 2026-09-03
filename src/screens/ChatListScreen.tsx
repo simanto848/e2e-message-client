@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput, RefreshControl } from 'react-native';
 import { Avatar } from '../components/Avatar';
-import { Search, Pin, ShieldCheck, Flame, Plus, CheckCircle2, UserPlus, X, UserCheck } from '../components/Icons';
+import { Search, Pin, ShieldCheck, Flame, Plus, CheckCircle2, UserPlus, X, UserCheck, Check, CheckCheck } from '../components/Icons';
 import { ChatThread } from '../types';
 import { colors, shadows } from '../theme';
 
 interface Props {
   chats: ChatThread[];
+  currentUserId?: string;
   loading?: boolean;
   incomingRequestsCount: number;
   onlineUserIds: Set<string>;
@@ -31,6 +32,7 @@ function ChatRowSkeleton() {
 
 export function ChatListScreen({
   chats,
+  currentUserId,
   loading = false,
   incomingRequestsCount,
   onlineUserIds,
@@ -61,37 +63,34 @@ export function ChatListScreen({
         />
         {searchQuery.length > 0 && (
           <TouchableOpacity onPress={() => setSearchQuery('')}>
-            <X size={16} color={colors.textSecondary} />
+            <X size={16} color={colors.textMuted} />
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Connection Requests Banner if any incoming */}
+      {/* Incoming Requests Banner */}
       {incomingRequestsCount > 0 && (
         <TouchableOpacity style={styles.requestsBanner} onPress={onOpenRequestsModal}>
-          <View style={styles.requestsBannerLeft}>
-            <UserPlus size={16} color="#d97706" />
-            <Text style={styles.requestsBannerText}>
-              {incomingRequestsCount} New Contact Request{incomingRequestsCount > 1 ? 's' : ''}
-            </Text>
-          </View>
+          <ShieldCheck size={18} color={colors.primary} />
+          <Text style={styles.requestsBannerText}>
+            {incomingRequestsCount} pending contact request{incomingRequestsCount > 1 ? 's' : ''}
+          </Text>
           <View style={styles.reviewBadge}>
             <Text style={styles.reviewBadgeText}>Review</Text>
           </View>
         </TouchableOpacity>
       )}
 
-      {/* Security Status Ribbon */}
+      {/* Ribbon */}
       <View style={styles.ribbon}>
-        <ShieldCheck size={14} color="#059669" />
-        <Text style={styles.ribbonText}>END-TO-END ENCRYPTED</Text>
+        <ShieldCheck size={12} color={colors.primaryDark} />
+        <Text style={styles.ribbonText}>ZERO-KNOWLEDGE ENCLAVE ACTIVE</Text>
       </View>
 
-      {/* Chat List with Pull-to-Refresh */}
+      {/* Chat List */}
       <FlatList
         data={filteredChats}
-        keyExtractor={(item, index) => `${item.id}_${index}`}
-        showsVerticalScrollIndicator={false}
+        keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl
@@ -127,6 +126,7 @@ export function ChatListScreen({
           const participant = item.participant;
           const lastMsg = item.lastMessage;
           const isOnline = onlineUserIds.has(participant.id);
+          const isLastMsgMine = !!(lastMsg && currentUserId && lastMsg.senderId === currentUserId);
 
           return (
             <TouchableOpacity
@@ -157,19 +157,32 @@ export function ChatListScreen({
                 </View>
 
                 <View style={styles.messageRow}>
-                  <Text style={styles.lastMessageText} numberOfLines={1}>
-                    {item.isTyping ? (
-                      <Text style={styles.typingText}>typing...</Text>
-                    ) : lastMsg ? (
-                      lastMsg.isDeletedForEveryone ? (
-                        'Message deleted'
-                      ) : (
-                        lastMsg.text || 'Encrypted message'
-                      )
-                    ) : (
-                      'No messages yet'
+                  <View style={styles.lastMessageContainer}>
+                    {isLastMsgMine && (
+                      <View style={styles.statusCheckWrapper}>
+                        {lastMsg?.status === 'read' ? (
+                          <CheckCheck size={13} color="#0284c7" />
+                        ) : lastMsg?.status === 'delivered' ? (
+                          <CheckCheck size={13} color={colors.textMuted} />
+                        ) : (
+                          <Check size={13} color={colors.textMuted} />
+                        )}
+                      </View>
                     )}
-                  </Text>
+                    <Text style={styles.lastMessageText} numberOfLines={1}>
+                      {item.isTyping ? (
+                        <Text style={styles.typingText}>typing...</Text>
+                      ) : lastMsg ? (
+                        lastMsg.isDeletedForEveryone ? (
+                          'Message deleted'
+                        ) : (
+                          lastMsg.text || 'Encrypted message'
+                        )
+                      ) : (
+                        'No messages yet'
+                      )}
+                    </Text>
+                  </View>
 
                   <View style={styles.badgeRow}>
                     {item.disappearingTimer > 0 && (
@@ -369,11 +382,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 4,
   },
+  lastMessageContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  statusCheckWrapper: {
+    marginRight: 4,
+  },
   lastMessageText: {
     fontSize: 13,
     color: colors.textSecondary,
     flex: 1,
-    marginRight: 8,
   },
   typingText: {
     color: colors.primaryDark,

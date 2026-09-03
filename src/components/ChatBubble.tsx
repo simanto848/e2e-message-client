@@ -252,7 +252,7 @@ export function ChatBubble({
             {isMe && (
               <View style={styles.statusCheck}>
                 {message.status === 'read' ? (
-                  <CheckCheck size={14} color="#ffffff" />
+                  <CheckCheck size={14} color="#38bdf8" />
                 ) : message.status === 'delivered' ? (
                   <CheckCheck size={14} color="rgba(255,255,255,0.7)" />
                 ) : (

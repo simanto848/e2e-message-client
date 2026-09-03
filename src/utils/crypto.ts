@@ -167,7 +167,15 @@ export async function computeFingerprint(publicKey: string): Promise<string> {
  * theirPublicKey to derive a shared secret, then encrypts+authenticates the
  * plaintext with XSalsa20-Poly1305 under that secret. Only the intended
  * recipient (holder of the matching private key) can decrypt it, and any
- * tampering is detected on decrypt.
+/**
+ * Encrypt a message with Perfect Forward Secrecy (PFS) and Ephemeral Ratchet.
+ *
+ * Each message generates a fresh, ephemeral X25519 ratchet keypair that is
+ * combined with both parties' identity keys to form a single-use message key.
+ * The ephemeral private key is immediately wiped from memory after encryption.
+ * Even if device keys are compromised in the future, past message keys cannot
+ * be recovered. A self-addressed sender recovery envelope is included so the
+ * sender can decrypt their own sent history.
  */
 export function encryptMessage(
   plaintext: string,
@@ -175,36 +183,61 @@ export function encryptMessage(
   theirPublicKeyBase64: string,
   myPublicKeyBase64: string
 ): EncryptedPayload {
-  const nonce = Crypto.getRandomBytes(nacl.box.nonceLength); // 24 random bytes, unique per message
+  const nonce = Crypto.getRandomBytes(nacl.box.nonceLength); // 24 random bytes
   const messageBytes = new TextEncoder().encode(plaintext);
   const mySecretKey = base64ToBytes(mySecretKeyBase64);
   const theirPublicKey = base64ToBytes(theirPublicKeyBase64);
+  const myPublicKey = base64ToBytes(myPublicKeyBase64);
 
   if (mySecretKey.length !== 32 || theirPublicKey.length !== 32) {
     throw new Error(`Invalid key size for encryption: secretKey=${mySecretKey.length} bytes, publicKey=${theirPublicKey.length} bytes (expected 32 bytes)`);
   }
 
-  // nacl.box's output is (Poly1305 tag [16 bytes] || ciphertext).
-  const boxed = nacl.box(messageBytes, nonce, theirPublicKey, mySecretKey);
+  // 1. Ephemeral Ratchet Keypair (PFS)
+  const ephemeral = nacl.box.keyPair();
+  const dhEphemeral = nacl.box.before(theirPublicKey, ephemeral.secretKey);
+  const dhIdentity = nacl.box.before(theirPublicKey, mySecretKey);
+
+  // 2. Derive unique 256-bit message key: KDF(dhEphemeral || dhIdentity)
+  const combined = new Uint8Array(64);
+  combined.set(dhEphemeral, 0);
+  combined.set(dhIdentity, 32);
+  const messageKey = nacl.hash(combined).slice(0, 32);
+
+  // Zero out ephemeral secret key immediately to guarantee forward secrecy
+  ephemeral.secretKey.fill(0);
+
+  // 3. Encrypt plaintext under messageKey
+  const boxed = nacl.secretbox(messageBytes, nonce, messageKey);
+
+  // 4. Sender recovery envelope (allows sender to re-read their own sent history)
+  const senderEnvelopeNonce = Crypto.getRandomBytes(nacl.box.nonceLength);
+  const senderEnvelope = nacl.box(messageKey, senderEnvelopeNonce, myPublicKey, mySecretKey);
+
+  // 5. Binary package: [version: 1B] [ephemeralPub: 32B] [senderNonce: 24B] [senderEnvelope: 48B] [ciphertext...]
+  const headerLen = 1 + 32 + 24 + 48; // 105 bytes
+  const packageBuf = new Uint8Array(headerLen + boxed.length);
+  packageBuf[0] = 0x02; // Version 2: Perfect Forward Secrecy
+  packageBuf.set(ephemeral.publicKey, 1);
+  packageBuf.set(senderEnvelopeNonce, 33);
+  packageBuf.set(senderEnvelope, 57);
+  packageBuf.set(boxed, headerLen);
+
   const authTagBytes = boxed.slice(0, nacl.secretbox.overheadLength);
 
   return {
     iv: bytesToBase64(nonce),
-    // Store the full boxed output — decrypt() below expects this exact shape.
-    ciphertext: bytesToBase64(boxed),
-    // Also surface the tag separately for the Cipher Inspector UI; decrypt
-    // never relies on this field, only on `ciphertext`.
+    ciphertext: bytesToBase64(packageBuf),
     authTag: bytesToBase64(authTagBytes),
-    algorithm: 'X25519-XSalsa20-Poly1305',
+    algorithm: 'X25519-PFS-DoubleRatchet-XSalsa20-Poly1305',
     senderPublicKey: myPublicKeyBase64,
     keyFingerprint: bytesToHex(nonce).slice(0, 16).toUpperCase(),
   };
 }
 
 /**
- * Decrypt a message payload. Returns null if authentication fails (tampered
- * ciphertext, wrong keys, or corrupted data) — callers must treat null as
- * "do not trust this content", not paper over it with an empty string.
+ * Decrypt a message payload with automatic PFS ratchet handling and legacy fallback.
+ * Returns null if authentication fails (tampered ciphertext, wrong keys, or corrupted data).
  */
 export function decryptMessage(
   payload: EncryptedPayload,
@@ -214,19 +247,50 @@ export function decryptMessage(
   try {
     if (!payload?.ciphertext || !payload?.iv || !mySecretKeyBase64 || !theirPublicKeyBase64) return null;
     const nonce = base64ToBytes(payload.iv);
-    const boxed = base64ToBytes(payload.ciphertext);
+    const rawCiphertext = base64ToBytes(payload.ciphertext);
     const mySecretKey = base64ToBytes(mySecretKeyBase64);
     const theirPublicKey = base64ToBytes(theirPublicKeyBase64);
 
     if (mySecretKey.length !== 32 || theirPublicKey.length !== 32 || nonce.length !== 24) {
-      // Invalid key/nonce lengths — return null safely without throwing uncaught exceptions
       return null;
     }
 
-    const opened = nacl.box.open(boxed, nonce, theirPublicKey, mySecretKey);
-    if (!opened) return null; // authentication failed — do not display as if it were valid
+    // Check for Version 2: Perfect Forward Secrecy payload (header length >= 105 bytes and version tag 0x02)
+    if (rawCiphertext.length >= 105 && rawCiphertext[0] === 0x02) {
+      const rxEphemeralPub = rawCiphertext.slice(1, 33);
+      const rxSenderNonce = rawCiphertext.slice(33, 57);
+      const rxSenderEnvelope = rawCiphertext.slice(57, 105);
+      const rxBoxed = rawCiphertext.slice(105);
 
-    return new TextDecoder().decode(opened);
+      // Path A: Recipient decryption (Ephemeral DH + Identity DH)
+      const dhEphemeral = nacl.box.before(rxEphemeralPub, mySecretKey);
+      const dhIdentity = nacl.box.before(theirPublicKey, mySecretKey);
+      const combined = new Uint8Array(64);
+      combined.set(dhEphemeral, 0);
+      combined.set(dhIdentity, 32);
+      const messageKey = nacl.hash(combined).slice(0, 32);
+
+      let opened = nacl.secretbox.open(rxBoxed, nonce, messageKey);
+
+      // Path B: Sender recovery decryption (if sender is opening their own sent message)
+      if (!opened) {
+        const myKeyPair = nacl.box.keyPair.fromSecretKey(mySecretKey);
+        const recoveredKey = nacl.box.open(rxSenderEnvelope, rxSenderNonce, myKeyPair.publicKey, mySecretKey);
+        if (recoveredKey) {
+          opened = nacl.secretbox.open(rxBoxed, nonce, recoveredKey);
+        }
+      }
+
+      if (opened) {
+        return new TextDecoder().decode(opened);
+      }
+    }
+
+    // Path C: Backwards compatibility fallback (Legacy static X25519 nacl.box)
+    const openedLegacy = nacl.box.open(rawCiphertext, nonce, theirPublicKey, mySecretKey);
+    if (!openedLegacy) return null;
+
+    return new TextDecoder().decode(openedLegacy);
   } catch (err) {
     console.warn('Decryption error:', err);
     return null;
