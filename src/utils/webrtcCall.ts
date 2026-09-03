@@ -101,6 +101,19 @@ class WebRTCCallEngine {
     if (!this.isSupported() || !RTCPeerConnection) {
       throw new Error('WebRTC native module is not available in standard Expo Go.');
     }
+    // Defensive: a stale peer connection from a previous call that was never
+    // torn down (a double-tap on "Call", or a caller re-entering startCall
+    // before the last one settled) would otherwise leak — its mic stays hot
+    // and it keeps sending ICE candidates under the old callId, fighting the
+    // new connection. Close it before building the new one.
+    if (this.pc) {
+      try {
+        this.pc.close();
+      } catch (err) {
+        console.warn('[WebRTC] Failed to close stale peer connection:', err);
+      }
+      this.pc = null;
+    }
     this.myUserId = myUserId;
     this.peerId = peerId;
     this.callId = callId;
@@ -277,6 +290,25 @@ class WebRTCCallEngine {
         signalType: 'hangup',
       });
     }
+    this.cleanup();
+  }
+
+  /**
+   * Decline an incoming call before it's ever been accepted — i.e. before
+   * startLocalMedia/createPeerConnection have run, so myUserId/peerId/callId
+   * (set only inside createPeerConnection) are still null and endCall()'s
+   * signal wouldn't fire. Without this, tapping "Decline" silently cleared
+   * the local ringing UI while the caller's phone kept ringing forever,
+   * since no signal was ever sent back to them.
+   */
+  rejectIncoming(myUserId: string, peerId: string, callId: string, callType: 'audio' | 'video' = 'audio'): void {
+    socketService.sendCallSignal({
+      callId,
+      senderId: myUserId,
+      targetId: peerId,
+      type: callType,
+      signalType: 'reject',
+    });
     this.cleanup();
   }
 

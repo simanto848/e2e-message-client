@@ -30,10 +30,31 @@ class SocketService {
       return;
     }
 
+    if (this.socket) {
+      // A socket already exists but isn't connected — most likely its
+      // built-in reconnection attempts ran out after a long network outage,
+      // or the OS suspended networking while the app was backgrounded.
+      // Resume this instance instead of calling io() again, which would
+      // leave the old socket's reconnection loop running in the background
+      // forever alongside a brand-new one — two live connections registered
+      // for the same user server-side, so every message/call signal gets
+      // delivered (and every socket listener fires) twice.
+      this.socket.auth = { token };
+      this.socket.connect();
+      return;
+    }
+
     this.socket = io(SOCKET_SERVER_URL, {
       transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
+      // A secure messenger should keep trying to reconnect indefinitely
+      // rather than giving up after a handful of attempts and going silent
+      // — a finite cap here previously meant an extended network blip (a
+      // subway tunnel, a flaky hotel Wi-Fi) could leave the app permanently
+      // disconnected from realtime delivery until it was force-restarted.
+      reconnection: true,
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
       auth: { token },
     });
 
@@ -45,9 +66,21 @@ class SocketService {
       console.warn('[Mobile Socket] Connection/auth error:', err.message);
     });
 
-    this.socket.on('disconnect', () => {
-      console.log('[Mobile Socket] Disconnected from JABY Gateway');
+    this.socket.on('disconnect', reason => {
+      console.log('[Mobile Socket] Disconnected from JABY Gateway:', reason);
     });
+  }
+
+  /**
+   * Re-arm the connection after the app returns to the foreground. Mobile
+   * OSes routinely suspend a backgrounded app's sockets, and the app may
+   * have been backgrounded long enough that reconnection needs a fresh
+   * session token (e.g. after a re-login) — this is a no-op via the
+   * `this.socket.connected` guard above when the socket is already healthy.
+   */
+  async reconnectIfNeeded() {
+    if (this.socket?.connected) return;
+    await this.connect();
   }
 
   disconnect() {

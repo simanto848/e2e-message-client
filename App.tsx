@@ -183,6 +183,21 @@ export default function App() {
     return () => sub.remove();
   }, [currentUser]);
 
+  // Recover the realtime socket whenever the app returns to the foreground.
+  // Mobile OSes commonly suspend a backgrounded app's network sockets, and
+  // by the time the user's back the built-in reconnection loop may have
+  // already run out of attempts (or the socket never noticed it died) —
+  // without this, messages/calls/presence could silently stop arriving
+  // until the app was force-restarted, well after the lock screen (a
+  // separate concern) had already been dismissed.
+  useEffect(() => {
+    if (!currentUser) return;
+    const sub = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') socketService.reconnectIfNeeded();
+    });
+    return () => sub.remove();
+  }, [currentUser]);
+
   // Request Permissions on App Launch
   useEffect(() => {
     const initPermissions = async () => {
@@ -563,6 +578,21 @@ export default function App() {
       if (signal.targetId !== currentUser.id) return;
 
       if (signal.signalType === 'offer') {
+        // Already on a call (either as caller or callee) — auto-decline the
+        // new one instead of overwriting the active call's state, which
+        // would otherwise abandon the in-progress RTCPeerConnection without
+        // closing it and race two calls' signaling against each other.
+        if (callStateRef.current.active) {
+          socketService.sendCallSignal({
+            callId: signal.callId,
+            senderId: currentUser.id,
+            targetId: signal.senderId,
+            type: signal.type || 'audio',
+            signalType: 'reject',
+          });
+          return;
+        }
+
         const callerProfile =
           signal.senderProfile ||
           chats.find(c => c.participant?.id === signal.senderId || c.id === signal.senderId)?.participant || {
@@ -846,6 +876,10 @@ export default function App() {
   // handler just drives the UI state around that.
   const handleStartCall = async (type: 'audio' | 'video') => {
     if (!activeChatId || !currentUser || !mySecretKey) return;
+    // Guards a double-tap on the call button (or any other re-entrant call)
+    // from spinning up a second RTCPeerConnection/getUserMedia capture while
+    // one is already active/ringing.
+    if (callState.active) return;
     const activeChat = chats.find(c => c.id === activeChatId);
     if (!activeChat) return;
 
@@ -881,10 +915,7 @@ export default function App() {
     try {
       await webrtcCallEngine.startCall(currentUser.id, activeChat.participant.id, callId, type === 'video', {
         onRemoteStream: stream => setRemoteStream(stream),
-        onConnectionStateChange: state => {
-          console.log('[Call] connection state:', state);
-          setCallState(prev => ({ ...prev, isReconnecting: state === 'disconnected' || state === 'failed' }));
-        },
+        onConnectionStateChange: handleCallConnectionStateChange,
       });
       setLocalStream(webrtcCallEngine.getLocalStream());
     } catch (err) {
@@ -892,6 +923,24 @@ export default function App() {
       Alert.alert('Call Failed', 'Could not access the microphone/camera, or the connection failed to establish.');
       handleHangupCall();
     }
+  };
+
+  // Shared ICE/peer-connection state handler for both the caller and callee
+  // paths. 'disconnected' is often a brief network blip that recovers on its
+  // own, so it just raises the "Reconnecting…" banner. 'failed' is terminal
+  // — ICE has given up finding any usable candidate pair, most likely no
+  // TURN relay could be reached on either side — so leaving the call sitting
+  // there would just be a silent, dead connection; end it with a clear
+  // reason instead of hanging forever in "Reconnecting…".
+  const handleCallConnectionStateChange = (state: string) => {
+    console.log('[Call] connection state:', state);
+    if (state === 'failed') {
+      setCallState(prev => ({ ...prev, isReconnecting: false }));
+      Alert.alert('Call Disconnected', 'The connection was lost and could not be recovered.');
+      handleHangupCall();
+      return;
+    }
+    setCallState(prev => ({ ...prev, isReconnecting: state === 'disconnected' }));
   };
 
   // Start Call Duration Timer
@@ -943,10 +992,7 @@ export default function App() {
         pending.sdp,
         {
           onRemoteStream: stream => setRemoteStream(stream),
-          onConnectionStateChange: state => {
-            console.log('[Call] connection state:', state);
-            setCallState(prev => ({ ...prev, isReconnecting: state === 'disconnected' || state === 'failed' }));
-          },
+          onConnectionStateChange: handleCallConnectionStateChange,
         }
       );
       setLocalStream(webrtcCallEngine.getLocalStream());
@@ -959,19 +1005,36 @@ export default function App() {
     }
   };
 
-  // Handler: Hangup / Decline Call — webrtcCallEngine.endCall() sends the
-  // hangup signal and tears down the local peer connection/media in one step.
+  // Handler: Hangup / Decline Call.
+  //
+  // A still-ringing incoming call that was never accepted has no
+  // RTCPeerConnection yet (pendingIncomingCallRef.current is only cleared
+  // once acceptCall() runs) — myUserId/peerId/callId inside webrtcCallEngine
+  // are still null in that case, since they're only set from
+  // createPeerConnection(). Calling endCall() there was a no-op: it checks
+  // those same fields before sending anything, so tapping "Decline" cleared
+  // the local ringing UI while the caller's phone kept ringing with no idea
+  // the call had been rejected. rejectIncoming() sends the 'reject' signal
+  // directly from the data captured when the offer arrived, independent of
+  // whether a peer connection was ever created.
   const handleHangupCall = () => {
     stopCallTimer();
     callAudio.playHangup();
-    webrtcCallEngine.endCall();
+
+    const pending = pendingIncomingCallRef.current;
+    if (pending && callState.isIncoming && callState.status === 'ringing' && currentUser) {
+      webrtcCallEngine.rejectIncoming(currentUser.id, pending.senderId, pending.callId, callState.type);
+    } else {
+      webrtcCallEngine.endCall();
+    }
+
     setLocalStream(null);
     setRemoteStream(null);
     pendingIncomingCallRef.current = null;
     activeCallIdRef.current = null;
     // No-ops when this device was the callee (logCallToChat only logs from
     // the caller's side) — the callee declining/hanging up still reaches the
-    // caller as a 'hangup' signal (handled above), which logs it there.
+    // caller as a 'hangup'/'reject' signal (handled above), which logs it there.
     logCallToChat(callStateRef.current, 'missed');
     setCallState(prev => ({ ...prev, active: false, status: 'ended', duration: 0 }));
   };

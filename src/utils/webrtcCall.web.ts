@@ -65,6 +65,7 @@ class UnsupportedWebRTCCallEngine {
   }
 
   endCall(): void {}
+  rejectIncoming(_myUserId: string, _peerId: string, _callId: string, _callType?: 'audio' | 'video'): void {}
   cleanup(): void {}
 }
 
