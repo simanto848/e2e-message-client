@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, StatusBar, Alert, AppState } from 'react-native';
+import { StyleSheet, View, StatusBar, Alert, AppState, BackHandler, ToastAndroid, Platform } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ScreenCapture from 'expo-screen-capture';
 import * as Updates from 'expo-updates';
@@ -415,6 +415,143 @@ export default function App() {
       }
     };
     checkUpdates();
+  }, []);
+
+  // Android Hardware / Swipe Back Navigation Handler
+  const lastBackPressTimeRef = useRef<number>(0);
+
+  const backHandlerStateRef = useRef({
+    isAppLocked,
+    callActive: Boolean(callState.active || callState.isIncoming),
+    inspectingMessage,
+    safetyModalChat,
+    showUpdateModal,
+    showPermissionsModal,
+    showChangePasswordModal,
+    showEditProfileModal,
+    showDuressModal,
+    showCloudBackupModal,
+    showLinkedDevicesModal,
+    showInvitesModal,
+    showSearchModal,
+    showRequestsModal,
+    currentScreen,
+  });
+
+  backHandlerStateRef.current = {
+    isAppLocked,
+    callActive: Boolean(callState.active || callState.isIncoming),
+    inspectingMessage,
+    safetyModalChat,
+    showUpdateModal,
+    showPermissionsModal,
+    showChangePasswordModal,
+    showEditProfileModal,
+    showDuressModal,
+    showCloudBackupModal,
+    showLinkedDevicesModal,
+    showInvitesModal,
+    showSearchModal,
+    showRequestsModal,
+    currentScreen,
+  };
+
+  useEffect(() => {
+    const onHardwareBack = () => {
+      const state = backHandlerStateRef.current;
+
+      // 1. If screen is locked by Privacy Shield PIN, prevent bypassing
+      if (state.isAppLocked) {
+        return true;
+      }
+
+      // 2. If call is active or ringing, prevent accidental exit
+      if (state.callActive) {
+        return true;
+      }
+
+      // 3. Fallback close for open App-level modals
+      if (state.inspectingMessage) {
+        setInspectingMessage(null);
+        return true;
+      }
+      if (state.safetyModalChat) {
+        setSafetyModalChat(null);
+        return true;
+      }
+      if (state.showUpdateModal) {
+        setShowUpdateModal(false);
+        return true;
+      }
+      if (state.showPermissionsModal) {
+        setShowPermissionsModal(false);
+        return true;
+      }
+      if (state.showChangePasswordModal) {
+        setShowChangePasswordModal(false);
+        return true;
+      }
+      if (state.showEditProfileModal) {
+        setShowEditProfileModal(false);
+        return true;
+      }
+      if (state.showDuressModal) {
+        setShowDuressModal(false);
+        return true;
+      }
+      if (state.showCloudBackupModal) {
+        setShowCloudBackupModal(false);
+        return true;
+      }
+      if (state.showLinkedDevicesModal) {
+        setShowLinkedDevicesModal(false);
+        return true;
+      }
+      if (state.showInvitesModal) {
+        setShowInvitesModal(false);
+        return true;
+      }
+      if (state.showSearchModal) {
+        setShowSearchModal(false);
+        return true;
+      }
+      if (state.showRequestsModal) {
+        setShowRequestsModal(false);
+        return true;
+      }
+
+      // 4. Primary Screen Back Navigation
+      if (state.currentScreen === 'chat_detail') {
+        setActiveChatId(null);
+        setCurrentScreen('chat_list');
+        return true;
+      }
+
+      if (state.currentScreen === 'settings') {
+        setCurrentScreen('chat_list');
+        return true;
+      }
+
+      // 5. On root chat list: confirm double-tap before exiting to prevent accidental close
+      if (state.currentScreen === 'chat_list') {
+        const now = Date.now();
+        if (now - lastBackPressTimeRef.current < 2000) {
+          BackHandler.exitApp();
+          return true;
+        }
+        lastBackPressTimeRef.current = now;
+        if (Platform.OS === 'android') {
+          ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
+        }
+        return true;
+      }
+
+      // 6. On auth screen, allow system to exit
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    return () => sub.remove();
   }, []);
 
   // Hardware Permissions (Camera, Mic, Photos)
@@ -1459,7 +1596,10 @@ export default function App() {
                 }}
                 messages={displayedMessages}
                 isOnline={onlineUserIds.has(activeChat.participant.id)}
-                onBack={() => setCurrentScreen('chat_list')}
+                onBack={() => {
+                  setActiveChatId(null);
+                  setCurrentScreen('chat_list');
+                }}
                 onSendMessage={handleSendMessage}
                 onDeleteForEveryone={handleDeleteForEveryone}
                 onStartCall={handleStartCall}

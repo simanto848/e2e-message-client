@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Switch, Alert } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Switch, Alert, BackHandler } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { EraseDataModal } from '../components/EraseDataModal';
 import {
@@ -74,6 +74,21 @@ export function SettingsScreen({
   onBack,
 }: Props) {
   const [showEraseModal, setShowEraseModal] = useState(false);
+
+  // Handle hardware / swipe back gesture
+  useEffect(() => {
+    const onHardwareBack = () => {
+      if (showEraseModal) {
+        setShowEraseModal(false);
+        return true;
+      }
+      onBack();
+      return true;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    return () => sub.remove();
+  }, [showEraseModal, onBack]);
 
   return (
     <View style={styles.container}>

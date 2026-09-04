@@ -10,6 +10,7 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  BackHandler,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -113,6 +114,25 @@ export function ChatScreen({
   useEffect(() => {
     setResolvedImages({});
   }, [chat.id]);
+
+  // Handle hardware / swipe back gesture
+  useEffect(() => {
+    const onHardwareBack = () => {
+      if (showMenuModal) {
+        setShowMenuModal(false);
+        return true;
+      }
+      if (replyingTo) {
+        setReplyingTo(null);
+        return true;
+      }
+      onBack();
+      return true;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    return () => sub.remove();
+  }, [showMenuModal, replyingTo, onBack]);
 
   const handleSend = () => {
     if (!inputText.trim()) return;

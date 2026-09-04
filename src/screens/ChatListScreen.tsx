@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput, RefreshControl } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput, RefreshControl, BackHandler } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { Search, Pin, ShieldCheck, Flame, Plus, CheckCircle2, UserPlus, X, UserCheck, Check, CheckCheck } from '../components/Icons';
 import { ChatThread } from '../types';
@@ -43,6 +43,19 @@ export function ChatListScreen({
   onOpenSearchModal,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState('');
+
+  // If search query is active, pressing hardware back clears the search bar
+  useEffect(() => {
+    if (!searchQuery) return;
+
+    const onHardwareBack = () => {
+      setSearchQuery('');
+      return true;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    return () => sub.remove();
+  }, [searchQuery]);
 
   const filteredChats = chats.filter(c =>
     c.participant?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||

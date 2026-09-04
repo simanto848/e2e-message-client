@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, BackHandler } from 'react-native';
 import { ShieldCheck, Lock, KeyRound, Ticket, Fingerprint, ArrowRight, User } from '../components/Icons';
 import { JabyLogo } from '../components/JabyLogo';
 import { UserProfile } from '../types';
@@ -25,6 +25,19 @@ export function AuthScreen({ onAuthenticated }: Props) {
   const [pinCode, setPinCode] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // When in registration view, pressing hardware back returns to login view
+  useEffect(() => {
+    if (!isRegisterMode) return;
+
+    const onHardwareBack = () => {
+      setIsRegisterMode(false);
+      return true;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    return () => sub.remove();
+  }, [isRegisterMode]);
 
   const registerStrength = evaluatePasswordStrength(pinCode);
 
