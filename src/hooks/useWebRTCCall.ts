@@ -174,8 +174,7 @@ export function useWebRTCCall({
 
     activeCallIdRef.current = pending.callId;
 
-    callAudio.playConnected();
-    callAudio.releaseAudioSession();
+    await callAudio.stopAudio();
     setCallState(prev => ({ ...prev, status: 'connected' }));
     startCallTimer();
 
@@ -204,7 +203,6 @@ export function useWebRTCCall({
 
   const handleHangupCall = () => {
     stopCallTimer();
-    callAudio.playHangup();
 
     const pending = pendingIncomingCallRef.current;
     if (pending && callState.isIncoming && callState.status === 'ringing' && currentUser) {
@@ -212,6 +210,7 @@ export function useWebRTCCall({
     } else {
       webrtcCallEngine.endCall();
     }
+    callAudio.playHangup();
 
     setLocalStream(null);
     setRemoteStream(null);

@@ -1197,6 +1197,7 @@ export default function App() {
         msg.text = text;
 
         setMessages(prev => [...prev, msg]);
+        callAudio.playMessageSound();
 
         const isCurrentlyOpen = activeChatId === msg.senderId && currentScreen === 'chat_detail';
 
@@ -1311,17 +1312,16 @@ export default function App() {
         });
         api.ackPendingCall().catch(() => {});
       } else if (signal.signalType === 'answer') {
-        await webrtcCallEngine.handleRemoteAnswer(signal.sdp);
-        callAudio.playConnected();
-        callAudio.releaseAudioSession();
+        await callAudio.stopAudio();
+        await webrtcCallEngine.handleRemoteAnswer(signal.sdp, callStateRef.current.isSpeakerOn);
         setCallState(prev => ({ ...prev, status: 'connected' }));
         startCallTimer();
       } else if (signal.signalType === 'ice-candidate') {
         await webrtcCallEngine.handleRemoteIceCandidate(signal.candidate);
       } else if (signal.signalType === 'hangup' || signal.signalType === 'reject') {
         stopCallTimer();
-        callAudio.playHangup();
         webrtcCallEngine.cleanup();
+        callAudio.playHangup();
         setLocalStream(null);
         setRemoteStream(null);
         pendingIncomingCallRef.current = null;

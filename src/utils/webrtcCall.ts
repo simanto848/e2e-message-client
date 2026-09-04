@@ -91,7 +91,11 @@ class WebRTCCallEngine {
       );
     }
     const stream = (await mediaDevices.getUserMedia({
-      audio: true,
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
       video: video ? { facingMode: 'user' } : false,
     })) as unknown as MediaStream;
     this.localStream = stream;
@@ -146,7 +150,16 @@ class WebRTCCallEngine {
           console.warn('[WebRTC] Failed to create stream from track fallback:', err);
         }
       }
-      if (stream) handlers.onRemoteStream(stream);
+      if (stream) {
+        // Explicitly enable all remote audio/video tracks
+        if (event.track) {
+          event.track.enabled = true;
+        }
+        stream.getTracks().forEach((t: any) => {
+          t.enabled = true;
+        });
+        handlers.onRemoteStream(stream);
+      }
     });
 
     pc.addEventListener('connectionstatechange', () => {
@@ -171,7 +184,7 @@ class WebRTCCallEngine {
     isSpeakerOn = true
   ): Promise<void> {
     await this.startLocalMedia(video);
-    this.startAudioRouting(video, isSpeakerOn);
+    // Audio routing is deferred to handleRemoteAnswer so it doesn't collide with ringtone audio mode
     const pc = this.createPeerConnection(myUserId, peerId, callId, video ? 'video' : 'audio', handlers);
     const offer = await pc.createOffer({
       offerToReceiveAudio: true,
@@ -219,14 +232,26 @@ class WebRTCCallEngine {
       signalType: 'answer',
       sdp: answer,
     });
+
+    // Re-enforce speakerphone and audio route after native connection settles
+    setTimeout(() => {
+      this.setSpeakerEnabled(isSpeakerOn);
+    }, 300);
   }
 
   /** Caller side: apply the callee's SDP answer once it arrives. */
-  async handleRemoteAnswer(sdp: any): Promise<void> {
+  async handleRemoteAnswer(sdp: any, isSpeakerOn = true): Promise<void> {
     if (!this.pc) return;
+    const isVideo = Boolean(this.localStream?.getVideoTracks().length);
+    this.startAudioRouting(isVideo, isSpeakerOn);
     await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
     this.remoteDescriptionSet = true;
     await this.flushPendingIceCandidates();
+
+    // Re-enforce speakerphone and audio route after connection settles
+    setTimeout(() => {
+      this.setSpeakerEnabled(isSpeakerOn);
+    }, 300);
   }
 
   /**
@@ -269,7 +294,7 @@ class WebRTCCallEngine {
    */
   private startAudioRouting(video: boolean, isSpeakerOn = true): void {
     try {
-      InCallManager?.start({ media: video ? 'video' : 'audio', auto: false });
+      InCallManager?.start({ media: video ? 'video' : 'audio' });
       InCallManager?.setKeepScreenOn(true);
       this.setSpeakerEnabled(isSpeakerOn);
     } catch (err) {
@@ -279,12 +304,14 @@ class WebRTCCallEngine {
 
   setSpeakerEnabled(enabled: boolean): void {
     try {
+      // setSpeakerphoneOn sets android AudioManager.MODE_IN_COMMUNICATION and speakerphone
+      InCallManager?.setSpeakerphoneOn(enabled);
       InCallManager?.setForceSpeakerphoneOn(enabled);
       if (typeof InCallManager?.chooseAudioRoute === 'function') {
         InCallManager.chooseAudioRoute(enabled ? 'SPEAKER_PHONE' : 'EARPIECE');
       }
     } catch (err) {
-      console.warn('[WebRTC] InCallManager.setForceSpeakerphoneOn failed:', err);
+      console.warn('[WebRTC] InCallManager speaker toggle failed:', err);
     }
   }
 

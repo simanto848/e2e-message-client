@@ -1,29 +1,50 @@
 import { Audio } from 'expo-av';
 import { API_BASE_URL } from '../services/api';
 
+const LOCAL_SOUNDS = {
+  ringtone: require('../../assets/sounds/ringtone.wav'),
+  connect: require('../../assets/sounds/connect.wav'),
+  hangup: require('../../assets/sounds/hangup.wav'),
+  message: require('../../assets/sounds/message.wav'),
+};
+
 class CallAudioManager {
   private currentSound: Audio.Sound | null = null;
-  private isAudioModeConfigured = false;
+  private isPlaying = false;
 
-  async setupAudio(isSpeakerOn = true) {
+  async setupAudioForRingtone() {
     try {
       await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
+        allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
         staysActiveInBackground: true,
         shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: !isSpeakerOn,
+        playThroughEarpieceAndroid: false,
       });
-      this.isAudioModeConfigured = true;
     } catch (err) {
-      console.warn('[CallAudio] Audio mode setup failed:', err);
+      console.warn('[CallAudio] Ringtone audio mode setup failed:', err);
     }
   }
 
   async playRingtone() {
     try {
       await this.stopAudio();
-      await this.setupAudio(true);
+      await this.setupAudioForRingtone();
+      this.isPlaying = true;
+
+      // Try local sound asset first (instant, 0ms latency, works offline)
+      try {
+        const { sound } = await Audio.Sound.createAsync(
+          LOCAL_SOUNDS.ringtone,
+          { shouldPlay: true, isLooping: true, volume: 1.0 }
+        );
+        this.currentSound = sound;
+        return;
+      } catch (localErr) {
+        console.warn('[CallAudio] Local ringtone asset failed, falling back to network:', localErr);
+      }
+
+      // Network fallback
       const ringtoneUrl = `${API_BASE_URL}/sounds/ringtone`;
       const { sound } = await Audio.Sound.createAsync(
         { uri: ringtoneUrl },
@@ -31,28 +52,30 @@ class CallAudioManager {
       );
       this.currentSound = sound;
     } catch (err) {
-      console.warn('[CallAudio] Ringtone error:', err);
+      console.warn('[CallAudio] Ringtone playback error:', err);
     }
   }
 
   async playConnected() {
     try {
       await this.stopAudio();
-      const connectUrl = `${API_BASE_URL}/sounds/connect`;
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: connectUrl },
-        { shouldPlay: true, isLooping: false, volume: 0.8 }
-      );
-      this.currentSound = sound;
-      setTimeout(async () => {
-        try {
-          await sound.stopAsync();
-          await sound.unloadAsync();
-          if (this.currentSound === sound) {
-            this.currentSound = null;
+      try {
+        const { sound } = await Audio.Sound.createAsync(
+          LOCAL_SOUNDS.connect,
+          { shouldPlay: true, isLooping: false, volume: 0.85 }
+        );
+        this.currentSound = sound;
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            sound.unloadAsync().catch(() => {});
+            if (this.currentSound === sound) {
+              this.currentSound = null;
+            }
           }
-        } catch {}
-      }, 700);
+        });
+      } catch {
+        // Soft fallback
+      }
     } catch (err) {
       console.warn('[CallAudio] Connect tone error:', err);
     }
@@ -61,41 +84,71 @@ class CallAudioManager {
   async playHangup() {
     try {
       await this.stopAudio();
-      await this.setupAudio(true);
-      const hangupUrl = `${API_BASE_URL}/sounds/hangup`;
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: hangupUrl },
-        { shouldPlay: true, isLooping: false, volume: 1.0 }
-      );
-      this.currentSound = sound;
-      setTimeout(() => {
-        sound.unloadAsync().catch(() => {});
-      }, 1200);
+      await this.setupAudioForRingtone();
+
+      try {
+        const { sound } = await Audio.Sound.createAsync(
+          LOCAL_SOUNDS.hangup,
+          { shouldPlay: true, isLooping: false, volume: 0.9 }
+        );
+        this.currentSound = sound;
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            sound.unloadAsync().catch(() => {});
+            if (this.currentSound === sound) {
+              this.currentSound = null;
+            }
+          }
+        });
+      } catch (localErr) {
+        // Fallback to network
+        const hangupUrl = `${API_BASE_URL}/sounds/hangup`;
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: hangupUrl },
+          { shouldPlay: true, isLooping: false, volume: 0.9 }
+        );
+        this.currentSound = sound;
+      }
     } catch (err) {
       console.warn('[CallAudio] Hangup tone error:', err);
     }
   }
 
+  async playMessageSound() {
+    try {
+      // Short subtle notification chime, do not interrupt active calls
+      if (this.isPlaying) return;
+      const { sound } = await Audio.Sound.createAsync(
+        LOCAL_SOUNDS.message,
+        { shouldPlay: true, isLooping: false, volume: 0.75 }
+      );
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          sound.unloadAsync().catch(() => {});
+        }
+      });
+    } catch (err) {
+      // Quiet fail for message sound
+    }
+  }
+
+  /**
+   * Release expo-av audio session completely before WebRTC & InCallManager take over.
+   * We do NOT touch Audio.setAudioModeAsync during active call to avoid stomping
+   * Android's MODE_IN_COMMUNICATION.
+   */
   async releaseAudioSession() {
     await this.stopAudio();
-    try {
-      // Turn off ducking so WebRTC AudioDeviceModule / InCallManager has full audio pipeline control
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
-      });
-    } catch {}
   }
 
   async stopAudio() {
+    this.isPlaying = false;
     try {
       if (this.currentSound) {
-        await this.currentSound.stopAsync();
-        await this.currentSound.unloadAsync();
+        const sound = this.currentSound;
         this.currentSound = null;
+        await sound.stopAsync().catch(() => {});
+        await sound.unloadAsync().catch(() => {});
       }
     } catch {
       this.currentSound = null;
@@ -104,3 +157,4 @@ class CallAudioManager {
 }
 
 export const callAudio = new CallAudioManager();
+
