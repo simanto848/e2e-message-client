@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Switch, Alert } from 'react-native';
 import { Avatar } from '../components/Avatar';
+import { EraseDataModal } from '../components/EraseDataModal';
 import {
   ArrowLeft,
   ShieldCheck,
@@ -72,6 +73,8 @@ export function SettingsScreen({
   onSignOut,
   onBack,
 }: Props) {
+  const [showEraseModal, setShowEraseModal] = useState(false);
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -187,16 +190,7 @@ export function SettingsScreen({
           {onEmergencyWipe && (
             <TouchableOpacity
               style={[styles.menuItem, styles.borderTop]}
-              onPress={() => {
-                Alert.alert(
-                  'Erase All App Data',
-                  'This will permanently delete all messages, encryption keys, and log you out of this device. Are you sure you want to proceed?',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Erase All Data', style: 'destructive', onPress: onEmergencyWipe },
-                  ]
-                );
-              }}
+              onPress={() => setShowEraseModal(true)}
             >
               <View style={styles.rowAlign}>
                 <Trash2 size={18} color={colors.danger} />
@@ -353,6 +347,15 @@ export function SettingsScreen({
           <Text style={styles.footerSpecs}>End-to-End Encrypted</Text>
         </View>
       </ScrollView>
+
+      {/* Erase All App Data Confirmation Modal */}
+      {onEmergencyWipe && (
+        <EraseDataModal
+          visible={showEraseModal}
+          onClose={() => setShowEraseModal(false)}
+          onConfirm={onEmergencyWipe}
+        />
+      )}
     </View>
   );
 }

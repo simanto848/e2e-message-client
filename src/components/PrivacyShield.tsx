@@ -14,6 +14,7 @@ import {
 import * as LocalAuthentication from 'expo-local-authentication';
 import { ShieldAlert, Fingerprint, Trash2, KeyRound, Lock, ArrowLeft } from './Icons';
 import { colors, shadows } from '../theme';
+import { EraseDataModal } from './EraseDataModal';
 import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
 import { getDuressPin, getDuressAction } from '../utils/duressConfig';
 import { getPrimaryPin } from '../utils/keyStore';
@@ -30,6 +31,7 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
   const [showPinEntry, setShowPinEntry] = useState(false);
   const [enteredPin, setEnteredPin] = useState('');
   const [pinError, setPinError] = useState('');
+  const [showEraseModal, setShowEraseModal] = useState(false);
 
   if (!isLocked) return null;
 
@@ -210,20 +212,7 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
             {onEmergencyWipe && (
               <TouchableOpacity
                 style={styles.emergencyWipeBtn}
-                onPress={() => {
-                  Alert.alert(
-                    'Erase All App Data',
-                    'This will immediately delete all chats, encryption keys, and log you out of this device. Are you sure?',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      {
-                        text: 'Erase All Data',
-                        style: 'destructive',
-                        onPress: onEmergencyWipe,
-                      },
-                    ]
-                  );
-                }}
+                onPress={() => setShowEraseModal(true)}
               >
                 <Trash2 size={14} color={colors.danger} />
                 <Text style={styles.emergencyWipeText}>Erase All App Data</Text>
@@ -232,6 +221,15 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
           </View>
         </KeyboardAvoidingView>
       </TouchableWithoutFeedback>
+
+      {/* Erase All App Data Confirmation Modal */}
+      {onEmergencyWipe && (
+        <EraseDataModal
+          visible={showEraseModal}
+          onClose={() => setShowEraseModal(false)}
+          onConfirm={onEmergencyWipe}
+        />
+      )}
     </View>
   );
 }
