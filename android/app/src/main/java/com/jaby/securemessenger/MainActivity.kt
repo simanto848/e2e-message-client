@@ -17,11 +17,21 @@ class MainActivity : ReactActivity() {
     // This is required for expo-splash-screen.
     setTheme(R.style.AppTheme);
     super.onCreate(null)
+    handleIntent(intent)
   }
 
   override fun onNewIntent(intent: android.content.Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
+    handleIntent(intent)
+  }
+
+  private fun handleIntent(intent: android.content.Intent?) {
+    val chatId = intent?.getStringExtra("chatId")
+    if (!chatId.isNullOrEmpty()) {
+      ChatHeadModule.pendingChatId = chatId
+      ChatHeadModule.pendingContactName = intent.getStringExtra("contactName")
+    }
   }
 
   /**

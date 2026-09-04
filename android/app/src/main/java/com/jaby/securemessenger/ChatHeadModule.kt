@@ -99,20 +99,14 @@ class ChatHeadModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun getPendingChatIntent(promise: Promise) {
         try {
-            val activity = currentActivity
-            val intent = activity?.intent
-            val chatId = intent?.getStringExtra("chatId")
-            val contactName = intent?.getStringExtra("contactName")
-            val fromChatHead = intent?.getBooleanExtra("fromChatHead", false) ?: false
-
-            if (!chatId.isNullOrEmpty() && fromChatHead) {
+            val id = pendingChatId
+            if (!id.isNullOrEmpty()) {
                 val map = Arguments.createMap().apply {
-                    putString("chatId", chatId)
-                    putString("contactName", contactName ?: "")
+                    putString("chatId", id)
+                    putString("contactName", pendingContactName ?: "")
                 }
-                // Clear extra so it doesn't fire again on subsequent renders
-                intent.removeExtra("chatId")
-                intent.removeExtra("fromChatHead")
+                pendingChatId = null
+                pendingContactName = null
                 promise.resolve(map)
             } else {
                 promise.resolve(null)
@@ -120,5 +114,10 @@ class ChatHeadModule(private val reactContext: ReactApplicationContext) :
         } catch (e: Exception) {
             promise.reject("ERR_PENDING_INTENT", e.message)
         }
+    }
+
+    companion object {
+        var pendingChatId: String? = null
+        var pendingContactName: String? = null
     }
 }
