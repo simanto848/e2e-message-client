@@ -84,7 +84,7 @@ export function ChatListScreen({
       {/* Ribbon */}
       <View style={styles.ribbon}>
         <ShieldCheck size={12} color={colors.primaryDark} />
-        <Text style={styles.ribbonText}>ZERO-KNOWLEDGE ENCLAVE ACTIVE</Text>
+        <Text style={styles.ribbonText}>END-TO-END ENCRYPTED & SECURE</Text>
       </View>
 
       {/* Chat List */}

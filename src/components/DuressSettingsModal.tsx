@@ -92,118 +92,132 @@ export function DuressSettingsModal({ visible, onClose }: Props) {
 
   return (
     <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <View style={styles.backdrop}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={styles.keyboardAvoid}
-          >
-            <View style={styles.sheetContainer}>
-              {/* Header */}
-              <View style={styles.header}>
-                <View style={styles.headerLeft}>
-                  <View style={styles.iconCircle}>
-                    <ShieldAlert size={20} color={colors.danger} />
-                  </View>
-                  <View>
-                    <Text style={styles.title}>Emergency Decoy PIN</Text>
-                    <Text style={styles.subtitle}>Protection when forced to unlock</Text>
-                  </View>
+      <View style={styles.backdrop}>
+        {/* Dismiss on backdrop tap */}
+        <TouchableWithoutFeedback onPress={() => { Keyboard.dismiss(); onClose(); }}>
+          <View style={StyleSheet.absoluteFillObject} />
+        </TouchableWithoutFeedback>
+
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.keyboardAvoid}
+        >
+          <View style={styles.sheetContainer}>
+            {/* Header */}
+            <View style={styles.header}>
+              <View style={styles.headerLeft}>
+                <View style={styles.iconCircle}>
+                  <ShieldAlert size={20} color={colors.danger} />
                 </View>
-                <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
-                  <X size={20} color={colors.textSecondary} />
+                <View>
+                  <Text style={styles.title}>Emergency Decoy PIN</Text>
+                  <Text style={styles.subtitle}>Protection when forced to unlock</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={styles.closeBtn}
+                onPress={onClose}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <X size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={styles.body}
+              contentContainerStyle={styles.bodyContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.infoCard}>
+                <Text style={styles.infoText}>
+                  If you are ever forced to unlock JABY against your will, entering this emergency PIN
+                  instead of your normal PIN safely protects your real data without alerting anyone.
+                </Text>
+              </View>
+
+              {/* Duress PIN Input */}
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>EMERGENCY PIN</Text>
+                <View style={styles.inputBox}>
+                  <KeyRound size={18} color={colors.textSecondary} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Enter 4-6 digit emergency PIN"
+                    placeholderTextColor={colors.textMuted}
+                    secureTextEntry={!showPin}
+                    keyboardType="numeric"
+                    value={pin}
+                    onChangeText={setPin}
+                  />
+                  <TouchableOpacity
+                    onPress={() => setShowPin(!showPin)}
+                    style={styles.visibilityBtn}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    {showPin ? (
+                      <EyeOff size={18} color={colors.textSecondary} />
+                    ) : (
+                      <Eye size={18} color={colors.textSecondary} />
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Trigger Action Selector */}
+              <Text style={styles.label}>EMERGENCY ACTION</Text>
+              <View style={styles.actionsContainer}>
+                <TouchableOpacity
+                  style={[styles.actionOption, action === 'decoy' && styles.actionOptionActive]}
+                  onPress={() => setAction('decoy')}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.optionHeader}>
+                    <Text style={[styles.optionTitle, action === 'decoy' && styles.optionTitleActive]}>
+                      Open Decoy Vault
+                    </Text>
+                    {action === 'decoy' && <Check size={16} color={colors.primary} />}
+                  </View>
+                  <Text style={styles.optionDesc}>
+                    Unlocks a clean, empty messenger with no sensitive contacts or real message history.
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.actionOption, action === 'wipe' && styles.actionOptionActive]}
+                  onPress={() => setAction('wipe')}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.optionHeader}>
+                    <Text style={[styles.optionTitle, action === 'wipe' && styles.optionTitleActive]}>
+                      Erase All Data
+                    </Text>
+                    {action === 'wipe' && <Check size={16} color={colors.primary} />}
+                  </View>
+                  <Text style={styles.optionDesc}>
+                    Instantly deletes all chats, private keys, and resets the app immediately.
+                  </Text>
                 </TouchableOpacity>
               </View>
 
-              <ScrollView style={styles.body} showsVerticalScrollIndicator={false}>
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoText}>
-                    If you are ever forced to unlock JABY against your will, entering this emergency PIN
-                    instead of your normal PIN safely protects your real data without alerting anyone.
-                  </Text>
-                </View>
+              {/* Save Button */}
+              <TouchableOpacity style={styles.saveBtn} onPress={handleSave} activeOpacity={0.8}>
+                <Text style={styles.saveBtnText}>
+                  {hasExisting ? 'Update Emergency PIN' : 'Activate Emergency PIN'}
+                </Text>
+              </TouchableOpacity>
 
-                {/* Duress PIN Input */}
-                <View style={styles.inputGroup}>
-                  <Text style={styles.label}>EMERGENCY PIN</Text>
-                  <View style={styles.inputBox}>
-                    <KeyRound size={18} color={colors.textSecondary} />
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Enter 4-6 digit emergency PIN"
-                      placeholderTextColor={colors.textMuted}
-                      secureTextEntry={!showPin}
-                      keyboardType="numeric"
-                      value={pin}
-                      onChangeText={setPin}
-                    />
-                    <TouchableOpacity
-                      onPress={() => setShowPin(!showPin)}
-                      style={styles.visibilityBtn}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    >
-                      {showPin ? (
-                        <EyeOff size={18} color={colors.textSecondary} />
-                      ) : (
-                        <Eye size={18} color={colors.textSecondary} />
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* Trigger Action Selector */}
-                <Text style={styles.label}>EMERGENCY ACTION</Text>
-                <View style={styles.actionsContainer}>
-                  <TouchableOpacity
-                    style={[styles.actionOption, action === 'decoy' && styles.actionOptionActive]}
-                    onPress={() => setAction('decoy')}
-                  >
-                    <View style={styles.optionHeader}>
-                      <Text style={[styles.optionTitle, action === 'decoy' && styles.optionTitleActive]}>
-                        Open Decoy Vault
-                      </Text>
-                      {action === 'decoy' && <Check size={16} color={colors.primary} />}
-                    </View>
-                    <Text style={styles.optionDesc}>
-                      Unlocks a clean, empty messenger with no sensitive contacts or real message history.
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.actionOption, action === 'wipe' && styles.actionOptionActive]}
-                    onPress={() => setAction('wipe')}
-                  >
-                    <View style={styles.optionHeader}>
-                      <Text style={[styles.optionTitle, action === 'wipe' && styles.optionTitleActive]}>
-                        Erase All Data
-                      </Text>
-                      {action === 'wipe' && <Check size={16} color={colors.primary} />}
-                    </View>
-                    <Text style={styles.optionDesc}>
-                      Instantly deletes all chats, private keys, and resets the app immediately.
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Save Button */}
-                <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-                  <Text style={styles.saveBtnText}>
-                    {hasExisting ? 'Update Emergency PIN' : 'Activate Emergency PIN'}
-                  </Text>
+              {/* Disable Button */}
+              {hasExisting && (
+                <TouchableOpacity style={styles.disableBtn} onPress={handleDisable} activeOpacity={0.7}>
+                  <Trash2 size={16} color={colors.danger} />
+                  <Text style={styles.disableBtnText}>Turn Off Emergency PIN</Text>
                 </TouchableOpacity>
-
-                {/* Disable Button */}
-                {hasExisting && (
-                  <TouchableOpacity style={styles.disableBtn} onPress={handleDisable}>
-                    <Trash2 size={16} color={colors.danger} />
-                    <Text style={styles.disableBtnText}>Turn Off Emergency PIN</Text>
-                  </TouchableOpacity>
-                )}
-              </ScrollView>
-            </View>
-          </KeyboardAvoidingView>
-        </View>
-      </TouchableWithoutFeedback>
+              )}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
@@ -216,12 +230,15 @@ const styles = StyleSheet.create({
   },
   keyboardAvoid: {
     width: '100%',
+    justifyContent: 'flex-end',
   },
   sheetContainer: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: '90%',
+    maxHeight: '88%',
+    width: '100%',
+    paddingBottom: Platform.OS === 'ios' ? 34 : 24,
     ...shadows.lg,
   },
   header: {
@@ -248,7 +265,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   title: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
     color: colors.textPrimary,
   },
@@ -264,7 +281,10 @@ const styles = StyleSheet.create({
   },
   body: {
     paddingHorizontal: 20,
-    paddingVertical: 16,
+  },
+  bodyContent: {
+    paddingTop: 16,
+    paddingBottom: 28,
   },
   infoCard: {
     backgroundColor: colors.surfaceElevated,
@@ -347,6 +367,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 14,
     alignItems: 'center',
+    marginTop: 4,
     marginBottom: 12,
     ...shadows.sm,
   },
@@ -361,7 +382,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     paddingVertical: 12,
-    marginBottom: 30,
+    marginBottom: 12,
   },
   disableBtnText: {
     color: colors.danger,

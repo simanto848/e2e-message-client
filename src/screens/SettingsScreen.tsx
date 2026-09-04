@@ -89,7 +89,11 @@ export function SettingsScreen({
           <View style={styles.profileInfo}>
             <Text style={styles.profileName}>{currentUser.name}</Text>
             <Text style={styles.profileHandle}>{currentUser.handle}</Text>
-            <Text style={styles.profileStatus}>{currentUser.statusMessage}</Text>
+            <Text style={styles.profileStatus}>
+              {currentUser.statusMessage === 'Zero-Knowledge · Encrypted Enclave Active'
+                ? 'Zero-Knowledge · End-to-End Encrypted'
+                : currentUser.statusMessage}
+            </Text>
           </View>
           <ChevronRight size={18} color={colors.textSecondary} />
         </TouchableOpacity>
