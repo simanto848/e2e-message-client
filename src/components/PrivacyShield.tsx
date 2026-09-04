@@ -212,12 +212,12 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
                 style={styles.emergencyWipeBtn}
                 onPress={() => {
                   Alert.alert(
-                    'Emergency Enclave Wipe',
-                    'This will immediately purge all cryptographic keys, session tokens, and cached credentials from this device. Are you sure?',
+                    'Erase All App Data',
+                    'This will immediately delete all chats, encryption keys, and log you out of this device. Are you sure?',
                     [
                       { text: 'Cancel', style: 'cancel' },
                       {
-                        text: 'Wipe Enclave',
+                        text: 'Erase All Data',
                         style: 'destructive',
                         onPress: onEmergencyWipe,
                       },
@@ -226,7 +226,7 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
                 }}
               >
                 <Trash2 size={14} color={colors.danger} />
-                <Text style={styles.emergencyWipeText}>Emergency Enclave Wipe</Text>
+                <Text style={styles.emergencyWipeText}>Erase All App Data</Text>
               </TouchableOpacity>
             )}
           </View>

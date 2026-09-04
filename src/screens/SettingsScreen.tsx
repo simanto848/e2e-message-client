@@ -141,7 +141,7 @@ export function SettingsScreen({
                 <Text style={styles.toggleTitle}>Auto-Lock Delay</Text>
               </View>
               <Text style={styles.toggleDesc}>
-                Locks the enclave after being in the background for this duration.
+                Locks the app after being in the background for this duration.
               </Text>
             </View>
             <View style={styles.chipsContainer}>
@@ -168,35 +168,35 @@ export function SettingsScreen({
             </View>
           </View>
 
-          {/* Duress Protocol & Decoy Vault */}
+          {/* Emergency Decoy PIN */}
           {onOpenDuressSettings && (
             <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onOpenDuressSettings}>
               <View style={styles.rowAlign}>
                 <ShieldAlert size={18} color={colors.warning} />
-                <Text style={styles.menuItemText}>Duress Protocol & Decoy</Text>
+                <Text style={styles.menuItemText}>Emergency Decoy PIN</Text>
               </View>
               <ChevronRight size={18} color={colors.textSecondary} />
             </TouchableOpacity>
           )}
 
-          {/* Emergency Panic Wipe */}
+          {/* Erase All App Data */}
           {onEmergencyWipe && (
             <TouchableOpacity
               style={[styles.menuItem, styles.borderTop]}
               onPress={() => {
                 Alert.alert(
-                  'Emergency Enclave Wipe',
-                  'This will permanently erase all encryption keys, session tokens, and cached messages from this device. Are you sure you want to proceed?',
+                  'Erase All App Data',
+                  'This will permanently delete all messages, encryption keys, and log you out of this device. Are you sure you want to proceed?',
                   [
                     { text: 'Cancel', style: 'cancel' },
-                    { text: 'Erase Enclave', style: 'destructive', onPress: onEmergencyWipe },
+                    { text: 'Erase All Data', style: 'destructive', onPress: onEmergencyWipe },
                   ]
                 );
               }}
             >
               <View style={styles.rowAlign}>
                 <Trash2 size={18} color={colors.danger} />
-                <Text style={[styles.menuItemText, { color: colors.danger }]}>Emergency Enclave Wipe</Text>
+                <Text style={[styles.menuItemText, { color: colors.danger }]}>Erase All App Data</Text>
               </View>
               <ChevronRight size={18} color={colors.textSecondary} />
             </TouchableOpacity>

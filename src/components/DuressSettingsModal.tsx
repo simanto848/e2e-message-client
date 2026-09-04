@@ -55,25 +55,25 @@ export function DuressSettingsModal({ visible, onClose }: Props) {
     Keyboard.dismiss();
     const trimmed = pin.trim();
     if (!trimmed) {
-      Alert.alert('PIN Required', 'Please enter a duress PIN of at least 4 digits.');
+      Alert.alert('PIN Required', 'Please enter an emergency PIN of at least 4 digits.');
       return;
     }
     if (trimmed.length < 4) {
-      Alert.alert('Too Short', 'Duress PIN must be at least 4 digits long.');
+      Alert.alert('Too Short', 'Emergency PIN must be at least 4 digits long.');
       return;
     }
 
     await setDuressPin(trimmed);
     await setDuressAction(action);
-    Alert.alert('Duress PIN Activated', 'Your emergency duress protocol has been configured securely.', [
+    Alert.alert('Emergency PIN Activated', 'Your emergency decoy PIN has been configured successfully.', [
       { text: 'OK', onPress: onClose },
     ]);
   };
 
   const handleDisable = async () => {
     Alert.alert(
-      'Disable Duress Protocol',
-      'Are you sure you want to deactivate the duress PIN and emergency decoy mode?',
+      'Turn Off Emergency PIN',
+      'Are you sure you want to deactivate your emergency decoy PIN?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -106,8 +106,8 @@ export function DuressSettingsModal({ visible, onClose }: Props) {
                     <ShieldAlert size={20} color={colors.danger} />
                   </View>
                   <View>
-                    <Text style={styles.title}>Duress Protocol</Text>
-                    <Text style={styles.subtitle}>Emergency Coercion Defense</Text>
+                    <Text style={styles.title}>Emergency Decoy PIN</Text>
+                    <Text style={styles.subtitle}>Protection when forced to unlock</Text>
                   </View>
                 </View>
                 <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
@@ -118,14 +118,14 @@ export function DuressSettingsModal({ visible, onClose }: Props) {
               <ScrollView style={styles.body} showsVerticalScrollIndicator={false}>
                 <View style={styles.infoCard}>
                   <Text style={styles.infoText}>
-                    If forced to unlock JABY under coercion or duress, entering your Duress PIN instead of
-                    your real PIN triggers an emergency defense without tipping off the coercer.
+                    If you are ever forced to unlock JABY against your will, entering this emergency PIN
+                    instead of your normal PIN safely protects your real data without alerting anyone.
                   </Text>
                 </View>
 
                 {/* Duress PIN Input */}
                 <View style={styles.inputGroup}>
-                  <Text style={styles.label}>EMERGENCY DURESS PIN</Text>
+                  <Text style={styles.label}>EMERGENCY PIN</Text>
                   <View style={styles.inputBox}>
                     <KeyRound size={18} color={colors.textSecondary} />
                     <TextInput
@@ -160,12 +160,12 @@ export function DuressSettingsModal({ visible, onClose }: Props) {
                   >
                     <View style={styles.optionHeader}>
                       <Text style={[styles.optionTitle, action === 'decoy' && styles.optionTitleActive]}>
-                        Decoy Enclave
+                        Open Decoy Vault
                       </Text>
                       {action === 'decoy' && <Check size={16} color={colors.primary} />}
                     </View>
                     <Text style={styles.optionDesc}>
-                      Unlocks a realistic, clean decoy vault with zero sensitive contacts or message history.
+                      Unlocks a clean, empty messenger with no sensitive contacts or real message history.
                     </Text>
                   </TouchableOpacity>
 
@@ -175,12 +175,12 @@ export function DuressSettingsModal({ visible, onClose }: Props) {
                   >
                     <View style={styles.optionHeader}>
                       <Text style={[styles.optionTitle, action === 'wipe' && styles.optionTitleActive]}>
-                        Silent Enclave Wipe
+                        Erase All Data
                       </Text>
                       {action === 'wipe' && <Check size={16} color={colors.primary} />}
                     </View>
                     <Text style={styles.optionDesc}>
-                      Silently purges all real private cryptographic keys in the background and resets the app.
+                      Instantly deletes all chats, private keys, and resets the app immediately.
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -188,7 +188,7 @@ export function DuressSettingsModal({ visible, onClose }: Props) {
                 {/* Save Button */}
                 <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
                   <Text style={styles.saveBtnText}>
-                    {hasExisting ? 'Update Duress Protocol' : 'Activate Duress Protocol'}
+                    {hasExisting ? 'Update Emergency PIN' : 'Activate Emergency PIN'}
                   </Text>
                 </TouchableOpacity>
 
@@ -196,7 +196,7 @@ export function DuressSettingsModal({ visible, onClose }: Props) {
                 {hasExisting && (
                   <TouchableOpacity style={styles.disableBtn} onPress={handleDisable}>
                     <Trash2 size={16} color={colors.danger} />
-                    <Text style={styles.disableBtnText}>Deactivate Duress Protocol</Text>
+                    <Text style={styles.disableBtnText}>Turn Off Emergency PIN</Text>
                   </TouchableOpacity>
                 )}
               </ScrollView>
