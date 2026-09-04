@@ -83,6 +83,7 @@ import { colors } from './src/theme';
 import { useAppSecurity } from './src/hooks/useAppSecurity';
 import { useWebRTCCall } from './src/hooks/useWebRTCCall';
 import { ChatHeadOverlay } from './src/components/ChatHeadOverlay';
+import { RestoreSessionModal } from './src/components/RestoreSessionModal';
 import {
   startBackgroundSync,
   stopBackgroundSync,
@@ -286,6 +287,10 @@ export default function App() {
   const historicalKeysRef = useRef<IdentityKeyPair[]>([]);
   historicalKeysRef.current = historicalKeys;
   const [cloudBackupInitialMode, setCloudBackupInitialMode] = useState<'backup' | 'restore'>('backup');
+  const [restoreSessionPrompt, setRestoreSessionPrompt] = useState<{
+    visible: boolean;
+    resolve: (restore: boolean) => void;
+  } | null>(null);
 
   const logCallToChat = (finalState: CallState, endReason: 'completed' | 'declined' | 'missed') => {
     if (!currentUser || !mySecretKey || !finalState.remoteUser) return;
@@ -898,24 +903,15 @@ export default function App() {
           );
 
           if (restoredPayload?.identityKeyPair) {
-            // Prompt the user if they want to restore or keep as is
+            // Prompt the user with custom modern dialog modal
             const shouldRestore = await new Promise<boolean>(resolve => {
-              Alert.alert(
-                'Restore Previous Session?',
-                'Encrypted message history from your previous session was found. Would you like to restore your encryption keys to read your past messages, or start fresh?',
-                [
-                  {
-                    text: 'Keep As Is (Fresh)',
-                    style: 'cancel',
-                    onPress: () => resolve(false),
-                  },
-                  {
-                    text: 'Restore Messages',
-                    onPress: () => resolve(true),
-                  },
-                ],
-                { cancelable: false }
-              );
+              setRestoreSessionPrompt({
+                visible: true,
+                resolve: (restore: boolean) => {
+                  setRestoreSessionPrompt(null);
+                  resolve(restore);
+                },
+              });
             });
 
             if (shouldRestore) {
@@ -2065,6 +2061,19 @@ export default function App() {
           visible={showUpdateModal}
           release={availableRelease}
           onDismiss={() => setShowUpdateModal(false)}
+        />
+
+        {/* Restore Previous Session Custom Confirmation Modal */}
+        <RestoreSessionModal
+          visible={Boolean(restoreSessionPrompt?.visible)}
+          onRestore={() => {
+            restoreSessionPrompt?.resolve(true);
+            setRestoreSessionPrompt(null);
+          }}
+          onStartFresh={() => {
+            restoreSessionPrompt?.resolve(false);
+            setRestoreSessionPrompt(null);
+          }}
         />
 
         {/* Messenger Chat Head (activates natively outside the app over Android OS; in-app overlay only as fallback on platforms without native overlay support) */}
