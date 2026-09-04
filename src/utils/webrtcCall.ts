@@ -332,6 +332,17 @@ class WebRTCCallEngine {
     });
   }
 
+  switchCamera(): void {
+    const videoTrack = this.localStream?.getVideoTracks()[0] as any;
+    if (videoTrack && typeof videoTrack._switchCamera === 'function') {
+      try {
+        videoTrack._switchCamera();
+      } catch (err) {
+        console.warn('[WebRTC] switchCamera failed:', err);
+      }
+    }
+  }
+
   getLocalStream(): MediaStream | null {
     return this.localStream;
   }

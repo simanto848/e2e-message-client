@@ -335,6 +335,13 @@ export function ChatScreen({
         encoding: FileSystem.EncodingType.Base64,
       });
 
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      }).catch(() => {});
+
       const { sound } = await Audio.Sound.createAsync(
         { uri: tempFileUri },
         { shouldPlay: true, rate: playbackSpeed, shouldCorrectPitch: true },

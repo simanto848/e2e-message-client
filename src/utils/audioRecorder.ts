@@ -52,13 +52,28 @@ export async function startVoiceRecording(): Promise<Audio.Recording> {
 /** Stops the recording and returns the local file URI (or null if it never produced one). */
 export async function stopVoiceRecording(recording: Audio.Recording): Promise<string | null> {
   await recording.stopAndUnloadAsync();
-  return recording.getURI();
+  const uri = recording.getURI();
+  try {
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    });
+  } catch {}
+  return uri;
 }
 
 /** Stops and discards a recording without returning its file — used on cancel. */
 export async function discardVoiceRecording(recording: Audio.Recording): Promise<void> {
   try {
     await recording.stopAndUnloadAsync();
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    });
   } catch {
     // already stopped/unloaded — nothing to do
   }

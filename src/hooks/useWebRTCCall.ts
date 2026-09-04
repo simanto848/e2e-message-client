@@ -245,6 +245,7 @@ export function useWebRTCCall({
   };
 
   const handleFlipCamera = () => {
+    webrtcCallEngine.switchCamera();
     setCallState(prev => ({ ...prev, isFrontCamera: !prev.isFrontCamera }));
   };
 
