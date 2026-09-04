@@ -7,7 +7,6 @@ import {
   Lock,
   Laptop,
   Cloud,
-  Key,
   KeyRound,
   Ticket,
   EyeOff,
@@ -94,28 +93,6 @@ export function SettingsScreen({
           </View>
           <ChevronRight size={18} color={colors.textSecondary} />
         </TouchableOpacity>
-
-        {/* Cryptographic Identity Section */}
-        <Text style={styles.sectionHeader}>SECURITY KEY</Text>
-        <View style={styles.settingCard}>
-          <View style={styles.infoRow}>
-            <Key size={18} color={colors.primary} />
-            <View style={styles.infoCol}>
-              <Text style={styles.infoTitle}>Safety Fingerprint</Text>
-              <Text style={styles.infoValue}>{currentUser.fingerprintHash}</Text>
-            </View>
-          </View>
-
-          <View style={[styles.infoRow, styles.borderTop]}>
-            <ShieldCheck size={18} color={colors.accentBlue} />
-            <View style={styles.infoCol}>
-              <Text style={styles.infoTitle}>Public Key</Text>
-              <Text style={styles.infoValue} numberOfLines={1}>
-                {currentUser.publicKey}
-              </Text>
-            </View>
-          </View>
-        </View>
 
         {/* Privacy */}
         <Text style={styles.sectionHeader}>PRIVACY</Text>
