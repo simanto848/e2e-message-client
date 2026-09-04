@@ -362,6 +362,7 @@ export default function App() {
     setAntiScreenshotEnabled,
     callVerificationEnabled,
     setCallVerificationEnabled,
+    applyPrivacySettings,
     isDecoyMode,
     setIsDecoyMode,
     handleUnlockDecoy,
@@ -369,6 +370,24 @@ export default function App() {
     isAuthenticated: Boolean(currentUser),
     isCallActive: Boolean(callStateRef.current?.active),
   });
+
+  const handleToggleAntiScreenshot = async (val: boolean) => {
+    setAntiScreenshotEnabled(val);
+    setCurrentUser(prev => prev ? { ...prev, blockScreenshots: val } : null);
+    api.updatePrivacySettings({ blockScreenshots: val }).catch(() => {});
+  };
+
+  const handleToggleCallVerification = async (val: boolean) => {
+    setCallVerificationEnabled(val);
+    setCurrentUser(prev => prev ? { ...prev, callVerification: val } : null);
+    api.updatePrivacySettings({ callVerification: val }).catch(() => {});
+  };
+
+  const handleChangeAutoLockDelay = async (val: number) => {
+    handleUpdateAutoLockDelay(val);
+    setCurrentUser(prev => prev ? { ...prev, autoLockDelay: val } : null);
+    api.updatePrivacySettings({ autoLockDelay: val }).catch(() => {});
+  };
 
   // Modals
   const [showInvitesModal, setShowInvitesModal] = useState(false);
@@ -406,32 +425,6 @@ export default function App() {
     allGranted: false,
   });
 
-  // Screenshot / screen-recording prevention. This was previously UI-only
-  // (the PrivacyShield overlay didn't actually block capture) — this sets
-  // the real OS-level flag (FLAG_SECURE on Android; supported iOS equivalent).
-  useEffect(() => {
-    if (antiScreenshotEnabled) {
-      ScreenCapture.preventScreenCaptureAsync().catch(() => {});
-    } else {
-      ScreenCapture.allowScreenCaptureAsync().catch(() => {});
-    }
-  }, [antiScreenshotEnabled]);
-
-  // Re-lock the enclave whenever the app leaves the foreground, so the
-  // "biometric unlock" screen actually gates re-entry rather than only
-  // appearing when manually triggered.
-  //
-  // Only 'background' means the app is truly backgrounded (home button,
-  // app switcher, screen off). 'inactive' is a transient state that also
-  // fires for in-app UI like Alert dialogs, permission prompts, the image
-  // picker sheet, and keyboard focus transitions — treating it as "locked"
-  // caused the lock screen to pop up just from opening a chat (which
-  // auto-focuses the message input) or navigating around the app.
-  //
-  // Launching a real external Activity (image picker, camera, the media
-  // permission dialog) *also* fires a genuine 'background' event on Android
-  // — not 'inactive' — since it pauses our host Activity same as switching
-  // Load saved auto-lock delay preference
   const handleEmergencyWipe = async () => {
     try {
       if (callStateRef.current.active) {
@@ -518,7 +511,18 @@ export default function App() {
           return;
         }
 
-        const savedFreq = await getBackupFrequency();
+        // Synchronize privacy preferences from database
+        applyPrivacySettings({
+          blockScreenshots: data.user.blockScreenshots,
+          callVerification: data.user.callVerification,
+          autoLockDelay: data.user.autoLockDelay,
+        });
+
+        const userFreq = data.user.backupFrequency as BackupFrequency | undefined;
+        const savedFreq = userFreq || (await getBackupFrequency());
+        if (userFreq) {
+          await saveBackupFrequency(userFreq);
+        }
         setBackupFrequency(savedFreq);
         setCloudBackupMetadata(prev => ({ ...prev, backupFrequency: savedFreq }));
 
@@ -645,6 +649,8 @@ export default function App() {
     setBackupFrequency(freq);
     setCloudBackupMetadata(prev => ({ ...prev, backupFrequency: freq }));
     await saveBackupFrequency(freq);
+    setCurrentUser(prev => prev ? { ...prev, backupFrequency: freq } : null);
+    api.updatePrivacySettings({ backupFrequency: freq }).catch(() => {});
     if (freq !== 'off') {
       performAutoBackupIfNeeded(currentUser || undefined, mySecretKey || undefined, freq);
     }
@@ -796,6 +802,20 @@ export default function App() {
           token
         ).catch(() => {});
       } catch {}
+    }
+
+    // Synchronize privacy preferences from database
+    applyPrivacySettings({
+      blockScreenshots: user.blockScreenshots,
+      callVerification: user.callVerification,
+      autoLockDelay: user.autoLockDelay,
+    });
+
+    if (user.backupFrequency) {
+      const freq = user.backupFrequency as BackupFrequency;
+      setBackupFrequency(freq);
+      await saveBackupFrequency(freq);
+      setCloudBackupMetadata(prev => ({ ...prev, backupFrequency: freq }));
     }
 
     setCurrentUser(user);
@@ -1486,11 +1506,11 @@ export default function App() {
               <SettingsScreen
                 currentUser={displayedUser}
                 antiScreenshotEnabled={antiScreenshotEnabled}
-                onToggleAntiScreenshot={setAntiScreenshotEnabled}
+                onToggleAntiScreenshot={handleToggleAntiScreenshot}
                 callVerificationEnabled={callVerificationEnabled}
-                onToggleCallVerification={setCallVerificationEnabled}
+                onToggleCallVerification={handleToggleCallVerification}
                 autoLockDelay={autoLockDelay}
-                onChangeAutoLockDelay={handleUpdateAutoLockDelay}
+                onChangeAutoLockDelay={handleChangeAutoLockDelay}
                 onOpenInvites={() => setShowInvitesModal(true)}
                 onOpenLinkedDevices={() => setShowLinkedDevicesModal(true)}
                 onOpenCloudBackup={() => {

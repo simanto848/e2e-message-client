@@ -19,6 +19,7 @@ import {
   ContactRequestWithUser,
   SearchOperativeResult,
   DisappearingTimer,
+  BackupFrequency,
 } from '../types';
 import { API_BASE_URL } from './config';
 import { getSessionToken } from '../utils/keyStore';
@@ -81,6 +82,25 @@ export const api = {
       body: JSON.stringify(params),
     });
     return await res.json();
+  },
+
+  // Settings & Privacy: update settings stored on server
+  async updatePrivacySettings(settings: {
+    blockScreenshots?: boolean;
+    callVerification?: boolean;
+    autoLockDelay?: number;
+    backupFrequency?: BackupFrequency;
+  }): Promise<{ success: boolean; error?: string; user?: UserProfile }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/settings`, {
+        method: 'PUT',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify(settings),
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to update settings' };
+    }
   },
 
   // Auth: Update password/PIN

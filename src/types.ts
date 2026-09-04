@@ -16,6 +16,10 @@ export interface UserProfile {
   pinCode?: string;
   fingerprintHash: string;
   connectionStatus?: 'none' | 'connected' | 'pending_sent' | 'pending_received' | 'pending';
+  blockScreenshots?: boolean;
+  callVerification?: boolean;
+  autoLockDelay?: number;
+  backupFrequency?: BackupFrequency;
 }
 
 export type DisappearingTimer = 0 | 5 | 15 | 30 | 60 | 300 | 3600 | 86400; // seconds (0 = off)
