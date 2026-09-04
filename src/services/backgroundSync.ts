@@ -1,5 +1,7 @@
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from './api';
+import { chatHeadNative } from './chatHeadNative';
 
 const KEY_BACKGROUND_SYNC = '@jaby_background_sync_enabled';
 const KEY_CHAT_HEADS = '@jaby_chat_heads_enabled';
@@ -76,6 +78,23 @@ export function startBackgroundSync(callbacks: SyncCallbacks): void {
             totalUnread: res.totalUnread,
             unreadThreads: res.unreadThreads || [],
           });
+
+          // If outside the app, automatically show or update the native floating chat head over Android
+          if (
+            chatHeadsActive &&
+            AppState.currentState !== 'active' &&
+            res.unreadThreads &&
+            res.unreadThreads.length > 0
+          ) {
+            const topThread = res.unreadThreads[0];
+            chatHeadNative
+              .showNativeChatHead({
+                contactId: topThread.peerId,
+                contactName: topThread.peerName || 'Chat',
+                unreadCount: topThread.unreadCount || res.totalUnread,
+              })
+              .catch(() => {});
+          }
         }
       }
     } catch {

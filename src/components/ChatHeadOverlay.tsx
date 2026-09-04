@@ -15,7 +15,7 @@ import {
   TouchableWithoutFeedback,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { X, Send, Phone, ArrowRight, Video } from './Icons';
+import { X, Send, Phone, ArrowRight, Video, Check, CheckCheck } from './Icons';
 import { ChatThread, Message, UserProfile } from '../types';
 import { colors, shadows } from '../theme';
 
@@ -271,7 +271,7 @@ export function ChatHeadOverlay({
                 </View>
               </View>
 
-              {/* Message History Preview */}
+              {/* Message History */}
               <ScrollView
                 ref={scrollViewRef}
                 style={styles.messagesList}
@@ -279,34 +279,62 @@ export function ChatHeadOverlay({
                 showsVerticalScrollIndicator={false}
                 onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: false })}
               >
-                {messages.slice(-15).map(msg => {
-                  const isMe = msg.senderId === currentUser.id;
-                  return (
-                    <View
-                      key={msg.id}
-                      style={[
-                        styles.msgRow,
-                        isMe ? styles.myMsgRow : styles.theirMsgRow,
-                      ]}
-                    >
+                {messages.length === 0 ? (
+                  <View style={styles.emptyMessagesContainer}>
+                    <Text style={styles.emptyMessagesTitle}>End-to-End Encrypted</Text>
+                    <Text style={styles.emptyMessagesSubtitle}>
+                      Send a message to start chatting with {participant.name}.
+                    </Text>
+                  </View>
+                ) : (
+                  messages.map(msg => {
+                    const isMe = msg.senderId === currentUser.id;
+                    const timeStr = msg.timestamp
+                      ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      : '';
+                    return (
                       <View
+                        key={msg.id}
                         style={[
-                          styles.msgBubble,
-                          isMe ? styles.myMsgBubble : styles.theirMsgBubble,
+                          styles.msgRow,
+                          isMe ? styles.myMsgRow : styles.theirMsgRow,
                         ]}
                       >
-                        <Text
+                        <View
                           style={[
-                            styles.msgText,
-                            isMe ? styles.myMsgText : styles.theirMsgText,
+                            styles.msgBubble,
+                            isMe ? styles.myMsgBubble : styles.theirMsgBubble,
                           ]}
                         >
-                          {msg.text || (msg.attachment ? `[${msg.attachment.name}]` : 'Encrypted message')}
-                        </Text>
+                          <Text
+                            style={[
+                              styles.msgText,
+                              isMe ? styles.myMsgText : styles.theirMsgText,
+                            ]}
+                          >
+                            {msg.text || (msg.attachment ? `[${msg.attachment.name}]` : 'Encrypted message')}
+                          </Text>
+                          <View style={styles.bubbleFooter}>
+                            {timeStr ? (
+                              <Text style={[styles.msgTime, isMe ? styles.myMsgTime : styles.theirMsgTime]}>
+                                {timeStr}
+                              </Text>
+                            ) : null}
+                            {isMe && (
+                              <View style={styles.statusCheck}>
+                                {msg.status === 'read' ? (
+                                  <CheckCheck size={11} color="rgba(255, 255, 255, 0.9)" />
+                                ) : (
+                                  <Check size={11} color="rgba(255, 255, 255, 0.7)" />
+                                )}
+                              </View>
+                            )}
+                          </View>
+                        </View>
                       </View>
-                    </View>
-                  );
-                })}
+                    );
+                  })
+                )}
               </ScrollView>
 
               {/* Quick Input Bar */}
@@ -431,14 +459,14 @@ const styles = StyleSheet.create({
     maxWidth: 380,
   },
   quickChatCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 20,
-    borderWidth: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    borderWidth: 1.5,
     borderColor: colors.border,
-    height: 440,
+    height: Math.min(520, Math.floor(SCREEN_HEIGHT * 0.65)),
     overflow: 'hidden',
     ...shadows.lg,
-    elevation: 16,
+    elevation: 20,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -548,6 +576,42 @@ const styles = StyleSheet.create({
   },
   theirMsgText: {
     color: colors.textPrimary,
+  },
+  bubbleFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 3,
+    marginTop: 3,
+  },
+  msgTime: {
+    fontSize: 10,
+  },
+  myMsgTime: {
+    color: 'rgba(255, 255, 255, 0.75)',
+  },
+  theirMsgTime: {
+    color: colors.textMuted,
+  },
+  statusCheck: {
+    marginLeft: 2,
+  },
+  emptyMessagesContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+  },
+  emptyMessagesTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: 4,
+  },
+  emptyMessagesSubtitle: {
+    fontSize: 12,
+    color: colors.textMuted,
+    textAlign: 'center',
   },
   inputRow: {
     flexDirection: 'row',

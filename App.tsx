@@ -90,6 +90,7 @@ import {
   setBackgroundSyncEnabled,
   setChatHeadsEnabled,
 } from './src/services/backgroundSync';
+import { chatHeadNative } from './src/services/chatHeadNative';
 
 type ScreenType = 'auth' | 'chat_list' | 'chat_detail' | 'settings';
 
@@ -430,6 +431,7 @@ export default function App() {
   const [chatHeadsEnabled, setChatHeadsEnabledState] = useState(true);
   const [activeChatHeadContactId, setActiveChatHeadContactId] = useState<string | null>(null);
   const [isChatHeadDismissed, setIsChatHeadDismissed] = useState(false);
+  const [chatHeadMessages, setChatHeadMessages] = useState<Message[]>([]);
 
   useEffect(() => {
     getBackgroundSyncSettings().then(settings => {
@@ -1457,6 +1459,7 @@ export default function App() {
     if (targetChatId === activeChatId) {
       setMessages(prev => [...prev, newMsg]);
     }
+    setChatHeadMessages(prev => [...prev, newMsg]);
 
     setChats(prev =>
       prev.map(c =>
@@ -1593,6 +1596,77 @@ export default function App() {
     : messages;
   const activeChat = displayedChats.find(c => c.id === activeChatId);
   const chatHeadThread = (activeChatHeadContactId ? displayedChats.find(c => c.id === activeChatHeadContactId) : null) || displayedChats[0] || null;
+
+  // Load full conversation history for the active Chat Head (all messages decrypted)
+  useEffect(() => {
+    if (!chatHeadThread || !currentUser || !mySecretKey) {
+      setChatHeadMessages([]);
+      return;
+    }
+    if (chatHeadThread.id === activeChatId) {
+      setChatHeadMessages(messages);
+      return;
+    }
+    let isMounted = true;
+    api
+      .getMessages(chatHeadThread.id, currentUser.id)
+      .then(rawMessages => {
+        if (!isMounted) return;
+        const knownPublicKey = chatHeadThread.participant.publicKey;
+        const decrypted: Message[] = rawMessages.map(msg => {
+          if (msg.isDeletedForEveryone) return { ...msg, text: '' };
+          if (msg.text) return msg;
+          const { text } = decryptVerified(msg.encryptedPayload, knownPublicKey);
+          return { ...msg, text: text || '[Encrypted message]' };
+        });
+        setChatHeadMessages(decrypted);
+      })
+      .catch(() => {});
+
+    return () => {
+      isMounted = false;
+    };
+  }, [chatHeadThread?.id, activeChatId, messages, currentUser?.id, mySecretKey]);
+
+  // Outside-the-App Messenger Chat Heads: Automatically activates when app is minimized / in background
+  useEffect(() => {
+    // Check if app was opened by tapping a floating Chat Head from outside the app
+    const checkPendingIntent = async () => {
+      const pending = await chatHeadNative.getPendingChatIntent();
+      if (pending && pending.chatId) {
+        setActiveChatId(pending.chatId);
+        setActiveChatHeadContactId(pending.chatId);
+        setCurrentScreen('chat_detail');
+      }
+    };
+
+    checkPendingIntent();
+
+    const sub = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        // App returned to foreground: hide outside native overlay and check for pending tap intent
+        chatHeadNative.hideNativeChatHead().catch(() => {});
+        checkPendingIntent();
+      } else if (nextState.match(/inactive|background/)) {
+        // App minimized / user went to home screen: automatically show native floating chat head outside app
+        if (chatHeadsEnabled && currentUser && chatHeadThread && !isAppLocked) {
+          chatHeadNative
+            .showNativeChatHead({
+              contactId: chatHeadThread.id,
+              contactName: chatHeadThread.participant.name,
+              avatarUrl: chatHeadThread.participant.avatar,
+              unreadCount: chatHeadThread.unreadCount || 0,
+              isOnline: onlineUserIds.has(chatHeadThread.participant.id),
+            })
+            .catch(() => {});
+        }
+      }
+    });
+
+    return () => {
+      sub.remove();
+    };
+  }, [chatHeadsEnabled, currentUser, chatHeadThread, isAppLocked, onlineUserIds]);
 
   return (
     <SafeAreaProvider>
@@ -1993,8 +2067,9 @@ export default function App() {
           onDismiss={() => setShowUpdateModal(false)}
         />
 
-        {/* Floating Messenger Chat Head */}
-        {currentUser &&
+        {/* Messenger Chat Head (activates natively outside the app over Android OS; in-app overlay only as fallback on platforms without native overlay support) */}
+        {!chatHeadNative.isSupported() &&
+          currentUser &&
           chatHeadsEnabled &&
           !isChatHeadDismissed &&
           currentScreen !== 'chat_detail' &&
@@ -2003,7 +2078,7 @@ export default function App() {
             <ChatHeadOverlay
               activeChat={chatHeadThread}
               currentUser={displayedUser || currentUser}
-              messages={chatHeadThread.id === activeChatId ? messages : (chatHeadThread.lastMessage ? [chatHeadThread.lastMessage] : [])}
+              messages={chatHeadThread.id === activeChatId ? messages : chatHeadMessages}
               unreadCount={chatHeadThread.unreadCount || 0}
               isOnline={onlineUserIds.has(chatHeadThread.participant.id)}
               onSendMessage={text => sendMessageToChat(chatHeadThread.id, text)}
