@@ -19,6 +19,8 @@ import {
   ShieldAlert,
   RefreshCw,
   Calendar,
+  Radio,
+  Smartphone,
 } from '../components/Icons';
 import { UserProfile, BackupFrequency } from '../types';
 import { colors, shadows } from '../theme';
@@ -47,6 +49,10 @@ interface Props {
   onEmergencyWipe?: () => void;
   onSignOut?: () => void;
   onBack: () => void;
+  backgroundSyncEnabled?: boolean;
+  onToggleBackgroundSync?: (val: boolean) => void;
+  chatHeadsEnabled?: boolean;
+  onToggleChatHeads?: (val: boolean) => void;
 }
 
 export function SettingsScreen({
@@ -72,6 +78,10 @@ export function SettingsScreen({
   onEmergencyWipe,
   onSignOut,
   onBack,
+  backgroundSyncEnabled = true,
+  onToggleBackgroundSync,
+  chatHeadsEnabled = true,
+  onToggleChatHeads,
 }: Props) {
   const [showEraseModal, setShowEraseModal] = useState(false);
 
@@ -214,6 +224,46 @@ export function SettingsScreen({
               <ChevronRight size={18} color={colors.textSecondary} />
             </TouchableOpacity>
           )}
+        </View>
+
+        {/* Background Sync & Chat Heads */}
+        <Text style={styles.sectionHeader}>BACKGROUND SYNC & CHAT HEADS</Text>
+        <View style={styles.settingCard}>
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleTextContainer}>
+              <View style={styles.rowAlign}>
+                <Radio size={18} color={colors.primary} />
+                <Text style={styles.toggleTitle}>Background Call & Message Sync</Text>
+              </View>
+              <Text style={styles.toggleDesc}>
+                Automatically checks for incoming calls and messages in the background so you never miss an alert.
+              </Text>
+            </View>
+            <Switch
+              value={backgroundSyncEnabled}
+              onValueChange={onToggleBackgroundSync}
+              trackColor={{ false: colors.surfaceHighlight, true: '#a7f3d0' }}
+              thumbColor={backgroundSyncEnabled ? colors.primary : colors.textMuted}
+            />
+          </View>
+
+          <View style={[styles.toggleRow, styles.borderTop]}>
+            <View style={styles.toggleTextContainer}>
+              <View style={styles.rowAlign}>
+                <Smartphone size={18} color={colors.accentBlue} />
+                <Text style={styles.toggleTitle}>Messenger Chat Heads</Text>
+              </View>
+              <Text style={styles.toggleDesc}>
+                Shows a floating draggable chat bubble on screen so you can quickly chat even while browsing other screens.
+              </Text>
+            </View>
+            <Switch
+              value={chatHeadsEnabled}
+              onValueChange={onToggleChatHeads}
+              trackColor={{ false: colors.surfaceHighlight, true: '#a7f3d0' }}
+              thumbColor={chatHeadsEnabled ? colors.primary : colors.textMuted}
+            />
+          </View>
         </View>
 
         {/* Account */}

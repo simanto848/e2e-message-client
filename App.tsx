@@ -82,6 +82,14 @@ import {
 import { colors } from './src/theme';
 import { useAppSecurity } from './src/hooks/useAppSecurity';
 import { useWebRTCCall } from './src/hooks/useWebRTCCall';
+import { ChatHeadOverlay } from './src/components/ChatHeadOverlay';
+import {
+  startBackgroundSync,
+  stopBackgroundSync,
+  getBackgroundSyncSettings,
+  setBackgroundSyncEnabled,
+  setChatHeadsEnabled,
+} from './src/services/backgroundSync';
 
 type ScreenType = 'auth' | 'chat_list' | 'chat_detail' | 'settings';
 
@@ -416,6 +424,30 @@ export default function App() {
     };
     checkUpdates();
   }, []);
+
+  // Background Sync & Messenger Chat Heads
+  const [backgroundSyncEnabled, setBackgroundSyncEnabledState] = useState(true);
+  const [chatHeadsEnabled, setChatHeadsEnabledState] = useState(true);
+  const [activeChatHeadContactId, setActiveChatHeadContactId] = useState<string | null>(null);
+  const [isChatHeadDismissed, setIsChatHeadDismissed] = useState(false);
+
+  useEffect(() => {
+    getBackgroundSyncSettings().then(settings => {
+      setBackgroundSyncEnabledState(settings.backgroundSyncEnabled);
+      setChatHeadsEnabledState(settings.chatHeadsEnabled);
+    });
+  }, []);
+
+  const handleToggleBackgroundSync = async (val: boolean) => {
+    setBackgroundSyncEnabledState(val);
+    await setBackgroundSyncEnabled(val);
+  };
+
+  const handleToggleChatHeads = async (val: boolean) => {
+    setChatHeadsEnabledState(val);
+    await setChatHeadsEnabled(val);
+    if (val) setIsChatHeadDismissed(false);
+  };
 
   // Android Hardware / Swipe Back Navigation Handler
   const lastBackPressTimeRef = useRef<number>(0);
@@ -1225,14 +1257,12 @@ export default function App() {
     // WebRTC's own connection handshake (offer/answer/ice-candidate) drives
     // real-time audio/video now — this handler wires those signals into
     // webrtcCallEngine instead of the old fake "just show ringing UI" flow.
-    const unsubCall = socketService.onCallSignal(async (signal: any) => {
+    const handleIncomingCallSignal = async (signal: any) => {
       if (signal.targetId !== currentUser.id) return;
 
       if (signal.signalType === 'offer') {
         // Already on a call (either as caller or callee) — auto-decline the
-        // new one instead of overwriting the active call's state, which
-        // would otherwise abandon the in-progress RTCPeerConnection without
-        // closing it and race two calls' signaling against each other.
+        // new one instead of overwriting the active call's state
         if (callStateRef.current.active) {
           socketService.sendCallSignal({
             callId: signal.callId,
@@ -1281,6 +1311,7 @@ export default function App() {
           sasVerificationWords: sas,
           isReconnecting: false,
         });
+        api.ackPendingCall().catch(() => {});
       } else if (signal.signalType === 'answer') {
         await webrtcCallEngine.handleRemoteAnswer(signal.sdp);
         callAudio.playConnected();
@@ -1300,7 +1331,27 @@ export default function App() {
         logCallToChat(callStateRef.current, signal.signalType === 'reject' ? 'declined' : 'missed');
         setCallState(prev => ({ ...prev, active: false, status: 'ended', duration: 0 }));
       }
-    });
+    };
+
+    const unsubCall = socketService.onCallSignal(handleIncomingCallSignal);
+
+    // Start background sync / polling for calls and messages when outside app
+    if (backgroundSyncEnabled) {
+      startBackgroundSync({
+        onIncomingCall: signal => {
+          handleIncomingCallSignal(signal);
+        },
+        onUnreadUpdate: data => {
+          if (data.unreadThreads && data.unreadThreads.length > 0) {
+            setIsChatHeadDismissed(false);
+            setActiveChatHeadContactId(data.unreadThreads[0].peerId);
+            reloadDynamicData(currentUser.id);
+          }
+        },
+      });
+    } else {
+      stopBackgroundSync();
+    }
 
     // Presence: snapshot on connect, then incremental updates.
     const unsubPresenceSnapshot = socketService.onPresenceSnapshot(userIds => {
@@ -1316,6 +1367,7 @@ export default function App() {
     });
 
     return () => {
+      stopBackgroundSync();
       unsubReqReceived();
       unsubReqAccepted();
       unsubMsg();
@@ -1326,7 +1378,7 @@ export default function App() {
       unsubPresenceSnapshot();
       unsubPresenceUpdate();
     };
-  }, [currentUser, activeChatId, chats, mySecretKey]);
+  }, [currentUser, activeChatId, chats, mySecretKey, backgroundSyncEnabled]);
 
   // 5. Ephemeral Message Self-Destruction Loop
   useEffect(() => {
@@ -1345,15 +1397,14 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Handler: Send Message
-  const handleSendMessage = async (text: string, attachment?: Attachment, replyToId?: string) => {
+  // Handler: Send Message to Any Chat (used by both Full Chat & ChatHeadOverlay)
+  const sendMessageToChat = async (targetChatId: string, text: string, attachment?: Attachment, replyToId?: string) => {
     if (isDecoyMode) {
-      if (!activeChatId) return;
       const newDecoyMsg: Message = {
         id: `decoy_msg_${Date.now()}`,
-        chatId: activeChatId,
+        chatId: targetChatId,
         senderId: 'decoy_operative',
-        receiverId: activeChatId,
+        receiverId: targetChatId,
         text,
         encryptedPayload: DECOY_ENCRYPTED_PAYLOAD,
         timestamp: Date.now(),
@@ -1364,35 +1415,33 @@ export default function App() {
       };
       setDecoyMessages(prev => ({
         ...prev,
-        [activeChatId]: [...(prev[activeChatId] || []), newDecoyMsg],
+        [targetChatId]: [...(prev[targetChatId] || []), newDecoyMsg],
       }));
       setDecoyChats(prev =>
-        prev.map(c => (c.id === activeChatId ? { ...c, lastMessage: newDecoyMsg } : c))
+        prev.map(c => (c.id === targetChatId ? { ...c, lastMessage: newDecoyMsg } : c))
       );
       return;
     }
 
-    if (!currentUser || !activeChatId || !mySecretKey) return;
+    if (!currentUser || !targetChatId || !mySecretKey) return;
 
-    const activeChat = chats.find(c => c.id === activeChatId);
-    if (!activeChat) return;
+    const targetChat = chats.find(c => c.id === targetChatId);
+    if (!targetChat) return;
 
-    const targetUserId = activeChat.participant.id;
-    const disappearingSecs = activeChat.disappearingTimer;
+    const targetUserId = targetChat.participant.id;
+    const disappearingSecs = targetChat.disappearingTimer;
 
-    // Real X25519 ECDH + XSalsa20-Poly1305 authenticated encryption to the
-    // recipient's actual public key — see src/utils/crypto.ts.
     const encryptedPayload = encryptMessage(
       text,
       mySecretKey,
-      activeChat.participant.publicKey,
+      targetChat.participant.publicKey,
       currentUser.publicKey
     );
 
     const messageId = `msg_${Date.now()}`;
     const newMsg: Message = {
       id: messageId,
-      chatId: activeChatId,
+      chatId: targetChatId,
       senderId: currentUser.id,
       receiverId: targetUserId,
       text,
@@ -1405,19 +1454,27 @@ export default function App() {
       replyToId,
     };
 
-    setMessages(prev => [...prev, newMsg]);
+    if (targetChatId === activeChatId) {
+      setMessages(prev => [...prev, newMsg]);
+    }
 
     setChats(prev =>
       prev.map(c =>
-        c.id === activeChatId ? { ...c, lastMessage: newMsg, unreadCount: 0 } : c
+        c.id === targetChatId ? { ...c, lastMessage: newMsg, unreadCount: 0 } : c
       )
     );
 
-    // 1. Guaranteed database write to SQLite
+    // Guaranteed database write to backend
     api.sendMessage(newMsg).catch(err => console.warn('REST send err:', err));
 
-    // 2. Real-time forward via Socket.IO
+    // Real-time forward via Socket.IO
     socketService.sendMessage(newMsg);
+  };
+
+  const handleSendMessage = async (text: string, attachment?: Attachment, replyToId?: string) => {
+    if (activeChatId) {
+      await sendMessageToChat(activeChatId, text, attachment, replyToId);
+    }
   };
 
   // Handler: Delete for Everyone
@@ -1516,6 +1573,9 @@ export default function App() {
   // the identity private key stays in secure storage under this account's
   // id so signing back in on the same device doesn't need to rotate keys.
   const handleSignOut = async () => {
+    stopBackgroundSync();
+    setIsChatHeadDismissed(false);
+    setActiveChatHeadContactId(null);
     await clearSession();
     socketService.disconnect();
     setCurrentUser(null);
@@ -1532,6 +1592,7 @@ export default function App() {
     ? (activeChatId ? decoyMessages[activeChatId] || [] : [])
     : messages;
   const activeChat = displayedChats.find(c => c.id === activeChatId);
+  const chatHeadThread = (activeChatHeadContactId ? displayedChats.find(c => c.id === activeChatHeadContactId) : null) || displayedChats[0] || null;
 
   return (
     <SafeAreaProvider>
@@ -1567,6 +1628,7 @@ export default function App() {
                 onRefresh={handleRefresh}
                 onSelectChat={chatId => {
                   setActiveChatId(chatId);
+                  setActiveChatHeadContactId(chatId);
                   setCurrentScreen('chat_detail');
                   if (!isDecoyMode && currentUser) {
                     const targetChat = chats.find(c => c.id === chatId);
@@ -1675,6 +1737,10 @@ export default function App() {
                 onEmergencyWipe={handleEmergencyWipe}
                 onSignOut={handleSignOut}
                 onBack={() => setCurrentScreen('chat_list')}
+                backgroundSyncEnabled={backgroundSyncEnabled}
+                onToggleBackgroundSync={handleToggleBackgroundSync}
+                chatHeadsEnabled={chatHeadsEnabled}
+                onToggleChatHeads={handleToggleChatHeads}
               />
             )}
           </View>
@@ -1926,6 +1992,33 @@ export default function App() {
           release={availableRelease}
           onDismiss={() => setShowUpdateModal(false)}
         />
+
+        {/* Floating Messenger Chat Head */}
+        {currentUser &&
+          chatHeadsEnabled &&
+          !isChatHeadDismissed &&
+          currentScreen !== 'chat_detail' &&
+          !isAppLocked &&
+          chatHeadThread && (
+            <ChatHeadOverlay
+              activeChat={chatHeadThread}
+              currentUser={displayedUser || currentUser}
+              messages={chatHeadThread.id === activeChatId ? messages : (chatHeadThread.lastMessage ? [chatHeadThread.lastMessage] : [])}
+              unreadCount={chatHeadThread.unreadCount || 0}
+              isOnline={onlineUserIds.has(chatHeadThread.participant.id)}
+              onSendMessage={text => sendMessageToChat(chatHeadThread.id, text)}
+              onOpenFullChat={chatId => {
+                setActiveChatId(chatId);
+                setActiveChatHeadContactId(chatId);
+                setCurrentScreen('chat_detail');
+              }}
+              onStartCall={type => {
+                setActiveChatId(chatHeadThread.id);
+                handleStartCall(type);
+              }}
+              onDismiss={() => setIsChatHeadDismissed(true)}
+            />
+          )}
       </SafeAreaView>
     </SafeAreaProvider>
   );

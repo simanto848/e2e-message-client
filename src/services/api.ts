@@ -374,4 +374,52 @@ export const api = {
     });
     return await res.json();
   },
+
+  // Poll for background incoming calls and unread messages
+  async pollNotifications(): Promise<{
+    success: boolean;
+    pendingCall?: {
+      callId: string;
+      senderId: string;
+      targetId: string;
+      senderName: string;
+      senderAvatar: string;
+      callType: 'audio' | 'video';
+      signalPayload: any;
+      createdAt: number;
+      expiresAt: number;
+    } | null;
+    totalUnread?: number;
+    unreadThreads?: {
+      peerId: string;
+      peerName: string;
+      peerAvatar: string;
+      unreadCount: number;
+      lastTimestamp: number;
+    }[];
+    serverTime?: number;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/notifications/poll`, {
+        headers: await authHeaders(),
+      });
+      return await res.json();
+    } catch {
+      return { success: false, error: 'Network unavailable' };
+    }
+  },
+
+  // Acknowledge or dismiss a pending call offer
+  async ackPendingCall(): Promise<{ success: boolean }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/notifications/ack-call`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+      });
+      return await res.json();
+    } catch {
+      return { success: false };
+    }
+  },
 };
