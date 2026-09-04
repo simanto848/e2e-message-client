@@ -18,9 +18,11 @@ import {
   Trash2,
   ShieldAlert,
   RefreshCw,
+  Calendar,
 } from '../components/Icons';
-import { UserProfile } from '../types';
+import { UserProfile, BackupFrequency } from '../types';
 import { colors, shadows } from '../theme';
+
 
 interface Props {
   currentUser: UserProfile;
@@ -33,6 +35,8 @@ interface Props {
   onOpenInvites: () => void;
   onOpenLinkedDevices: () => void;
   onOpenCloudBackup: () => void;
+  backupFrequency?: BackupFrequency;
+  onChangeBackupFrequency?: (freq: BackupFrequency) => void;
   onOpenRestoreSession?: () => void;
   onOpenChangePassword?: () => void;
   onOpenDuressSettings?: () => void;
@@ -56,6 +60,8 @@ export function SettingsScreen({
   onOpenInvites,
   onOpenLinkedDevices,
   onOpenCloudBackup,
+  backupFrequency = 'daily',
+  onChangeBackupFrequency,
   onOpenRestoreSession,
   onOpenChangePassword,
   onOpenDuressSettings,
@@ -247,8 +253,50 @@ export function SettingsScreen({
               <Cloud size={18} color={colors.accentPurple} />
               <Text style={styles.menuItemText}>Chat Backup</Text>
             </View>
-            <ChevronRight size={18} color={colors.textSecondary} />
+            <View style={styles.rowAlign}>
+              <Text style={styles.menuItemBadge}>
+                {backupFrequency === 'off'
+                  ? 'Off'
+                  : backupFrequency.charAt(0).toUpperCase() + backupFrequency.slice(1)}
+              </Text>
+              <ChevronRight size={18} color={colors.textSecondary} />
+            </View>
           </TouchableOpacity>
+
+          {/* Auto-Backup Frequency Schedule Selector */}
+          <View style={[styles.customRow, styles.borderTop]}>
+            <View style={styles.toggleTextContainer}>
+              <View style={styles.rowAlign}>
+                <Calendar size={18} color={colors.primary} />
+                <Text style={styles.toggleTitle}>Auto-Backup Frequency</Text>
+              </View>
+              <Text style={styles.toggleDesc}>
+                Scheduled zero-knowledge chat keys & session backup.
+              </Text>
+            </View>
+            <View style={styles.chipsContainer}>
+              {[
+                { label: 'Daily', value: 'daily' },
+                { label: 'Weekly', value: 'weekly' },
+                { label: 'Monthly', value: 'monthly' },
+                { label: 'Off', value: 'off' },
+              ].map(opt => {
+                const isActive = (backupFrequency || 'daily') === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.label}
+                    style={[styles.chip, isActive && styles.activeChip]}
+                    onPress={() => onChangeBackupFrequency && onChangeBackupFrequency(opt.value as BackupFrequency)}
+                  >
+                    <Text style={[styles.chipText, isActive && styles.activeChipText]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
 
           {onOpenRestoreSession && (
             <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onOpenRestoreSession}>

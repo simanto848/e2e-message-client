@@ -12,6 +12,7 @@ import {
   InviteCode,
   CallState,
   CloudBackupMetadata,
+  BackupFrequency,
   Attachment,
   DisappearingTimer,
   ContactRequestWithUser,
@@ -35,7 +36,12 @@ import {
   savePrimaryPin,
   getHistoricalKeyPairs,
   saveHistoricalKeyPair,
+  saveBackupFrequency,
+  getBackupFrequency,
+  saveBackupPassphrase,
+  getBackupPassphrase,
 } from './src/utils/keyStore';
+
 import { encryptBackup, decryptBackup, BackupPayload } from './src/utils/backupCrypto';
 import { api, API_BASE_URL } from './src/services/api';
 import { socketService } from './src/services/socket';
@@ -460,7 +466,10 @@ export default function App() {
   useEffect(() => {
     if (!currentUser) return;
     const sub = AppState.addEventListener('change', nextState => {
-      if (nextState === 'active') socketService.reconnectIfNeeded();
+      if (nextState === 'active') {
+        socketService.reconnectIfNeeded();
+        performAutoBackupIfNeeded();
+      }
     });
     return () => sub.remove();
   }, [currentUser]);
@@ -509,11 +518,16 @@ export default function App() {
           return;
         }
 
+        const savedFreq = await getBackupFrequency();
+        setBackupFrequency(savedFreq);
+        setCloudBackupMetadata(prev => ({ ...prev, backupFrequency: savedFreq }));
+
         setMySecretKey(keyPair.secretKey);
         setCurrentUser(data.user);
         setCurrentScreen('chat_list');
         await socketService.connect();
-        reloadDynamicData(data.user.id);
+        await reloadDynamicData(data.user.id);
+        performAutoBackupIfNeeded(data.user, keyPair.secretKey, savedFreq);
       } catch (err) {
         console.warn('Session restore notice:', err);
       }
@@ -524,16 +538,118 @@ export default function App() {
   // Invites, Devices & Backup
   const [invites, setInvites] = useState<InviteCode[]>([]);
   const [linkedDevices, setLinkedDevices] = useState<LinkedDevice[]>([]);
+  const [backupFrequency, setBackupFrequency] = useState<BackupFrequency>('daily');
   const [cloudBackupMetadata, setCloudBackupMetadata] = useState<CloudBackupMetadata>({
     lastBackupTime: null,
     totalMessagesCount: 0,
     totalChatsCount: 0,
     backupSizeKb: 128,
-    backupVersion: '2.4.0-E2EE',
+    backupVersion: '2.5.0-E2EE',
     autoBackupEnabled: true,
+    backupFrequency: 'daily',
     encryptionAlgorithm: 'PBKDF2-100K-AES-256-GCM',
     keyFingerprint: '',
   });
+
+  const backupRunningRef = useRef(false);
+  const backupFreqRef = useRef<BackupFrequency>('daily');
+  backupFreqRef.current = backupFrequency;
+  const cloudBackupMetaRef = useRef(cloudBackupMetadata);
+  cloudBackupMetaRef.current = cloudBackupMetadata;
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+  const mySecretKeyRef = useRef(mySecretKey);
+  mySecretKeyRef.current = mySecretKey;
+  const chatsRef = useRef(chats);
+  chatsRef.current = chats;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  const performAutoBackupIfNeeded = async (
+    overrideUser?: UserProfile,
+    overrideSecret?: string,
+    overrideFreq?: BackupFrequency
+  ) => {
+    if (backupRunningRef.current) return;
+    const user = overrideUser || currentUserRef.current;
+    const secret = overrideSecret || mySecretKeyRef.current;
+    const freq = overrideFreq || backupFreqRef.current;
+
+    if (!user || !secret || freq === 'off') return;
+
+    const intervals: Record<BackupFrequency, number> = {
+      daily: 24 * 60 * 60 * 1000,
+      weekly: 7 * 24 * 60 * 60 * 1000,
+      monthly: 30 * 24 * 60 * 60 * 1000,
+      off: Infinity,
+    };
+
+    const intervalMs = intervals[freq];
+    const lastTime = cloudBackupMetaRef.current.lastBackupTime;
+
+    if (lastTime && Date.now() - lastTime < intervalMs) {
+      return;
+    }
+
+    backupRunningRef.current = true;
+    try {
+      const passphrase = await getBackupPassphrase();
+      if (!passphrase) {
+        backupRunningRef.current = false;
+        return;
+      }
+
+      const histKeys =
+        historicalKeysRef.current.length > 0
+          ? historicalKeysRef.current
+          : await getHistoricalKeyPairs(user.id);
+
+      const payload: BackupPayload = {
+        version: 2,
+        exportedAt: Date.now(),
+        identityKeyPair: { publicKey: user.publicKey, secretKey: secret },
+        historicalKeyPairs: histKeys,
+      };
+
+      const blob = encryptBackup(payload, passphrase);
+      const res = await api.saveCloudBackup({
+        encryptedData: blob.encryptedData,
+        salt: blob.salt,
+        iv: blob.iv,
+        backupSizeKb: Math.ceil(blob.encryptedData.length / 1024),
+        backupVersion: '2.5.0-E2EE',
+        totalMessagesCount: messagesRef.current.length,
+        totalChatsCount: chatsRef.current.length,
+        keyFingerprint: user.fingerprintHash,
+      });
+
+      if (res?.success) {
+        const now = Date.now();
+        setCloudBackupMetadata(prev => ({
+          ...prev,
+          lastBackupTime: now,
+          totalMessagesCount: messagesRef.current.length,
+          totalChatsCount: chatsRef.current.length,
+          backupFrequency: freq,
+        }));
+        console.log(`[AutoBackup] Completed ${freq} backup successfully at ${new Date(now).toISOString()}`);
+      }
+    } catch (err) {
+      console.log('[AutoBackup] Notice during auto-backup:', err);
+    } finally {
+      backupRunningRef.current = false;
+    }
+  };
+
+  const handleUpdateBackupFrequency = async (freq: BackupFrequency) => {
+    setBackupFrequency(freq);
+    setCloudBackupMetadata(prev => ({ ...prev, backupFrequency: freq }));
+    await saveBackupFrequency(freq);
+    if (freq !== 'off') {
+      performAutoBackupIfNeeded(currentUser || undefined, mySecretKey || undefined, freq);
+    }
+  };
+
 
   // Silently check for and apply OTA (JS-only) updates published via EAS
   // Update — on launch and whenever the app returns to foreground. This
@@ -583,6 +699,7 @@ export default function App() {
     await saveCurrentUserId(user.id);
     if (pinCode) {
       await savePrimaryPin(pinCode);
+      await saveBackupPassphrase(pinCode);
     }
 
     let keyPair = freshKeyPair || (await getIdentityKeyPair(user.id));
@@ -685,6 +802,7 @@ export default function App() {
     setCurrentScreen('chat_list');
     await socketService.connect();
     await reloadDynamicData(user.id);
+    performAutoBackupIfNeeded(user, keyPair.secretKey);
   };
 
   // Pull-to-refresh handler for chat list
@@ -721,6 +839,23 @@ export default function App() {
       setOutgoingRequests(reqs.outgoing || []);
       setInvites(userInvites || []);
       setLinkedDevices(devices || []);
+
+      try {
+        const backupRes = await api.getCloudBackup(userId);
+        if (backupRes?.success && backupRes.backup) {
+          const remoteTime = new Date(backupRes.backup.timestamp).getTime();
+          setCloudBackupMetadata(prev => ({
+            ...prev,
+            lastBackupTime: remoteTime,
+            totalMessagesCount: backupRes.backup.totalMessagesCount,
+            totalChatsCount: backupRes.backup.totalChatsCount,
+            backupSizeKb: backupRes.backup.backupSizeKb,
+            keyFingerprint: backupRes.backup.keyFingerprint || prev.keyFingerprint,
+          }));
+        }
+      } catch {
+        // Vault check notice (e.g. fresh account with no prior backup)
+      }
     } catch (err) {
       console.log('Dynamic data fetch notice:', err);
     } finally {
@@ -1362,6 +1497,8 @@ export default function App() {
                   setCloudBackupInitialMode('backup');
                   setShowCloudBackupModal(true);
                 }}
+                backupFrequency={backupFrequency}
+                onChangeBackupFrequency={handleUpdateBackupFrequency}
                 onOpenRestoreSession={() => {
                   setCloudBackupInitialMode('restore');
                   setShowCloudBackupModal(true);
@@ -1481,6 +1618,8 @@ export default function App() {
           visible={showCloudBackupModal}
           initialMode={cloudBackupInitialMode}
           metadata={cloudBackupMetadata}
+          backupFrequency={backupFrequency}
+          onChangeFrequency={handleUpdateBackupFrequency}
           onCreateBackup={async passphrase => {
             if (!currentUser || !mySecretKey) return false;
             const payload: BackupPayload = {
@@ -1506,6 +1645,7 @@ export default function App() {
               lastBackupTime: Date.now(),
               totalMessagesCount: messages.length,
               totalChatsCount: chats.length,
+              backupFrequency,
             }));
             return true;
           }}

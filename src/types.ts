@@ -158,6 +158,8 @@ export interface CallState {
   isReconnecting: boolean;
 }
 
+export type BackupFrequency = 'daily' | 'weekly' | 'monthly' | 'off';
+
 export interface CloudBackupMetadata {
   lastBackupTime: number | null;
   totalMessagesCount: number;
@@ -165,6 +167,8 @@ export interface CloudBackupMetadata {
   backupSizeKb: number;
   backupVersion: string;
   autoBackupEnabled: boolean;
+  backupFrequency: BackupFrequency;
   encryptionAlgorithm: string;
   keyFingerprint: string;
 }
+

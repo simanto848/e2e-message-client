@@ -8,10 +8,14 @@
  */
 import * as SecureStore from 'expo-secure-store';
 import { IdentityKeyPair } from './crypto';
+import { BackupFrequency } from '../types';
 
 const SESSION_TOKEN_KEY = 'jaby_session_token';
 const CURRENT_USER_ID_KEY = 'jaby_current_user_id';
 const IDENTITY_KEYPAIR_PREFIX = 'jaby_identity_keypair_';
+const BACKUP_FREQUENCY_KEY = 'jaby_backup_frequency';
+const BACKUP_PASSPHRASE_KEY = 'jaby_backup_passphrase';
+
 
 // SecureStore keys are restricted to [A-Za-z0-9._-]; sanitize just in case a
 // userId ever contains something outside that set.
@@ -97,6 +101,35 @@ export async function clearPrimaryPin(): Promise<void> {
   await SecureStore.deleteItemAsync(PRIMARY_PIN_KEY);
 }
 
+export async function saveBackupFrequency(frequency: BackupFrequency): Promise<void> {
+  await SecureStore.setItemAsync(BACKUP_FREQUENCY_KEY, frequency);
+}
+
+export async function getBackupFrequency(): Promise<BackupFrequency> {
+  const val = await SecureStore.getItemAsync(BACKUP_FREQUENCY_KEY);
+  if (val === 'daily' || val === 'weekly' || val === 'monthly' || val === 'off') {
+    return val;
+  }
+  return 'daily';
+}
+
+export async function saveBackupPassphrase(passphrase: string): Promise<void> {
+  await SecureStore.setItemAsync(BACKUP_PASSPHRASE_KEY, passphrase);
+}
+
+export async function getBackupPassphrase(): Promise<string | null> {
+  const saved = await SecureStore.getItemAsync(BACKUP_PASSPHRASE_KEY);
+  if (saved) return saved;
+  return getPrimaryPin();
+}
+
+export async function clearBackupSettings(): Promise<void> {
+  await Promise.all([
+    SecureStore.deleteItemAsync(BACKUP_FREQUENCY_KEY),
+    SecureStore.deleteItemAsync(BACKUP_PASSPHRASE_KEY),
+  ]);
+}
+
 /**
  * Clear everything for a full sign-out. Identity keypairs are intentionally
  * NOT cleared here (they stay namespaced per-account on this device) — a
@@ -106,3 +139,4 @@ export async function clearPrimaryPin(): Promise<void> {
 export async function clearSession(): Promise<void> {
   await Promise.all([clearSessionToken(), clearCurrentUserId(), clearPrimaryPin()]);
 }
+
