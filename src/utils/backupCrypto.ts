@@ -58,9 +58,10 @@ function deriveKey(passphrase: string, saltBytes: Uint8Array): Uint8Array {
 }
 
 export interface BackupPayload {
-  version: 1;
+  version: 1 | 2;
   exportedAt: number;
   identityKeyPair: IdentityKeyPair;
+  historicalKeyPairs?: IdentityKeyPair[];
 }
 
 export interface EncryptedBackupBlob {
@@ -101,7 +102,7 @@ export function decryptBackup(blob: EncryptedBackupBlob, passphrase: string): Ba
     if (!opened) return null;
 
     const parsed = JSON.parse(new TextDecoder().decode(opened));
-    if (!parsed || parsed.version !== 1 || !parsed.identityKeyPair) return null;
+    if (!parsed || !parsed.identityKeyPair) return null;
     return parsed as BackupPayload;
   } catch {
     return null;

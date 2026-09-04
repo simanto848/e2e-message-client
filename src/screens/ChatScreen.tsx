@@ -32,7 +32,7 @@ import { ChatBubble } from '../components/ChatBubble';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 import { ChatMenuModal } from '../components/ChatMenuModal';
 import { colors, shadows } from '../theme';
-import { encryptMessage, decryptMessage } from '../utils/crypto';
+import { encryptMessage, decryptMessage, IdentityKeyPair } from '../utils/crypto';
 import { api } from '../services/api';
 import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
 
@@ -43,6 +43,7 @@ interface Props {
   chat: ChatThread;
   currentUser: UserProfile;
   mySecretKey: string;
+  historicalKeys?: IdentityKeyPair[];
   messages: Message[];
   isOnline: boolean;
   onBack: () => void;
@@ -54,6 +55,7 @@ interface Props {
   onUpdateDisappearingTimer: (timer: DisappearingTimer) => void;
   onClearHistory?: () => void;
   onDisconnectContact?: () => void;
+  onOpenRestoreSession?: () => void;
 }
 
 type ImageResolution = { status: 'loading' } | { status: 'ready'; dataUri: string } | { status: 'error' };
@@ -64,6 +66,7 @@ export function ChatScreen({
   chat,
   currentUser,
   mySecretKey,
+  historicalKeys,
   messages,
   isOnline,
   onBack,
@@ -75,6 +78,7 @@ export function ChatScreen({
   onUpdateDisappearingTimer,
   onClearHistory,
   onDisconnectContact,
+  onOpenRestoreSession,
 }: Props) {
   const [inputText, setInputText] = useState('');
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
@@ -90,6 +94,10 @@ export function ChatScreen({
   const inputRef = useRef<TextInput>(null);
 
   const participant = chat.participant;
+
+  const hasKeyMismatch = messages.some(
+    m => m.keyMismatch || (typeof m.text === 'string' && m.text.includes('previous session'))
+  );
 
   // Auto-focus input field on chat screen open
   useEffect(() => {
@@ -208,7 +216,13 @@ export function ChatScreen({
         .then(res => {
           if (!res.success || !res.attachment) throw new Error(res.error || 'Not found');
           const key = theirPublicKey || res.attachment.encryptedPayload.senderPublicKey;
-          const plaintext = decryptMessage(res.attachment.encryptedPayload, mySecretKey, key);
+          let plaintext = decryptMessage(res.attachment.encryptedPayload, mySecretKey, key);
+          if (!plaintext && historicalKeys && historicalKeys.length > 0) {
+            for (const hk of historicalKeys) {
+              plaintext = decryptMessage(res.attachment.encryptedPayload, hk.secretKey, key);
+              if (plaintext) break;
+            }
+          }
           if (!plaintext) throw new Error('Decryption failed');
           const mimeType = attachment.mimeType || 'image/jpeg';
           setResolvedImages(prev => ({ ...prev, [attachment.id]: { status: 'ready', dataUri: `data:${mimeType};base64,${plaintext}` } }));
@@ -219,7 +233,22 @@ export function ChatScreen({
         });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages]);
+  }, [messages, historicalKeys]);
+
+  // Reset any failed image resolutions when keys change
+  useEffect(() => {
+    setResolvedImages(prev => {
+      const next = { ...prev };
+      let updated = false;
+      for (const k of Object.keys(next)) {
+        if (next[k].status === 'error') {
+          delete next[k];
+          updated = true;
+        }
+      }
+      return updated ? next : prev;
+    });
+  }, [mySecretKey, historicalKeys]);
 
   // Clean up sound instance on unmount
   useEffect(() => {
@@ -269,7 +298,13 @@ export function ChatScreen({
       const isSentByMe = msg.senderId === currentUser.id;
       const theirPublicKey = isSentByMe ? participant.publicKey : undefined;
       const key = theirPublicKey || res.attachment.encryptedPayload.senderPublicKey;
-      const base64Audio = decryptMessage(res.attachment.encryptedPayload, mySecretKey, key);
+      let base64Audio = decryptMessage(res.attachment.encryptedPayload, mySecretKey, key);
+      if (!base64Audio && historicalKeys && historicalKeys.length > 0) {
+        for (const hk of historicalKeys) {
+          base64Audio = decryptMessage(res.attachment.encryptedPayload, hk.secretKey, key);
+          if (base64Audio) break;
+        }
+      }
 
       if (!base64Audio) {
         throw new Error('Audio decryption failed');
@@ -376,6 +411,24 @@ export function ChatScreen({
           <Text style={styles.ephemeralBannerText}>
             Ephemeral Timer Active ({chat.disappearingTimer}s) · Messages self-destruct after viewing
           </Text>
+        </View>
+      )}
+
+      {/* Session Lock Banner (Previous Session / Key Mismatch) */}
+      {hasKeyMismatch && onOpenRestoreSession && (
+        <View style={styles.sessionLockBanner}>
+          <View style={styles.sessionLockLeft}>
+            <Lock size={15} color="#d97706" />
+            <Text style={styles.sessionLockText}>
+              Previous session messages locked
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.sessionLockBtn}
+            onPress={onOpenRestoreSession}
+          >
+            <Text style={styles.sessionLockBtnText}>Restore Keys</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -702,5 +755,37 @@ const styles = StyleSheet.create({
   },
   replyBarClose: {
     padding: 6,
+  },
+  sessionLockBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fffbeb',
+    borderBottomWidth: 1,
+    borderBottomColor: '#fde68a',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  sessionLockLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  sessionLockText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#b45309',
+  },
+  sessionLockBtn: {
+    backgroundColor: '#f59e0b',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  sessionLockBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

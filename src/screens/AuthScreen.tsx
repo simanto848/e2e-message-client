@@ -4,6 +4,7 @@ import { ShieldCheck, Lock, KeyRound, Ticket, Fingerprint, ArrowRight, User } fr
 import { JabyLogo } from '../components/JabyLogo';
 import { UserProfile } from '../types';
 import { computeFingerprint, generateIdentityKeyPair, IdentityKeyPair } from '../utils/crypto';
+import { encryptBackup, BackupPayload } from '../utils/backupCrypto';
 import { api } from '../services/api';
 import { evaluatePasswordStrength } from '../utils/passwordStrength';
 import { colors, shadows } from '../theme';
@@ -73,6 +74,30 @@ export function AuthScreen({ onAuthenticated }: Props) {
       });
 
       if (res.success && res.user && res.token) {
+        try {
+          const payload: BackupPayload = {
+            version: 2,
+            exportedAt: Date.now(),
+            identityKeyPair: keyPair,
+          };
+          const blob = encryptBackup(payload, pinCode);
+          await api.saveCloudBackup(
+            {
+              encryptedData: blob.encryptedData,
+              salt: blob.salt,
+              iv: blob.iv,
+              backupSizeKb: Math.ceil(blob.encryptedData.length / 1024),
+              backupVersion: '2.5.0-E2EE',
+              totalMessagesCount: 0,
+              totalChatsCount: 0,
+              keyFingerprint: fingerprint,
+            },
+            res.token
+          );
+        } catch (backupErr) {
+          console.warn('[Register] Cloud backup auto-escrow failed:', backupErr);
+        }
+
         Alert.alert('Account Created', `Welcome, ${name}!`);
         onAuthenticated(res.user, res.token, keyPair, pinCode);
       } else {

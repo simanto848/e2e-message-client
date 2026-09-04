@@ -33,6 +33,8 @@ import {
   saveIdentityKeyPair,
   getIdentityKeyPair,
   savePrimaryPin,
+  getHistoricalKeyPairs,
+  saveHistoricalKeyPair,
 } from './src/utils/keyStore';
 import { encryptBackup, decryptBackup, BackupPayload } from './src/utils/backupCrypto';
 import { api, API_BASE_URL } from './src/services/api';
@@ -265,6 +267,10 @@ export default function App() {
   const [inspectingMessage, setInspectingMessage] = useState<Message | null>(null);
   const [safetyModalChat, setSafetyModalChat] = useState<ChatThread | null>(null);
   const [mySecretKey, setMySecretKey] = useState<string | null>(null);
+  const [historicalKeys, setHistoricalKeys] = useState<IdentityKeyPair[]>([]);
+  const historicalKeysRef = useRef<IdentityKeyPair[]>([]);
+  historicalKeysRef.current = historicalKeys;
+  const [cloudBackupInitialMode, setCloudBackupInitialMode] = useState<'backup' | 'restore'>('backup');
 
   const logCallToChat = (finalState: CallState, endReason: 'completed' | 'declined' | 'missed') => {
     if (!currentUser || !mySecretKey || !finalState.remoteUser) return;
@@ -580,17 +586,100 @@ export default function App() {
     }
 
     let keyPair = freshKeyPair || (await getIdentityKeyPair(user.id));
+    let restoredFromCloud = false;
+
     if (!keyPair) {
-      keyPair = generateIdentityKeyPair();
-      const rotateRes = await api.updateProfile({ publicKey: keyPair.publicKey });
-      if (rotateRes?.success && rotateRes.user) {
-        user = rotateRes.user;
-      } else {
-        user = { ...user, publicKey: keyPair.publicKey };
+      // Missing local key on this device (e.g. fresh install or session was removed)
+      // Check if zero-knowledge cloud backup escrow exists on server
+      try {
+        const backupRes = await api.getCloudBackup(user.id, token);
+        if (backupRes?.success && backupRes.backup && pinCode) {
+          const restoredPayload = decryptBackup(
+            {
+              encryptedData: backupRes.backup.encryptedData,
+              salt: backupRes.backup.salt,
+              iv: backupRes.backup.iv,
+            },
+            pinCode
+          );
+
+          if (restoredPayload?.identityKeyPair) {
+            // Prompt the user if they want to restore or keep as is
+            const shouldRestore = await new Promise<boolean>(resolve => {
+              Alert.alert(
+                'Restore Previous Session?',
+                'Encrypted message history from your previous session was found. Would you like to restore your encryption keys to read your past messages, or start fresh?',
+                [
+                  {
+                    text: 'Keep As Is (Fresh)',
+                    style: 'cancel',
+                    onPress: () => resolve(false),
+                  },
+                  {
+                    text: 'Restore Messages',
+                    onPress: () => resolve(true),
+                  },
+                ],
+                { cancelable: false }
+              );
+            });
+
+            if (shouldRestore) {
+              keyPair = restoredPayload.identityKeyPair;
+              restoredFromCloud = true;
+              if (restoredPayload.historicalKeyPairs) {
+                for (const hp of restoredPayload.historicalKeyPairs) {
+                  await saveHistoricalKeyPair(user.id, hp);
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Backup auto-restore check notice:', err);
+      }
+
+      if (!keyPair) {
+        keyPair = generateIdentityKeyPair();
+        const rotateRes = await api.updateProfile({ publicKey: keyPair.publicKey });
+        if (rotateRes?.success && rotateRes.user) {
+          user = rotateRes.user;
+        } else {
+          user = { ...user, publicKey: keyPair.publicKey };
+        }
       }
     }
+
     await saveIdentityKeyPair(user.id, keyPair);
     setMySecretKey(keyPair.secretKey);
+    const loadedHKeys = await getHistoricalKeyPairs(user.id);
+    setHistoricalKeys(loadedHKeys);
+
+    // Auto-escrow current key so future session removes won't lose it
+    if (pinCode && !restoredFromCloud) {
+      try {
+        const backupPayload: BackupPayload = {
+          version: 2,
+          exportedAt: Date.now(),
+          identityKeyPair: keyPair,
+          historicalKeyPairs: loadedHKeys,
+        };
+        const blob = encryptBackup(backupPayload, pinCode);
+        await api.saveCloudBackup(
+          {
+            encryptedData: blob.encryptedData,
+            salt: blob.salt,
+            iv: blob.iv,
+            backupSizeKb: Math.ceil(blob.encryptedData.length / 1024),
+            backupVersion: '2.5.0-E2EE',
+            totalMessagesCount: 0,
+            totalChatsCount: 0,
+            keyFingerprint: user.fingerprintHash,
+          },
+          token
+        ).catch(() => {});
+      } catch {}
+    }
 
     setCurrentUser(user);
     setCurrentScreen('chat_list');
@@ -674,8 +763,25 @@ export default function App() {
       opened = decryptMessage(payload, mySecretKey, expectedPublicKey);
     }
 
+    // Fallback: check historical keys keyring
+    const allHistorical = historicalKeysRef.current;
+    if (opened === null && allHistorical && allHistorical.length > 0) {
+      for (const hk of allHistorical) {
+        opened = decryptMessage(payload, hk.secretKey, peerPublicKey);
+        if (opened !== null) break;
+        if (payload.senderPublicKey && payload.senderPublicKey !== peerPublicKey) {
+          opened = decryptMessage(payload, hk.secretKey, payload.senderPublicKey);
+          if (opened !== null) break;
+        }
+        if (expectedPublicKey && expectedPublicKey !== peerPublicKey) {
+          opened = decryptMessage(payload, hk.secretKey, expectedPublicKey);
+          if (opened !== null) break;
+        }
+      }
+    }
+
     if (opened === null) {
-      return { text: '🔒 Encrypted message (key mismatch or previous session).', keyMismatch: false };
+      return { text: '🔒 Encrypted message (key mismatch or previous session).', keyMismatch: true };
     }
     return { text: opened, keyMismatch: false };
   };
@@ -1191,6 +1297,11 @@ export default function App() {
                 chat={activeChat}
                 currentUser={displayedUser}
                 mySecretKey={mySecretKey || 'decoy_ephemeral_key'}
+                historicalKeys={historicalKeys}
+                onOpenRestoreSession={() => {
+                  setCloudBackupInitialMode('restore');
+                  setShowCloudBackupModal(true);
+                }}
                 messages={displayedMessages}
                 isOnline={onlineUserIds.has(activeChat.participant.id)}
                 onBack={() => setCurrentScreen('chat_list')}
@@ -1247,7 +1358,14 @@ export default function App() {
                 onChangeAutoLockDelay={handleUpdateAutoLockDelay}
                 onOpenInvites={() => setShowInvitesModal(true)}
                 onOpenLinkedDevices={() => setShowLinkedDevicesModal(true)}
-                onOpenCloudBackup={() => setShowCloudBackupModal(true)}
+                onOpenCloudBackup={() => {
+                  setCloudBackupInitialMode('backup');
+                  setShowCloudBackupModal(true);
+                }}
+                onOpenRestoreSession={() => {
+                  setCloudBackupInitialMode('restore');
+                  setShowCloudBackupModal(true);
+                }}
                 onOpenChangePassword={() => setShowChangePasswordModal(true)}
                 onOpenDuressSettings={() => setShowDuressModal(true)}
                 onOpenPermissions={() => setShowPermissionsModal(true)}
@@ -1361,13 +1479,15 @@ export default function App() {
             this device. */}
         <CloudBackupModal
           visible={showCloudBackupModal}
+          initialMode={cloudBackupInitialMode}
           metadata={cloudBackupMetadata}
           onCreateBackup={async passphrase => {
             if (!currentUser || !mySecretKey) return false;
             const payload: BackupPayload = {
-              version: 1,
+              version: 2,
               exportedAt: Date.now(),
               identityKeyPair: { publicKey: currentUser.publicKey, secretKey: mySecretKey },
+              historicalKeyPairs: historicalKeys,
             };
             const blob = encryptBackup(payload, passphrase);
             const res = await api.saveCloudBackup({
@@ -1401,12 +1521,39 @@ export default function App() {
               passphrase
             );
             if (!restored) {
-              Alert.alert('Restore Failed', 'Wrong passphrase, or the backup was corrupted.');
+              Alert.alert('Restore Failed', 'Wrong passphrase or PIN, or the backup was corrupted.');
               return false;
             }
             await saveIdentityKeyPair(currentUser.id, restored.identityKeyPair);
+            if (restored.historicalKeyPairs && restored.historicalKeyPairs.length > 0) {
+              for (const hk of restored.historicalKeyPairs) {
+                await saveHistoricalKeyPair(currentUser.id, hk);
+              }
+            }
+            const updatedHistorical = await getHistoricalKeyPairs(currentUser.id);
+            historicalKeysRef.current = updatedHistorical;
+            setHistoricalKeys(updatedHistorical);
             setMySecretKey(restored.identityKeyPair.secretKey);
-            Alert.alert('Backup Restored', 'Your encryption keys have been restored to this device.');
+
+            if (currentUser.publicKey !== restored.identityKeyPair.publicKey) {
+              const profRes = await api.updateProfile({ publicKey: restored.identityKeyPair.publicKey });
+              if (profRes.success && profRes.user) {
+                setCurrentUser(profRes.user);
+              }
+            }
+
+            await reloadDynamicData(currentUser.id);
+            if (activeChatId) {
+              const rawMessages = await api.getMessages(activeChatId, currentUser.id);
+              const knownPublicKey = chats.find(c => c.id === activeChatId)?.participant.publicKey;
+              const decryptedList = rawMessages.map(m => {
+                if (m.isDeletedForEveryone) return { ...m, text: '' };
+                const { text } = decryptVerified(m.encryptedPayload, knownPublicKey);
+                return { ...m, text };
+              });
+              setMessages(decryptedList);
+            }
+            Alert.alert('Session & Messages Restored', 'Your encryption keys have been restored and your previous messages are now unlocked.');
             return true;
           }}
           onClose={() => setShowCloudBackupModal(false)}

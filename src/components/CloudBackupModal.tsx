@@ -6,6 +6,7 @@ import { colors, shadows } from '../theme';
 
 interface Props {
   visible: boolean;
+  initialMode?: 'backup' | 'restore';
   metadata: CloudBackupMetadata;
   onCreateBackup: (passphrase: string) => Promise<boolean>;
   onRestoreBackup: (passphrase: string) => Promise<boolean>;
@@ -14,6 +15,7 @@ interface Props {
 
 export function CloudBackupModal({
   visible,
+  initialMode = 'backup',
   metadata,
   onCreateBackup,
   onRestoreBackup,
@@ -21,11 +23,18 @@ export function CloudBackupModal({
 }: Props) {
   const [passphrase, setPassphrase] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [mode, setMode] = useState<'backup' | 'restore'>('backup');
+  const [mode, setMode] = useState<'backup' | 'restore'>(initialMode);
+
+  React.useEffect(() => {
+    if (visible) {
+      setMode(initialMode);
+      setPassphrase('');
+    }
+  }, [visible, initialMode]);
 
   const handleAction = async () => {
-    if (!passphrase || passphrase.length < 6) {
-      Alert.alert('Password Required', 'Please enter a backup password of at least 6 characters.');
+    if (!passphrase || passphrase.length < 4) {
+      Alert.alert('Password Required', 'Please enter your account PIN or backup password (at least 4 characters).');
       return;
     }
 
@@ -34,14 +43,15 @@ export function CloudBackupModal({
       if (mode === 'backup') {
         const success = await onCreateBackup(passphrase);
         if (success) {
-          Alert.alert('Backup Created', 'Your chats were backed up securely.');
+          Alert.alert('Backup Created', 'Your session encryption keys were backed up securely.');
           setPassphrase('');
         }
       } else {
         const success = await onRestoreBackup(passphrase);
         if (success) {
-          Alert.alert('Restore Complete', 'Your chats were restored successfully.');
+          Alert.alert('Restore Complete', 'Your chat session and encryption keys have been restored.');
           setPassphrase('');
+          onClose();
         }
       }
     } catch {
@@ -58,7 +68,7 @@ export function CloudBackupModal({
           <View style={styles.header}>
             <View style={styles.titleRow}>
               <Cloud size={20} color={colors.primary} />
-              <Text style={styles.title}>Chat Backup</Text>
+              <Text style={styles.title}>{mode === 'restore' ? 'Restore Session Keys' : 'Chat Backup'}</Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeButton}>
               <X size={18} color={colors.textSecondary} />
@@ -70,13 +80,13 @@ export function CloudBackupModal({
             <View style={styles.metaCard}>
               <View style={styles.metaHeader}>
                 <ShieldCheck size={16} color={colors.primaryDark} />
-                <Text style={styles.metaTitle}>ENCRYPTED BACKUP</Text>
+                <Text style={styles.metaTitle}>ZERO-KNOWLEDGE VAULT</Text>
               </View>
               <Text style={styles.metaDetail}>
                 Last Backup: {metadata.lastBackupTime ? new Date(metadata.lastBackupTime).toLocaleDateString() : 'Never'}
               </Text>
               <Text style={styles.metaDetail}>
-                Backup Data: {metadata.totalChatsCount} chats · {metadata.totalMessagesCount} messages ({metadata.backupSizeKb} KB)
+                Key Escrow: {metadata.totalChatsCount} chats · {metadata.totalMessagesCount} messages ({metadata.backupSizeKb || 128} KB)
               </Text>
             </View>
 
@@ -99,13 +109,13 @@ export function CloudBackupModal({
             {/* Passphrase Input */}
             <View style={styles.inputContainer}>
               <Text style={styles.inputLabel}>
-                {mode === 'backup' ? 'SET BACKUP PASSWORD' : 'ENTER BACKUP PASSWORD'}
+                {mode === 'backup' ? 'SET BACKUP PASSWORD / PIN' : 'ACCOUNT PIN OR BACKUP PASSWORD'}
               </Text>
               <View style={styles.inputWrapper}>
                 <KeyRound size={18} color={colors.textSecondary} style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
-                  placeholder="Password (min 6 characters)"
+                  placeholder="PIN or Password (min 4 characters)"
                   placeholderTextColor={colors.textMuted}
                   secureTextEntry={true}
                   value={passphrase}
@@ -113,7 +123,9 @@ export function CloudBackupModal({
                 />
               </View>
               <Text style={styles.inputHint}>
-                Please remember this password. If lost, your backup cannot be recovered.
+                {mode === 'backup'
+                  ? 'Your identity keys are encrypted using PBKDF2 (100,000 rounds) before leaving your device.'
+                  : 'Enter your account PIN or backup password to restore your historical encryption keys and unlock previous messages.'}
               </Text>
             </View>
 
@@ -130,10 +142,10 @@ export function CloudBackupModal({
               )}
               <Text style={styles.actionButtonText}>
                 {isProcessing
-                  ? 'Processing...'
+                  ? 'Decrypting & Restoring...'
                   : mode === 'backup'
-                  ? 'Back Up Now'
-                  : 'Restore Chats'}
+                  ? 'Back Up Keys Now'
+                  : 'Restore Session Messages'}
               </Text>
             </TouchableOpacity>
           </ScrollView>

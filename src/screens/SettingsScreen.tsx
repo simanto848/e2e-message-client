@@ -17,6 +17,7 @@ import {
   Phone,
   Trash2,
   ShieldAlert,
+  RefreshCw,
 } from '../components/Icons';
 import { UserProfile } from '../types';
 import { colors, shadows } from '../theme';
@@ -32,6 +33,7 @@ interface Props {
   onOpenInvites: () => void;
   onOpenLinkedDevices: () => void;
   onOpenCloudBackup: () => void;
+  onOpenRestoreSession?: () => void;
   onOpenChangePassword?: () => void;
   onOpenDuressSettings?: () => void;
   onOpenPermissions?: () => void;
@@ -54,6 +56,7 @@ export function SettingsScreen({
   onOpenInvites,
   onOpenLinkedDevices,
   onOpenCloudBackup,
+  onOpenRestoreSession,
   onOpenChangePassword,
   onOpenDuressSettings,
   onOpenPermissions,
@@ -246,6 +249,21 @@ export function SettingsScreen({
             </View>
             <ChevronRight size={18} color={colors.textSecondary} />
           </TouchableOpacity>
+
+          {onOpenRestoreSession && (
+            <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onOpenRestoreSession}>
+              <View style={styles.rowAlign}>
+                <RefreshCw size={18} color={colors.primary} />
+                <View style={{ marginLeft: 10 }}>
+                  <Text style={styles.menuItemText}>Restore Session & Messages</Text>
+                  <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 2 }}>
+                    Recover old keys to unlock previous chats
+                  </Text>
+                </View>
+              </View>
+              <ChevronRight size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
 
           {onOpenChangePassword && (
             <TouchableOpacity style={[styles.menuItem, styles.borderTop]} onPress={onOpenChangePassword}>

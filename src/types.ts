@@ -65,6 +65,7 @@ export interface Message {
   replyToId?: string;
   reactions?: { [emoji: string]: string[] };
   reaction?: string;
+  keyMismatch?: boolean;
 }
 
 export type ChatThemeColor = 'emerald' | 'cyan' | 'indigo' | 'purple' | 'amber' | 'rose' | 'slate';

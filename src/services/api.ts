@@ -273,27 +273,36 @@ export const api = {
   },
 
   // Cloud Backup: Save
-  async saveCloudBackup(backupData: {
-    encryptedData: string;
-    salt: string;
-    iv: string;
-    backupSizeKb: number;
-    backupVersion: string;
-    totalMessagesCount: number;
-    totalChatsCount: number;
-    keyFingerprint: string;
-  }) {
+  async saveCloudBackup(
+    backupData: {
+      encryptedData: string;
+      salt: string;
+      iv: string;
+      backupSizeKb: number;
+      backupVersion: string;
+      totalMessagesCount: number;
+      totalChatsCount: number;
+      keyFingerprint: string;
+    },
+    tokenOverride?: string
+  ) {
+    const headers = tokenOverride
+      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenOverride}` }
+      : await authedJsonHeaders();
     const res = await fetch(`${API_BASE_URL}/backup/save`, {
       method: 'POST',
-      headers: await authedJsonHeaders(),
+      headers,
       body: JSON.stringify(backupData),
     });
     return await res.json();
   },
 
   // Cloud Backup: Fetch
-  async getCloudBackup(userId: string) {
-    const res = await fetch(`${API_BASE_URL}/backup/${userId}`, { headers: await authHeaders() });
+  async getCloudBackup(userId: string, tokenOverride?: string) {
+    const headers = tokenOverride
+      ? { Authorization: `Bearer ${tokenOverride}` }
+      : await authHeaders();
+    const res = await fetch(`${API_BASE_URL}/backup/${userId}`, { headers });
     return await res.json();
   },
 

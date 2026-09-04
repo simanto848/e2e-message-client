@@ -43,8 +43,33 @@ export async function clearCurrentUserId(): Promise<void> {
   await SecureStore.deleteItemAsync(CURRENT_USER_ID_KEY);
 }
 
+const HISTORICAL_KEYS_PREFIX = 'jaby_historical_keys_';
+
+export async function getHistoricalKeyPairs(userId: string): Promise<IdentityKeyPair[]> {
+  const raw = await SecureStore.getItemAsync(HISTORICAL_KEYS_PREFIX + safeKeySuffix(userId));
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as IdentityKeyPair[];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveHistoricalKeyPair(userId: string, pair: IdentityKeyPair): Promise<void> {
+  const existing = await getHistoricalKeyPairs(userId);
+  if (!existing.some(k => k.publicKey === pair.publicKey)) {
+    existing.push(pair);
+    await SecureStore.setItemAsync(HISTORICAL_KEYS_PREFIX + safeKeySuffix(userId), JSON.stringify(existing));
+  }
+}
+
 /** Store this device's real X25519 identity keypair for a given account. */
 export async function saveIdentityKeyPair(userId: string, pair: IdentityKeyPair): Promise<void> {
+  const existing = await getIdentityKeyPair(userId);
+  if (existing && existing.publicKey !== pair.publicKey) {
+    // Preserve old keypair in historical keyring so past messages can still be decrypted
+    await saveHistoricalKeyPair(userId, existing);
+  }
   await SecureStore.setItemAsync(IDENTITY_KEYPAIR_PREFIX + safeKeySuffix(userId), JSON.stringify(pair));
 }
 
