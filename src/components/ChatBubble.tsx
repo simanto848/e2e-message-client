@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator } from 'react-native';
-import { ShieldCheck, Flame, Check, CheckCheck, Play, Pause, Trash2, Key, ImageIcon, Phone, PhoneOff, Video } from './Icons';
+import { ShieldCheck, Flame, Check, CheckCheck, Play, Pause, Trash2, ImageIcon, Phone, PhoneOff, Video } from './Icons';
 import { Message } from '../types';
 import { colors, shadows } from '../theme';
 
@@ -9,7 +9,7 @@ type ImageResolution = { status: 'loading' } | { status: 'ready'; dataUri: strin
 interface Props {
   message: Message;
   isMe: boolean;
-  onInspectCiphertext: (msg: Message) => void;
+  onInspectCiphertext?: (msg: Message) => void;
   onDeleteForEveryone?: (msgId: string) => void;
   onPlayAudio?: (msg: Message) => void;
   isPlayingAudio?: boolean;
@@ -235,15 +235,6 @@ export function ChatBubble({
 
         {/* Bubble Footer */}
         <View style={styles.bubbleFooter}>
-          {/* Ciphertext inspector trigger */}
-          <TouchableOpacity
-            style={[styles.cipherTag, isMe && styles.myCipherTag]}
-            onPress={() => onInspectCiphertext(message)}
-          >
-            <Key size={10} color={isMe ? '#d1fae5' : '#059669'} />
-            <Text style={[styles.cipherTagText, isMe && styles.myCipherTagText]}>E2EE</Text>
-          </TouchableOpacity>
-
           <View style={styles.timeStatusRow}>
             <Text style={[styles.timeText, isMe && styles.myTimeText]}>
               {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -336,31 +327,9 @@ const styles = StyleSheet.create({
   bubbleFooter: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 8,
-    paddingTop: 6,
-    gap: 12,
-  },
-  cipherTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: colors.primaryLight,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  myCipherTag: {
-    backgroundColor: 'rgba(0,0,0,0.15)',
-  },
-  cipherTagText: {
-    color: '#065f46',
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  myCipherTagText: {
-    color: '#d1fae5',
+    justifyContent: 'flex-end',
+    marginTop: 4,
+    gap: 4,
   },
   timeStatusRow: {
     flexDirection: 'row',
