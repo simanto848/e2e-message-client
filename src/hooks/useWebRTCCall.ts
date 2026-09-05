@@ -5,6 +5,7 @@ import { generateCallSasWords } from '../utils/crypto';
 import { callAudio } from '../utils/callAudio';
 import { webrtcCallEngine } from '../utils/webrtcCall';
 import { requestSinglePermission } from '../utils/permissions';
+import { notificationService } from '../services/notificationService';
 import type { MediaStream } from '../utils/webrtcAdapter';
 
 interface UseWebRTCCallOptions {
@@ -186,6 +187,7 @@ export function useWebRTCCall({
 
     activeCallIdRef.current = pending.callId;
     await callAudio.stopAudio();
+    notificationService.cancelCallNotification().catch(() => {});
 
     try {
       await webrtcCallEngine.acceptCall(
@@ -213,6 +215,7 @@ export function useWebRTCCall({
   };
 
   const handleHangupCall = () => {
+    notificationService.cancelCallNotification().catch(() => {});
     stopCallTimer();
 
     const currentCall = callStateRef.current;

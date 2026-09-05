@@ -86,6 +86,8 @@ import { useAppSecurity } from './src/hooks/useAppSecurity';
 import { useWebRTCCall } from './src/hooks/useWebRTCCall';
 import { ChatHeadOverlay } from './src/components/ChatHeadOverlay';
 import { RestoreSessionModal } from './src/components/RestoreSessionModal';
+import { InAppNotificationBanner } from './src/components/InAppNotificationBanner';
+import { notificationService } from './src/services/notificationService';
 import {
   startBackgroundSync,
   stopBackgroundSync,
@@ -1198,28 +1200,46 @@ export default function App() {
     // Incoming Contact Request
     const unsubReqReceived = socketService.onContactRequestReceived(async req => {
       await reloadDynamicData(currentUser.id);
-      Alert.alert(
-        'New Contact Request',
-        `@${req.sender.handle.replace(/^@+/, '')} (${req.sender.name}) wants to connect.`,
-        [
-          { text: 'View Requests', onPress: () => setShowRequestsModal(true) },
-          { text: 'Dismiss', style: 'cancel' },
-        ]
-      );
+      if (!isDecoyMode) {
+        notificationService.showSecurityNotification({
+          title: 'Contact Request',
+          message: `@${req.sender.handle.replace(/^@+/, '')} (${req.sender.name}) wants to connect securely.`,
+          type: 'verification',
+          onPress: () => setShowRequestsModal(true),
+        }).catch(() => {});
+      }
     });
 
     // Contact Request Accepted
     const unsubReqAccepted = socketService.onContactRequestAccepted(async () => {
       await reloadDynamicData(currentUser.id);
-      Alert.alert('Request Accepted', 'You\'re now connected — you can message each other.');
+      if (!isDecoyMode) {
+        notificationService.showSecurityNotification({
+          title: 'Connection Established',
+          message: 'Contact request accepted. End-to-end encrypted messaging is now active.',
+          type: 'verification',
+        }).catch(() => {});
+      }
     });
 
     // Incoming Encrypted Message
     const unsubMsg = socketService.onReceiveMessage((msg: Message) => {
       if (msg.receiverId === currentUser.id) {
         const knownPublicKey = chatsRef.current.find(c => c.id === msg.senderId)?.participant.publicKey;
-        const { text } = decryptVerified(msg.encryptedPayload, knownPublicKey);
+        const { text, keyMismatch } = decryptVerified(msg.encryptedPayload, knownPublicKey);
         msg.text = text;
+
+        if (keyMismatch && !isDecoyMode) {
+          notificationService.showSecurityNotification({
+            title: 'Key Mismatch Warning',
+            message: 'Incoming message public key does not match verified recipient fingerprint. Possible MITM or key rotation.',
+            type: 'key_change',
+            onPress: () => {
+              const chat = chatsRef.current.find(c => c.id === msg.senderId);
+              if (chat) setSafetyModalChat(chat);
+            },
+          }).catch(() => {});
+        }
 
         const isCurrentlyOpen = activeChatIdRef.current === msg.senderId && currentScreenRef.current === 'chat_detail';
 
@@ -1247,6 +1267,27 @@ export default function App() {
           api.markMessagesAsRead(msg.senderId, msg.chatId).catch(() => {});
         } else {
           socketService.sendStatus(msg.id, msg.chatId, 'delivered');
+
+          const senderProfile = chatsRef.current.find(c => c.id === msg.senderId)?.participant;
+          const currentChat = chatsRef.current.find(c => c.id === msg.senderId);
+          const showPreview = currentChat?.notificationSettings?.showPreview !== false;
+          const isMuted = currentChat?.notificationSettings?.muted === true;
+
+          if (!isMuted) {
+            notificationService.showMessageNotification({
+              senderId: msg.senderId,
+              senderName: senderProfile?.name || 'Encrypted Chat',
+              text: msg.text || '🔒 Encrypted message',
+              chatId: msg.chatId || msg.senderId,
+              avatarUri: senderProfile?.avatar,
+              showPreview,
+              isDecoyMode,
+              onPress: () => {
+                setActiveChatId(msg.senderId);
+                setCurrentScreen('chat_detail');
+              },
+            }).catch(() => {});
+          }
         }
       }
     });
@@ -1355,8 +1396,21 @@ export default function App() {
           sasVerificationWords: sas,
           isReconnecting: false,
         });
+
+        notificationService.showCallNotification({
+          callId: signal.callId,
+          callerId: signal.senderId,
+          callerName: callerProfile.name,
+          callType: signal.type || 'audio',
+          avatarUri: callerProfile.avatar,
+          isDecoyMode,
+          onAccept: () => handleAcceptIncomingCall(),
+          onDecline: () => handleHangupCall(),
+        }).catch(() => {});
+
         api.ackPendingCall().catch(() => {});
       } else if (signal.signalType === 'answer') {
+        notificationService.cancelCallNotification().catch(() => {});
         if (activeCallIdRef.current && signal.callId && signal.callId !== activeCallIdRef.current) {
           return;
         }
@@ -1370,6 +1424,7 @@ export default function App() {
         }
         await webrtcCallEngine.handleRemoteIceCandidate(signal.candidate);
       } else if (signal.signalType === 'hangup' || signal.signalType === 'reject') {
+        notificationService.cancelCallNotification().catch(() => {});
         if (activeCallIdRef.current && signal.callId && signal.callId !== activeCallIdRef.current && pendingIncomingCallRef.current?.callId !== signal.callId) {
           return;
         }
@@ -2171,6 +2226,18 @@ export default function App() {
               onDismiss={() => setIsChatHeadDismissed(true)}
             />
           )}
+        {/* Heads-Up In-App Notification Banner */}
+        <InAppNotificationBanner
+          onOpenChat={chatId => {
+            setActiveChatId(chatId);
+            setCurrentScreen('chat_detail');
+          }}
+          onOpenSecurity={() => {
+            const chat = chats.find(c => c.id === activeChatId);
+            if (chat) setSafetyModalChat(chat);
+            else setCurrentScreen('settings');
+          }}
+        />
       </SafeAreaView>
     </SafeAreaProvider>
   );

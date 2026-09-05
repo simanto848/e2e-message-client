@@ -47,7 +47,7 @@ export async function requestSinglePermission(
         }
       } else if (type === 'notifications') {
         if (Number(Platform.Version) >= 33) {
-          perm = (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS;
+          perm = (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS || 'android.permission.POST_NOTIFICATIONS';
         } else {
           return true;
         }
@@ -111,9 +111,8 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
           PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO,
           PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO
         );
-        if ((PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS) {
-          permissionsToRequest.push((PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS);
-        }
+        const postNotifKey = (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS || 'android.permission.POST_NOTIFICATIONS';
+        permissionsToRequest.push(postNotifKey);
       } else {
         permissionsToRequest.push(
           PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
@@ -143,8 +142,8 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
       }
 
       let notifGranted = true;
-      const postNotifKey = (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS;
-      if (Number(Platform.Version) >= 33 && postNotifKey) {
+      if (Number(Platform.Version) >= 33) {
+        const postNotifKey = (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS || 'android.permission.POST_NOTIFICATIONS';
         notifGranted =
           (granted as Record<string, string>)[postNotifKey] ===
             PermissionsAndroid.RESULTS.GRANTED ||
@@ -219,8 +218,9 @@ export async function checkAppPermissions(): Promise<AppPermissionsStatus> {
       }
 
       let notifications = true;
-      if (Number(Platform.Version) >= 33 && (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS) {
-        notifications = await PermissionsAndroid.check((PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS);
+      if (Number(Platform.Version) >= 33) {
+        const postNotifKey = (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS || 'android.permission.POST_NOTIFICATIONS';
+        notifications = await PermissionsAndroid.check(postNotifKey);
       }
 
       return {

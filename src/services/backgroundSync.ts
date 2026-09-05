@@ -2,6 +2,7 @@ import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from './api';
 import { chatHeadNative } from './chatHeadNative';
+import { notificationService } from './notificationService';
 import { socketService } from './socket';
 
 const KEY_BACKGROUND_SYNC = '@jaby_background_sync_enabled';
@@ -71,6 +72,16 @@ export function startBackgroundSync(callbacks: SyncCallbacks): void {
         // If there's an incoming call offer waiting
         if (res.pendingCall && res.pendingCall.signalPayload) {
           activeCallbacks.onIncomingCall?.(res.pendingCall.signalPayload);
+
+          if (AppState.currentState !== 'active') {
+            notificationService.showCallNotification({
+              callId: res.pendingCall.callId,
+              callerId: res.pendingCall.senderId,
+              callerName: res.pendingCall.senderName || 'Contact',
+              callType: res.pendingCall.callType || 'audio',
+              avatarUri: res.pendingCall.senderAvatar,
+            }).catch(() => {});
+          }
         }
 
         // If unread messages exist
@@ -80,21 +91,30 @@ export function startBackgroundSync(callbacks: SyncCallbacks): void {
             unreadThreads: res.unreadThreads || [],
           });
 
-          // If outside the app, automatically show or update the native floating chat head over Android
-          if (
-            chatHeadsActive &&
-            AppState.currentState !== 'active' &&
-            res.unreadThreads &&
-            res.unreadThreads.length > 0
-          ) {
-            const topThread = res.unreadThreads[0];
-            chatHeadNative
-              .showNativeChatHead({
-                contactId: topThread.peerId,
-                contactName: topThread.peerName || 'Chat',
-                unreadCount: topThread.unreadCount || res.totalUnread,
-              })
-              .catch(() => {});
+          // If outside the app, dispatch OS notification and update the native floating chat head
+          if (AppState.currentState !== 'active' && res.unreadThreads && res.unreadThreads.length > 0) {
+            for (const thread of res.unreadThreads) {
+              if (thread.unreadCount > 0) {
+                notificationService.showMessageNotification({
+                  senderId: thread.peerId,
+                  senderName: thread.peerName || 'Encrypted Chat',
+                  text: `${thread.unreadCount} new encrypted message${thread.unreadCount > 1 ? 's' : ''}`,
+                  chatId: thread.peerId,
+                  avatarUri: thread.peerAvatar,
+                }).catch(() => {});
+              }
+            }
+
+            if (chatHeadsActive) {
+              const topThread = res.unreadThreads[0];
+              chatHeadNative
+                .showNativeChatHead({
+                  contactId: topThread.peerId,
+                  contactName: topThread.peerName || 'Chat',
+                  unreadCount: topThread.unreadCount || res.totalUnread,
+                })
+                .catch(() => {});
+            }
           }
         }
       }
