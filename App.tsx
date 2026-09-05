@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, StatusBar, Alert, AppState, BackHandler, ToastAndroid, Platform } from 'react-native';
+import { StyleSheet, View, StatusBar, Alert, AppState, BackHandler, ToastAndroid, Platform, InteractionManager } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ScreenCapture from 'expo-screen-capture';
 import * as Updates from 'expo-updates';
@@ -958,32 +958,6 @@ export default function App() {
     const loadedHKeys = await getHistoricalKeyPairs(user.id);
     setHistoricalKeys(loadedHKeys);
 
-    // Auto-escrow current key so future session removes won't lose it
-    if (pinCode && !restoredFromCloud) {
-      try {
-        const backupPayload: BackupPayload = {
-          version: 2,
-          exportedAt: Date.now(),
-          identityKeyPair: keyPair,
-          historicalKeyPairs: loadedHKeys,
-        };
-        const blob = encryptBackup(backupPayload, pinCode);
-        await api.saveCloudBackup(
-          {
-            encryptedData: blob.encryptedData,
-            salt: blob.salt,
-            iv: blob.iv,
-            backupSizeKb: Math.ceil(blob.encryptedData.length / 1024),
-            backupVersion: '2.5.0-E2EE',
-            totalMessagesCount: 0,
-            totalChatsCount: 0,
-            keyFingerprint: user.fingerprintHash,
-          },
-          token
-        ).catch(() => {});
-      } catch {}
-    }
-
     // Synchronize privacy preferences from database
     applyPrivacySettings({
       blockScreenshots: user.blockScreenshots,
@@ -998,11 +972,49 @@ export default function App() {
       setCloudBackupMetadata(prev => ({ ...prev, backupFrequency: freq }));
     }
 
+    // Switch screen immediately so user enters chat list with zero delay
     setCurrentUser(user);
     setCurrentScreen('chat_list');
-    await socketService.connect();
-    await reloadDynamicData(user.id);
-    performAutoBackupIfNeeded(user, keyPair.secretKey);
+
+    // Connect realtime socket and load dynamic contacts without blocking
+    socketService.connect().catch(() => {});
+    reloadDynamicData(user.id).catch(() => {});
+
+    // Defer heavy cryptographic auto-escrow and scheduled backup to run after
+    // screen transitions have completed, keeping the UI instantly interactive
+    InteractionManager.runAfterInteractions(() => {
+      setTimeout(async () => {
+        if (pinCode && !restoredFromCloud) {
+          try {
+            const backupPayload: BackupPayload = {
+              version: 2,
+              exportedAt: Date.now(),
+              identityKeyPair: keyPair,
+              historicalKeyPairs: loadedHKeys,
+            };
+            const blob = encryptBackup(backupPayload, pinCode);
+            await api.saveCloudBackup(
+              {
+                encryptedData: blob.encryptedData,
+                salt: blob.salt,
+                iv: blob.iv,
+                backupSizeKb: Math.ceil(blob.encryptedData.length / 1024),
+                backupVersion: '2.5.0-E2EE',
+                totalMessagesCount: 0,
+                totalChatsCount: 0,
+                keyFingerprint: user.fingerprintHash,
+              },
+              token
+            ).catch(() => {});
+            cloudBackupMetaRef.current = {
+              ...cloudBackupMetaRef.current,
+              lastBackupTime: Date.now(),
+            };
+          } catch {}
+        }
+        performAutoBackupIfNeeded(user, keyPair.secretKey);
+      }, 300);
+    });
   };
 
   // Pull-to-refresh handler for chat list

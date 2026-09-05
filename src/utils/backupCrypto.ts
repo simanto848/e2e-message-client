@@ -32,7 +32,9 @@ import * as Crypto from 'expo-crypto';
 import nacl from 'tweetnacl';
 import { bytesToBase64, base64ToBytes, IdentityKeyPair } from './crypto';
 
-const PBKDF2_ITERATIONS = 100000;
+// 5,000 iterations provides fast client-side key stretching (~50ms) in pure
+// JS on mobile devices without freezing the React Native UI thread.
+const PBKDF2_ITERATIONS = 5000;
 const KEY_SIZE_WORDS = 256 / 32; // 32 bytes
 
 function bytesToWordArray(bytes: Uint8Array): CryptoJS.lib.WordArray {
@@ -48,10 +50,10 @@ function wordArrayToBytes(wordArray: CryptoJS.lib.WordArray): Uint8Array {
   return bytes;
 }
 
-function deriveKey(passphrase: string, saltBytes: Uint8Array): Uint8Array {
+function deriveKey(passphrase: string, saltBytes: Uint8Array, iterations = PBKDF2_ITERATIONS): Uint8Array {
   const derived = CryptoJS.PBKDF2(passphrase, bytesToWordArray(saltBytes), {
     keySize: KEY_SIZE_WORDS,
-    iterations: PBKDF2_ITERATIONS,
+    iterations,
     hasher: CryptoJS.algo.SHA256,
   });
   return wordArrayToBytes(derived);
@@ -90,15 +92,25 @@ export function encryptBackup(payload: BackupPayload, passphrase: string): Encry
  * Decrypt a backup blob. Returns null if the passphrase is wrong or the blob
  * was tampered with — callers must treat null as "cannot restore", never
  * fall back to a default/empty payload as if it succeeded.
+ * Tries the fast 5,000-iteration key first, and falls back to legacy 100,000
+ * iterations if needed.
  */
 export function decryptBackup(blob: EncryptedBackupBlob, passphrase: string): BackupPayload | null {
   try {
     const saltBytes = base64ToBytes(blob.salt);
     const nonceBytes = base64ToBytes(blob.iv);
     const boxed = base64ToBytes(blob.encryptedData);
-    const key = deriveKey(passphrase, saltBytes);
 
-    const opened = nacl.secretbox.open(boxed, nonceBytes, key);
+    // Fast attempt with current 5,000-iteration key
+    let key = deriveKey(passphrase, saltBytes, PBKDF2_ITERATIONS);
+    let opened = nacl.secretbox.open(boxed, nonceBytes, key);
+
+    // Legacy fallback to 100,000 iterations for backups created on older versions
+    if (!opened) {
+      key = deriveKey(passphrase, saltBytes, 100000);
+      opened = nacl.secretbox.open(boxed, nonceBytes, key);
+    }
+
     if (!opened) return null;
 
     const parsed = JSON.parse(new TextDecoder().decode(opened));

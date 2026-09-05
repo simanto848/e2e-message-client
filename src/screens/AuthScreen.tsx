@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, BackHandler } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, BackHandler, Animated, Easing } from 'react-native';
 import { ShieldCheck, Lock, KeyRound, Ticket, Fingerprint, ArrowRight, User } from '../components/Icons';
 import { JabyLogo } from '../components/JabyLogo';
 import { UserProfile } from '../types';
@@ -15,7 +15,7 @@ interface Props {
     token: string,
     freshKeyPair?: IdentityKeyPair,
     pinCode?: string
-  ) => void;
+  ) => void | Promise<void>;
 }
 
 export function AuthScreen({ onAuthenticated }: Props) {
@@ -25,6 +25,43 @@ export function AuthScreen({ onAuthenticated }: Props) {
   const [pinCode, setPinCode] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState('Verifying credentials...');
+
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Animation loop for loader overlay
+  useEffect(() => {
+    if (!loading) {
+      spinAnim.setValue(0);
+      pulseAnim.setValue(1);
+      return;
+    }
+
+    const spin = Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 1300,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.2, duration: 650, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 650, useNativeDriver: true }),
+      ])
+    );
+
+    spin.start();
+    pulse.start();
+
+    return () => {
+      spin.stop();
+      pulse.stop();
+    };
+  }, [loading]);
 
   // When in registration view, pressing hardware back returns to login view
   useEffect(() => {
@@ -48,16 +85,29 @@ export function AuthScreen({ onAuthenticated }: Props) {
     }
 
     setLoading(true);
+    setLoadingStep('Verifying security credentials...');
+
+    const timer1 = setTimeout(() => {
+      setLoadingStep('Unlocking cryptographic enclave...');
+    }, 600);
+
+    const timer2 = setTimeout(() => {
+      setLoadingStep('Establishing secure session...');
+    }, 1300);
+
     try {
       const res = await api.login(handle, pinCode);
       if (res.success && res.user && res.token) {
-        onAuthenticated(res.user, res.token, undefined, pinCode);
+        setLoadingStep('Entering secure enclave...');
+        await onAuthenticated(res.user, res.token, undefined, pinCode);
       } else {
         Alert.alert('Authentication Failed', res.error || 'Invalid credentials, or the server is unreachable.');
       }
     } catch {
       Alert.alert('Connection Error', 'Unable to reach the backend server. Please try again.');
     } finally {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
       setLoading(false);
     }
   };
@@ -73,6 +123,12 @@ export function AuthScreen({ onAuthenticated }: Props) {
     }
 
     setLoading(true);
+    setLoadingStep('Generating X25519 identity keys...');
+
+    const timer1 = setTimeout(() => {
+      setLoadingStep('Registering account with enclave...');
+    }, 800);
+
     try {
       const keyPair = generateIdentityKeyPair();
       const fingerprint = await computeFingerprint(keyPair.publicKey);
@@ -87,6 +143,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
       });
 
       if (res.success && res.user && res.token) {
+        setLoadingStep('Encrypting zero-knowledge backup...');
         try {
           const payload: BackupPayload = {
             version: 2,
@@ -111,14 +168,15 @@ export function AuthScreen({ onAuthenticated }: Props) {
           console.warn('[Register] Cloud backup auto-escrow failed:', backupErr);
         }
 
-        Alert.alert('Account Created', `Welcome, ${name}!`);
-        onAuthenticated(res.user, res.token, keyPair, pinCode);
+        setLoadingStep('Account created! Entering enclave...');
+        await onAuthenticated(res.user, res.token, keyPair, pinCode);
       } else {
         Alert.alert('Registration Error', res.error || 'Failed to redeem invite code');
       }
     } catch {
       Alert.alert('Error', 'Unable to connect to backend server.');
     } finally {
+      clearTimeout(timer1);
       setLoading(false);
     }
   };
@@ -317,6 +375,62 @@ export function AuthScreen({ onAuthenticated }: Props) {
           </Text>
         </View>
       </ScrollView>
+
+      {/* High-Tech Security Enclave Loader Overlay */}
+      {loading && (
+        <View style={styles.loadingOverlay}>
+          <View style={styles.loadingCard}>
+            <View style={styles.loaderVisualWrapper}>
+              {/* Outer pulsing glow ring */}
+              <Animated.View
+                style={[
+                  styles.loaderPulsingRing,
+                  { transform: [{ scale: pulseAnim }] },
+                ]}
+              />
+
+              {/* Rotating orbital ring */}
+              <Animated.View
+                style={[
+                  styles.loaderRotatingRing,
+                  {
+                    transform: [
+                      {
+                        rotate: spinAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: ['0deg', '360deg'],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              />
+
+              {/* Center emblem */}
+              <View style={styles.loaderCenterIcon}>
+                <ShieldCheck size={28} color="#10b981" />
+              </View>
+            </View>
+
+            <Text style={styles.loadingTitle}>
+              {isRegisterMode ? 'Creating Enclave Account' : 'Authenticating Operative'}
+            </Text>
+            <Text style={styles.loadingSubtitle}>{loadingStep}</Text>
+
+            {/* Micro Status Dots */}
+            <View style={styles.loadingDotsRow}>
+              <View style={[styles.loadingDot, styles.loadingDot1]} />
+              <View style={[styles.loadingDot, styles.loadingDot2]} />
+              <View style={[styles.loadingDot, styles.loadingDot3]} />
+            </View>
+
+            <View style={styles.securityBadge}>
+              <Lock size={11} color="#047857" />
+              <Text style={styles.securityBadgeText}>256-BIT ZERO KNOWLEDGE</Text>
+            </View>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -491,5 +605,112 @@ const styles = StyleSheet.create({
   strengthFeedback: {
     fontSize: 11,
     color: colors.textMuted,
+  },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 9999,
+    paddingHorizontal: 24,
+  },
+  loadingCard: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    ...shadows.lg,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  loaderVisualWrapper: {
+    width: 84,
+    height: 84,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 18,
+  },
+  loaderPulsingRing: {
+    position: 'absolute',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(16, 185, 129, 0.18)',
+  },
+  loaderRotatingRing: {
+    position: 'absolute',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 2.5,
+    borderColor: '#10b981',
+    borderTopColor: 'transparent',
+    borderRightColor: '#a7f3d0',
+  },
+  loaderCenterIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#ecfdf5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  loadingTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  loadingSubtitle: {
+    fontSize: 13,
+    color: '#64748b',
+    textAlign: 'center',
+    fontWeight: '600',
+    minHeight: 20,
+  },
+  loadingDotsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 14,
+    marginBottom: 16,
+  },
+  loadingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10b981',
+  },
+  loadingDot1: {
+    opacity: 0.4,
+  },
+  loadingDot2: {
+    opacity: 0.7,
+  },
+  loadingDot3: {
+    opacity: 1,
+  },
+  securityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  securityBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#047857',
+    letterSpacing: 0.8,
   },
 });
