@@ -23,33 +23,53 @@ export function SafetyNumberModal({
   currentUser,
   participant: directParticipant,
   safetyNumber: initialSafetyNumber,
-  isVerified: initialIsVerified = true,
+  isVerified: initialIsVerified = false,
   onToggleVerify,
   onClose,
 }: Props) {
   const participant = chat?.participant || directParticipant;
-  const [computedSafetyNumber, setComputedSafetyNumber] = useState<string>(
-    initialSafetyNumber || '48912 00291 88391 00293 88192 39102 88471 00921 77381 99281 33019 44812'
-  );
+  const [computedSafetyNumber, setComputedSafetyNumber] = useState<string | null>(initialSafetyNumber || null);
   const [isVerified, setIsVerified] = useState(initialIsVerified);
+  const [isComputing, setIsComputing] = useState(false);
 
   useEffect(() => {
+    setIsVerified(initialIsVerified);
+  }, [initialIsVerified, participant?.id]);
+
+  useEffect(() => {
+    let active = true;
     if (currentUser?.publicKey && participant?.publicKey) {
-      generateSafetyNumbers(currentUser.publicKey, participant.publicKey).then(num => {
-        setComputedSafetyNumber(num);
-      });
+      setIsComputing(true);
+      generateSafetyNumbers(currentUser.publicKey, participant.publicKey)
+        .then(num => {
+          if (active) {
+            setComputedSafetyNumber(num);
+            setIsComputing(false);
+          }
+        })
+        .catch(() => {
+          if (active) setIsComputing(false);
+        });
     } else if (initialSafetyNumber) {
       setComputedSafetyNumber(initialSafetyNumber);
+    } else {
+      setComputedSafetyNumber(null);
     }
-  }, [currentUser?.publicKey, participant?.publicKey, initialSafetyNumber]);
+    return () => {
+      active = false;
+    };
+  }, [currentUser?.publicKey, participant?.publicKey, participant?.id, initialSafetyNumber]);
 
   if (!participant) return null;
 
+  const displaySafetyNumber = computedSafetyNumber || (isComputing ? 'Computing safety number…' : 'Awaiting keys');
   const copySafetyNumber = async () => {
-    await Clipboard.setStringAsync(computedSafetyNumber);
+    if (computedSafetyNumber) {
+      await Clipboard.setStringAsync(computedSafetyNumber);
+    }
   };
 
-  const chunks = computedSafetyNumber.split(' ');
+  const chunks = computedSafetyNumber ? computedSafetyNumber.split(' ') : [];
 
   return (
     <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>

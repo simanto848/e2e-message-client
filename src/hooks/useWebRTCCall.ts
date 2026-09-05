@@ -215,8 +215,10 @@ export function useWebRTCCall({
     setLocalStream(null);
     setRemoteStream(null);
     pendingIncomingCallRef.current = null;
-    activeCallIdRef.current = null;
-    onLogCallToChat(callStateRef.current, 'missed');
+    const finalReason = callStateRef.current.status === 'connected' || callStateRef.current.duration > 0
+      ? 'completed'
+      : (callState.isIncoming ? 'declined' : 'missed');
+    onLogCallToChat(callStateRef.current, finalReason);
     setCallState(prev => ({ ...prev, active: false, status: 'ended', duration: 0 }));
   };
 

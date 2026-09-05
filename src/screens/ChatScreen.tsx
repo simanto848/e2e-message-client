@@ -147,8 +147,8 @@ export function ChatScreen({
 
   const handleAttachImage = async () => {
     beginExternalActivity();
-    let perm: ImagePicker.PermissionResponse;
-    let result: ImagePicker.ImagePickerResult;
+    let perm: ImagePicker.PermissionResponse | null = null;
+    let result: ImagePicker.ImagePickerResult | null = null;
     try {
       perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
@@ -160,10 +160,13 @@ export function ChatScreen({
         mediaTypes: ['images'],
         quality: 0.7,
       });
+    } catch (err) {
+      console.warn('[ChatScreen] Error selecting image:', err);
+      return;
     } finally {
       endExternalActivity();
     }
-    if (result.canceled || !result.assets?.[0]) return;
+    if (!result || result.canceled || !result.assets?.[0]) return;
 
     const asset = result.assets[0];
     setIsSendingImage(true);
@@ -218,6 +221,7 @@ export function ChatScreen({
   // crypto keys. Runs as an effect (not during FlatList's renderItem) so it
   // never triggers a state update mid-render.
   useEffect(() => {
+    let isCancelled = false;
     const pending = messages.filter(
       m => m.attachment?.type === 'image' && !resolvedImages[m.attachment.id]
     );
@@ -234,6 +238,7 @@ export function ChatScreen({
       setResolvedImages(prev => ({ ...prev, [attachment.id]: { status: 'loading' } }));
       api.getMedia(attachment.id)
         .then(res => {
+          if (isCancelled) return;
           if (!res.success || !res.attachment) throw new Error(res.error || 'Not found');
           const key = theirPublicKey || res.attachment.encryptedPayload.senderPublicKey;
           let plaintext = decryptMessage(res.attachment.encryptedPayload, mySecretKey, key);
@@ -244,14 +249,20 @@ export function ChatScreen({
             }
           }
           if (!plaintext) throw new Error('Decryption failed');
+          if (isCancelled) return;
           const mimeType = attachment.mimeType || 'image/jpeg';
           setResolvedImages(prev => ({ ...prev, [attachment.id]: { status: 'ready', dataUri: `data:${mimeType};base64,${plaintext}` } }));
         })
         .catch(err => {
+          if (isCancelled) return;
           console.warn('[ChatScreen] Image decrypt failed:', err);
           setResolvedImages(prev => ({ ...prev, [attachment.id]: { status: 'error' } }));
         });
     }
+
+    return () => {
+      isCancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, historicalKeys]);
 
@@ -548,7 +559,6 @@ export function ChatScreen({
               placeholderTextColor={colors.textMuted}
               value={inputText}
               onChangeText={setInputText}
-              autoFocus={true}
               returnKeyType="send"
               onSubmitEditing={handleSend}
               blurOnSubmit={false}

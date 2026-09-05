@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, Image, StyleSheet, StyleProp, ViewStyle, ImageStyle } from 'react-native';
 
 interface Props {
   uri?: string;
-  name: string;
+  name?: string;
   size: number;
   style?: StyleProp<ImageStyle | ViewStyle>;
 }
@@ -12,15 +12,17 @@ interface Props {
 // color (no per-render flicker, no need to persist a chosen color anywhere).
 const PALETTE = ['#10b981', '#0284c7', '#7c3aed', '#f59e0b', '#ef4444', '#059669', '#0ea5e9', '#8b5cf6'];
 
-function colorForName(name: string): string {
+function colorForName(name?: string): string {
+  const safe = name || '?';
   let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = (hash * 31 + name.charCodeAt(i)) | 0;
+  for (let i = 0; i < safe.length; i++) {
+    hash = (hash * 31 + safe.charCodeAt(i)) | 0;
   }
   return PALETTE[Math.abs(hash) % PALETTE.length];
 }
 
-function initialsForName(name: string): string {
+function initialsForName(name?: string): string {
+  if (!name || typeof name !== 'string') return '?';
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
@@ -36,6 +38,10 @@ function initialsForName(name: string): string {
  */
 export function Avatar({ uri, name, size, style }: Props) {
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [uri]);
 
   // Caller `style` goes first and the computed size/color object second, so
   // layout props from the caller (e.g. marginRight) still apply but can't

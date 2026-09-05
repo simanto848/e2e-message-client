@@ -46,6 +46,8 @@ export function VoiceRecorder({
   // button lives in the `false` branch and swaps to a fresh mount of this
   // component on press), so starting the real microphone capture on mount
   // is the right lifecycle hook.
+  const handleSendRef = useRef<() => void>(() => {});
+
   useEffect(() => {
     cancelledRef.current = false;
     let interval: NodeJS.Timeout;
@@ -58,7 +60,16 @@ export function VoiceRecorder({
         }
         recordingRef.current = recording;
         setSeconds(0);
-        interval = setInterval(() => setSeconds(s => s + 1), 1000);
+        interval = setInterval(() => {
+          setSeconds(s => {
+            if (s + 1 >= 300) {
+              clearInterval(interval);
+              setTimeout(() => handleSendRef.current(), 0);
+              return 300;
+            }
+            return s + 1;
+          });
+        }, 1000);
       })
       .catch(err => {
         console.warn('[VoiceRecorder] Failed to start recording:', err);
@@ -66,15 +77,17 @@ export function VoiceRecorder({
         onCancelRecord();
       });
 
-    Animated.loop(
+    const loopAnim = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, { toValue: 1.3, duration: 600, useNativeDriver: true }),
         Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
       ])
-    ).start();
+    );
+    loopAnim.start();
 
     return () => {
       cancelledRef.current = true;
+      loopAnim.stop();
       if (interval) clearInterval(interval);
       // If this unmounts without an explicit send (e.g. the screen changes
       // mid-recording), stop and discard rather than leaking an open
@@ -151,6 +164,7 @@ export function VoiceRecorder({
       setIsUploading(false);
     }
   };
+  handleSendRef.current = handleSend;
 
   if (!isRecording) {
     return (

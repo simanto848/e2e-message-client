@@ -66,15 +66,13 @@ export function CallModal({
   localStream,
   remoteStream,
 }: Props) {
-  if (!callState.active) return null;
-
   const [waveBars, setWaveBars] = useState([12, 24, 16, 32, 20, 28, 14]);
   const ringPulseAnim = useRef(new Animated.Value(1)).current;
 
   // Pulsing avatar ring while the call is ringing (either direction) —
   // gives a clear "something is happening" signal before the peer answers.
   useEffect(() => {
-    if (callState.status !== 'ringing') {
+    if (!callState.active || callState.status !== 'ringing') {
       ringPulseAnim.setValue(1);
       return;
     }
@@ -86,11 +84,11 @@ export function CallModal({
     );
     loop.start();
     return () => loop.stop();
-  }, [callState.status]);
+  }, [callState.active, callState.status]);
 
   // Audio waveform animation loop
   useEffect(() => {
-    if (callState.status !== 'connected' || callState.isMuted) return;
+    if (!callState.active || callState.status !== 'connected' || callState.isMuted) return;
     const interval = setInterval(() => {
       setWaveBars([
         Math.floor(Math.random() * 24) + 8,
@@ -103,7 +101,9 @@ export function CallModal({
       ]);
     }, 200);
     return () => clearInterval(interval);
-  }, [callState.status, callState.isMuted]);
+  }, [callState.active, callState.status, callState.isMuted]);
+
+  if (!callState.active) return null;
 
   const formatDuration = (secs: number) => {
     const mins = Math.floor(secs / 60);

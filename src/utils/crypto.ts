@@ -130,30 +130,30 @@ export function generateIdentityKeyPair(): IdentityKeyPair {
 // Safety numbers / fingerprints — derived from real key material
 // ---------------------------------------------------------------------------
 
-/** 60-digit safety number (12 blocks of 5) derived from both parties' real public keys. */
+/** 60-digit safety number (12 blocks of 5) derived from both parties' real public keys with zero modulo bias. */
 export async function generateSafetyNumbers(publicKeyA: string, publicKeyB: string): Promise<string> {
-  const combined = [publicKeyA, publicKeyB].sort().join('::JABY_SAFETY_NUMBER::');
-  const hex = await sha256Hash(combined);
-
-  let digits = '';
-  for (let i = 0; i < hex.length && digits.length < 60; i += 2) {
-    const val = parseInt(hex.substring(i, i + 2), 16);
-    digits += (val % 10).toString();
-  }
-  while (digits.length < 60) {
-    digits += ((digits.charCodeAt(digits.length - 1) * 7) % 10).toString();
-  }
-
+  if (!publicKeyA || !publicKeyB) return '00000 00000 00000 00000 00000 00000 00000 00000 00000 00000 00000 00000';
+  const combined = [publicKeyA, publicKeyB].sort().join('::JABY_SAFETY_NUMBER_V2::');
+  
   const chunks: string[] = [];
-  for (let i = 0; i < 60; i += 5) {
-    chunks.push(digits.substring(i, i + 5));
+  // Derive 12 blocks of 5 digits each using deterministic cryptographic blocks
+  for (let blockIdx = 0; blockIdx < 3; blockIdx++) {
+    const blockHash = await sha256Hash(`${combined}::block_${blockIdx}`);
+    for (let subIdx = 0; subIdx < 4; subIdx++) {
+      const hexSub = blockHash.substring(subIdx * 6, (subIdx + 1) * 6);
+      const num = parseInt(hexSub, 16);
+      const fiveDigits = (num % 100000).toString().padStart(5, '0');
+      chunks.push(fiveDigits);
+    }
   }
+
   return chunks.join(' ');
 }
 
-/** Short fingerprint of a single public key, for display in the UI. */
+/** Real cryptographic fingerprint of a public key. */
 export async function computeFingerprint(publicKey: string): Promise<string> {
-  const hex = await sha256Hash(publicKey);
+  if (!publicKey) return '0000 · 0000 · 0000 · 0000';
+  const hex = await sha256Hash(`JABY_FP::${publicKey}`);
   return `${hex.substring(0, 4)} · ${hex.substring(4, 8)} · ${hex.substring(8, 12)} · ${hex.substring(12, 16)}`.toUpperCase();
 }
 

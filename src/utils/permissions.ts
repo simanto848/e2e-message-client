@@ -1,4 +1,6 @@
 import { Platform, PermissionsAndroid, Alert, Linking } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { Audio } from 'expo-av';
 import { beginExternalActivity, endExternalActivity } from './appLockGuard';
 
 export interface AppPermissionsStatus {
@@ -26,40 +28,52 @@ export async function openAppSettings() {
  * Request a single hardware permission
  */
 export async function requestSinglePermission(type: 'camera' | 'microphone' | 'photos'): Promise<boolean> {
-  if (Platform.OS !== 'android') return true;
-
   beginExternalActivity();
   try {
-    let perm: any = null;
-    if (type === 'camera') {
-      perm = PermissionsAndroid.PERMISSIONS.CAMERA;
-    } else if (type === 'microphone') {
-      perm = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
-    } else if (type === 'photos') {
-      if (Number(Platform.Version) >= 33) {
-        perm = PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES;
-      } else {
-        perm = PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE;
+    if (Platform.OS === 'android') {
+      let perm: any = null;
+      if (type === 'camera') {
+        perm = PermissionsAndroid.PERMISSIONS.CAMERA;
+      } else if (type === 'microphone') {
+        perm = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
+      } else if (type === 'photos') {
+        if (Number(Platform.Version) >= 33) {
+          perm = PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES;
+        } else {
+          perm = PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE;
+        }
+      }
+
+      if (!perm) return true;
+
+      const result = await PermissionsAndroid.request(perm);
+      if (result === PermissionsAndroid.RESULTS.GRANTED) {
+        return true;
+      } else if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+        Alert.alert(
+          'Permission Required',
+          `Please enable ${type} permission in your device Settings to use this feature.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => openAppSettings() },
+          ]
+        );
+        return false;
+      }
+      return false;
+    } else if (Platform.OS === 'ios') {
+      if (type === 'camera') {
+        const res = await ImagePicker.requestCameraPermissionsAsync();
+        return res.granted;
+      } else if (type === 'microphone') {
+        const res = await Audio.requestPermissionsAsync();
+        return res.granted;
+      } else if (type === 'photos') {
+        const res = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        return res.granted;
       }
     }
-
-    if (!perm) return true;
-
-    const result = await PermissionsAndroid.request(perm);
-    if (result === PermissionsAndroid.RESULTS.GRANTED) {
-      return true;
-    } else if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
-      Alert.alert(
-        'Permission Required',
-        `Please enable ${type} permission in your device Settings to use this feature.`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Open Settings', onPress: () => openAppSettings() },
-        ]
-      );
-      return false;
-    }
-    return false;
+    return true;
   } catch (err) {
     console.warn(`Failed to request ${type} permission:`, err);
     return false;
@@ -114,11 +128,6 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
           (await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE));
       }
 
-      const anyNeverAskAgain = Object.values(granted).includes(PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN);
-      if (!photosGranted && anyNeverAskAgain) {
-        // Offer settings shortcut if permanently blocked
-      }
-
       return {
         camera: cameraGranted,
         microphone: micGranted,
@@ -131,9 +140,34 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
     } finally {
       endExternalActivity();
     }
+  } else if (Platform.OS === 'ios') {
+    beginExternalActivity();
+    try {
+      const [cameraRes, micRes, photosRes] = await Promise.all([
+        ImagePicker.requestCameraPermissionsAsync().catch(() => ({ granted: false })),
+        Audio.requestPermissionsAsync().catch(() => ({ granted: false })),
+        ImagePicker.requestMediaLibraryPermissionsAsync().catch(() => ({ granted: false })),
+      ]);
+
+      const camera = cameraRes.granted;
+      const microphone = micRes.granted;
+      const photos = photosRes.granted;
+
+      return {
+        camera,
+        microphone,
+        photos,
+        allGranted: camera && microphone && photos,
+      };
+    } catch (err) {
+      console.warn('Failed to request iOS permissions:', err);
+      return checkAppPermissions();
+    } finally {
+      endExternalActivity();
+    }
   }
 
-  // iOS / Web fallback
+  // Web fallback
   return {
     camera: true,
     microphone: true,
@@ -157,6 +191,27 @@ export async function checkAppPermissions(): Promise<AppPermissionsStatus> {
       } else {
         photos = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
       }
+
+      return {
+        camera,
+        microphone,
+        photos,
+        allGranted: camera && microphone && photos,
+      };
+    } catch {
+      return { camera: false, microphone: false, photos: false, allGranted: false };
+    }
+  } else if (Platform.OS === 'ios') {
+    try {
+      const [cameraRes, micRes, photosRes] = await Promise.all([
+        ImagePicker.getCameraPermissionsAsync().catch(() => ({ granted: false })),
+        Audio.getPermissionsAsync().catch(() => ({ granted: false })),
+        ImagePicker.getMediaLibraryPermissionsAsync().catch(() => ({ granted: false })),
+      ]);
+
+      const camera = cameraRes.granted;
+      const microphone = micRes.granted;
+      const photos = photosRes.granted;
 
       return {
         camera,

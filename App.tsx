@@ -286,6 +286,19 @@ export default function App() {
   const [historicalKeys, setHistoricalKeys] = useState<IdentityKeyPair[]>([]);
   const historicalKeysRef = useRef<IdentityKeyPair[]>([]);
   historicalKeysRef.current = historicalKeys;
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+  const mySecretKeyRef = useRef(mySecretKey);
+  mySecretKeyRef.current = mySecretKey;
+  const chatsRef = useRef(chats);
+  chatsRef.current = chats;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const activeChatIdRef = useRef(activeChatId);
+  activeChatIdRef.current = activeChatId;
+  const currentScreenRef = useRef(currentScreen);
+  currentScreenRef.current = currentScreen;
+
   const [cloudBackupInitialMode, setCloudBackupInitialMode] = useState<'backup' | 'restore'>('backup');
   const [restoreSessionPrompt, setRestoreSessionPrompt] = useState<{
     visible: boolean;
@@ -294,17 +307,22 @@ export default function App() {
 
   const logCallToChat = (finalState: CallState, endReason: 'completed' | 'declined' | 'missed') => {
     if (!currentUser || !mySecretKey || !finalState.remoteUser) return;
-    if (finalState.isIncoming) return;
 
     const peer = finalState.remoteUser;
+    const isIncoming = Boolean(finalState.isIncoming);
     const status: 'completed' | 'declined' | 'missed' = finalState.duration > 0 ? 'completed' : endReason;
     const label = finalState.type === 'video' ? 'Video call' : 'Voice call';
-    const text =
-      status === 'completed'
-        ? `📞 ${label} · ${formatCallDuration(finalState.duration)}`
+    const text = isIncoming
+      ? status === 'completed'
+        ? `📞 Incoming ${label} · ${formatCallDuration(finalState.duration)}`
         : status === 'declined'
-        ? `📞 ${label} declined`
-        : `📞 ${label} not answered`;
+        ? `📞 Declined ${label}`
+        : `📞 Missed ${label}`
+      : status === 'completed'
+      ? `📞 ${label} · ${formatCallDuration(finalState.duration)}`
+      : status === 'declined'
+      ? `📞 ${label} declined`
+      : `📞 ${label} not answered`;
 
     const encryptedPayload = encryptMessage(text, mySecretKey, peer.publicKey, currentUser.publicKey);
     const callAttachment: Attachment = {
@@ -321,20 +339,23 @@ export default function App() {
     const newMsg: Message = {
       id: `msg_call_${Date.now()}`,
       chatId: peer.id,
-      senderId: currentUser.id,
-      receiverId: peer.id,
+      senderId: isIncoming ? peer.id : currentUser.id,
+      receiverId: isIncoming ? currentUser.id : peer.id,
       text,
       encryptedPayload,
       timestamp: Date.now(),
-      status: 'sent',
+      status: isIncoming ? 'delivered' : 'sent',
       disappearingTimer: 0,
       attachment: callAttachment,
     };
 
-    setMessages(prev => (activeChatId === peer.id ? [...prev, newMsg] : prev));
+    setMessages(prev => (activeChatIdRef.current === peer.id ? [...prev, newMsg] : prev));
     setChats(prev => prev.map(c => (c.id === peer.id ? { ...c, lastMessage: newMsg, unreadCount: 0 } : c)));
-    api.sendMessage(newMsg).catch(err => console.warn('Call log REST send err:', err));
-    socketService.sendMessage(newMsg);
+
+    if (!isIncoming) {
+      api.sendMessage(newMsg).catch(err => console.warn('Call log REST send err:', err));
+      socketService.sendMessage(newMsg);
+    }
   };
 
   // WebRTC Calling Hook
@@ -736,14 +757,6 @@ export default function App() {
   backupFreqRef.current = backupFrequency;
   const cloudBackupMetaRef = useRef(cloudBackupMetadata);
   cloudBackupMetaRef.current = cloudBackupMetadata;
-  const currentUserRef = useRef(currentUser);
-  currentUserRef.current = currentUser;
-  const mySecretKeyRef = useRef(mySecretKey);
-  mySecretKeyRef.current = mySecretKey;
-  const chatsRef = useRef(chats);
-  chatsRef.current = chats;
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
 
   const performAutoBackupIfNeeded = async (
     overrideUser?: UserProfile,
@@ -1146,23 +1159,22 @@ export default function App() {
       reloadDynamicData(currentUser.id);
       if (activeChatId && mySecretKey) {
         api.getMessages(activeChatId, currentUser.id).then(rawMessages => {
-          const knownPublicKey = chats.find(c => c.id === activeChatId)?.participant.publicKey;
+          const knownPublicKey = chatsRef.current.find(c => c.id === activeChatId)?.participant.publicKey;
           const decryptedList = rawMessages.map(m => {
             if (m.isDeletedForEveryone) return { ...m, text: '' };
             const { text } = decryptVerified(m.encryptedPayload, knownPublicKey);
             return { ...m, text };
           });
           setMessages(prev => {
-            if (JSON.stringify(prev) !== JSON.stringify(decryptedList)) {
-              return decryptedList;
-            }
-            return prev;
+            const map = new Map(prev.map(m => [m.id, m]));
+            decryptedList.forEach(m => map.set(m.id, m));
+            return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp);
           });
         }).catch(() => {});
       }
     }, 3500);
     return () => clearInterval(syncInterval);
-  }, [currentUser, activeChatId, mySecretKey, chats]);
+  }, [currentUser?.id, activeChatId, mySecretKey]);
 
   // 4. Socket Listeners (Real-Time E2EE & Contact Approvals)
   useEffect(() => {
@@ -1192,14 +1204,14 @@ export default function App() {
     // Incoming Encrypted Message
     const unsubMsg = socketService.onReceiveMessage((msg: Message) => {
       if (msg.receiverId === currentUser.id) {
-        const knownPublicKey = chats.find(c => c.id === msg.senderId)?.participant.publicKey;
+        const knownPublicKey = chatsRef.current.find(c => c.id === msg.senderId)?.participant.publicKey;
         const { text } = decryptVerified(msg.encryptedPayload, knownPublicKey);
         msg.text = text;
 
         setMessages(prev => [...prev, msg]);
         callAudio.playMessageSound();
 
-        const isCurrentlyOpen = activeChatId === msg.senderId && currentScreen === 'chat_detail';
+        const isCurrentlyOpen = activeChatIdRef.current === msg.senderId && currentScreenRef.current === 'chat_detail';
 
         // Update chat list last message dynamically
         setChats(prev =>
@@ -1275,7 +1287,7 @@ export default function App() {
 
         const callerProfile =
           signal.senderProfile ||
-          chats.find(c => c.participant?.id === signal.senderId || c.id === signal.senderId)?.participant || {
+          chatsRef.current.find(c => c.participant?.id === signal.senderId || c.id === signal.senderId)?.participant || {
             id: signal.senderId,
             name: 'Unknown Caller',
             handle: '@unknown',
@@ -1290,8 +1302,8 @@ export default function App() {
             fingerprintHash: 'E2EE_PEER_KEY',
           };
 
-        const sas = signal.sasWords || (mySecretKey
-          ? await generateCallSasWords(mySecretKey, callerProfile.publicKey, Date.now())
+        const sas = signal.sasWords || (mySecretKeyRef.current
+          ? await generateCallSasWords(mySecretKeyRef.current, callerProfile.publicKey, Date.now())
           : []);
 
         pendingIncomingCallRef.current = { callId: signal.callId, senderId: signal.senderId, sdp: signal.sdp };
@@ -1376,7 +1388,7 @@ export default function App() {
       unsubPresenceSnapshot();
       unsubPresenceUpdate();
     };
-  }, [currentUser, activeChatId, chats, mySecretKey, backgroundSyncEnabled]);
+  }, [currentUser?.id, backgroundSyncEnabled]);
 
   // 5. Ephemeral Message Self-Destruction Loop
   useEffect(() => {
@@ -1848,8 +1860,10 @@ export default function App() {
         {/* Safety Number Verification Modal */}
         <SafetyNumberModal
           visible={!!safetyModalChat}
+          chat={safetyModalChat}
+          currentUser={currentUser}
           participant={safetyModalChat?.participant || null}
-          safetyNumber={safetyModalChat?.safetyNumber || '48912 00291 88391 00293 88192 39102 88471 00921 77381 99281 33019 44812'}
+          safetyNumber={safetyModalChat?.safetyNumber}
           isVerified={safetyModalChat?.isVerifiedSafetyNumber ?? false}
           onToggleVerify={() => {
             if (!safetyModalChat) return;

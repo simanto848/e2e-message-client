@@ -10,6 +10,7 @@ import {
   Platform,
   TouchableWithoutFeedback,
   Keyboard,
+  Modal,
 } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { ShieldAlert, Fingerprint, Trash2, KeyRound, Lock, ArrowLeft } from './Icons';
@@ -124,113 +125,121 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
   };
 
   return (
-    <View style={styles.overlay}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.centerContainer}
-        >
-          <View style={styles.centerCard}>
-            <View style={styles.iconCircle}>
-              <ShieldAlert size={36} color={colors.danger} />
-            </View>
+    <Modal
+      visible={isLocked}
+      animationType="fade"
+      transparent={false}
+      statusBarTranslucent={true}
+      onRequestClose={() => {}}
+    >
+      <View style={styles.overlay}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.centerContainer}
+          >
+            <View style={styles.centerCard}>
+              <View style={styles.iconCircle}>
+                <ShieldAlert size={36} color={colors.danger} />
+              </View>
 
-            <Text style={styles.title}>APP LOCKED</Text>
-            <Text style={styles.subtitle}>
-              {showPinEntry
-                ? 'Enter your passcode or duress safety PIN.'
-                : 'Unlock JABY to access your messages and calls.'}
-            </Text>
+              <Text style={styles.title}>APP LOCKED</Text>
+              <Text style={styles.subtitle}>
+                {showPinEntry
+                  ? 'Enter your passcode or duress safety PIN.'
+                  : 'Unlock JABY to access your messages and calls.'}
+              </Text>
 
-            {showPinEntry ? (
-              <View style={styles.pinSection}>
-                <View style={styles.pinInputContainer}>
-                  <Lock size={18} color={colors.textMuted} style={styles.pinIcon} />
-                  <TextInput
-                    style={styles.pinInput}
-                    placeholder="Enter PIN..."
-                    placeholderTextColor={colors.textMuted}
-                    secureTextEntry={true}
-                    keyboardType="numeric"
-                    maxLength={16}
-                    value={enteredPin}
-                    onChangeText={text => {
-                      setEnteredPin(text);
-                      if (pinError) setPinError('');
+              {showPinEntry ? (
+                <View style={styles.pinSection}>
+                  <View style={styles.pinInputContainer}>
+                    <Lock size={18} color={colors.textMuted} style={styles.pinIcon} />
+                    <TextInput
+                      style={styles.pinInput}
+                      placeholder="Enter PIN..."
+                      placeholderTextColor={colors.textMuted}
+                      secureTextEntry={true}
+                      keyboardType="numeric"
+                      maxLength={16}
+                      value={enteredPin}
+                      onChangeText={text => {
+                        setEnteredPin(text);
+                        if (pinError) setPinError('');
+                      }}
+                      onSubmitEditing={handlePinSubmit}
+                      autoFocus={true}
+                    />
+                  </View>
+
+                  {pinError ? <Text style={styles.pinErrorText}>{pinError}</Text> : null}
+
+                  <TouchableOpacity style={styles.unlockBtn} onPress={handlePinSubmit}>
+                    <KeyRound size={18} color="#ffffff" />
+                    <Text style={styles.unlockBtnText}>Unlock</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.secondaryBtn}
+                    onPress={() => {
+                      setShowPinEntry(false);
+                      setPinError('');
+                      setEnteredPin('');
                     }}
-                    onSubmitEditing={handlePinSubmit}
-                    autoFocus={true}
-                  />
+                  >
+                    <ArrowLeft size={16} color={colors.textSecondary} />
+                    <Text style={styles.secondaryBtnText}>Use Biometrics</Text>
+                  </TouchableOpacity>
                 </View>
+              ) : (
+                <View style={styles.biometricSection}>
+                  <TouchableOpacity
+                    style={styles.unlockBtn}
+                    onPress={handleBiometricUnlock}
+                    disabled={authenticating}
+                  >
+                    <Fingerprint size={20} color="#ffffff" />
+                    <Text style={styles.unlockBtnText}>
+                      {authenticating ? 'Verifying…' : 'Unlock with Biometrics'}
+                    </Text>
+                  </TouchableOpacity>
 
-                {pinError ? <Text style={styles.pinErrorText}>{pinError}</Text> : null}
+                  <TouchableOpacity
+                    style={styles.secondaryBtn}
+                    onPress={() => {
+                      setShowPinEntry(true);
+                      setPinError('');
+                      setEnteredPin('');
+                    }}
+                  >
+                    <KeyRound size={16} color={colors.textSecondary} />
+                    <Text style={styles.secondaryBtnText}>Enter Passcode / Duress PIN</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
 
-                <TouchableOpacity style={styles.unlockBtn} onPress={handlePinSubmit}>
-                  <KeyRound size={18} color="#ffffff" />
-                  <Text style={styles.unlockBtnText}>Unlock</Text>
-                </TouchableOpacity>
-
+              {onEmergencyWipe && (
                 <TouchableOpacity
-                  style={styles.secondaryBtn}
-                  onPress={() => {
-                    setShowPinEntry(false);
-                    setPinError('');
-                    setEnteredPin('');
-                  }}
+                  style={styles.emergencyWipeBtn}
+                  onPress={() => setShowEraseModal(true)}
                 >
-                  <ArrowLeft size={16} color={colors.textSecondary} />
-                  <Text style={styles.secondaryBtnText}>Use Biometrics</Text>
+                  <Trash2 size={14} color={colors.danger} />
+                  <Text style={styles.emergencyWipeText}>Erase All App Data</Text>
                 </TouchableOpacity>
-              </View>
-            ) : (
-              <View style={styles.biometricSection}>
-                <TouchableOpacity
-                  style={styles.unlockBtn}
-                  onPress={handleBiometricUnlock}
-                  disabled={authenticating}
-                >
-                  <Fingerprint size={20} color="#ffffff" />
-                  <Text style={styles.unlockBtnText}>
-                    {authenticating ? 'Verifying…' : 'Unlock with Biometrics'}
-                  </Text>
-                </TouchableOpacity>
+              )}
+            </View>
+          </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
 
-                <TouchableOpacity
-                  style={styles.secondaryBtn}
-                  onPress={() => {
-                    setShowPinEntry(true);
-                    setPinError('');
-                    setEnteredPin('');
-                  }}
-                >
-                  <KeyRound size={16} color={colors.textSecondary} />
-                  <Text style={styles.secondaryBtnText}>Enter Passcode / Duress PIN</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {onEmergencyWipe && (
-              <TouchableOpacity
-                style={styles.emergencyWipeBtn}
-                onPress={() => setShowEraseModal(true)}
-              >
-                <Trash2 size={14} color={colors.danger} />
-                <Text style={styles.emergencyWipeText}>Erase All App Data</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </KeyboardAvoidingView>
-      </TouchableWithoutFeedback>
-
-      {/* Erase All App Data Confirmation Modal */}
-      {onEmergencyWipe && (
-        <EraseDataModal
-          visible={showEraseModal}
-          onClose={() => setShowEraseModal(false)}
-          onConfirm={onEmergencyWipe}
-        />
-      )}
-    </View>
+        {/* Erase All App Data Confirmation Modal */}
+        {onEmergencyWipe && (
+          <EraseDataModal
+            visible={showEraseModal}
+            onClose={() => setShowEraseModal(false)}
+            onConfirm={onEmergencyWipe}
+          />
+        )}
+      </View>
+    </Modal>
   );
 }
 
