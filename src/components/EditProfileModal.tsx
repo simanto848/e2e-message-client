@@ -36,10 +36,9 @@ export function EditProfileModal({ visible, currentUser, onSave, onClose }: Prop
 
   const handlePickPhoto = async () => {
     beginExternalActivity();
-    let perm: ImagePicker.PermissionResponse;
-    let result: ImagePicker.ImagePickerResult;
+    let result: ImagePicker.ImagePickerResult | null = null;
     try {
-      perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
         Alert.alert('Photo access needed', 'JABY needs photo library access to set a profile picture.');
         return;
@@ -51,10 +50,13 @@ export function EditProfileModal({ visible, currentUser, onSave, onClose }: Prop
         allowsEditing: true,
         aspect: [1, 1],
       });
+    } catch (err) {
+      console.warn('[EditProfile] Failed to pick photo:', err);
+      return;
     } finally {
       endExternalActivity();
     }
-    if (result.canceled || !result.assets?.[0]) return;
+    if (!result || result.canceled || !result.assets?.[0]) return;
 
     const asset = result.assets[0];
     setLocalPreviewUri(asset.uri);

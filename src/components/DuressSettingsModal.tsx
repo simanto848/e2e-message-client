@@ -23,6 +23,7 @@ import {
   setDuressAction,
   DuressAction,
 } from '../utils/duressConfig';
+import { getPrimaryPin } from '../utils/keyStore';
 
 interface Props {
   visible: boolean;
@@ -60,6 +61,15 @@ export function DuressSettingsModal({ visible, onClose }: Props) {
     }
     if (trimmed.length < 4) {
       Alert.alert('Too Short', 'Emergency PIN must be at least 4 digits long.');
+      return;
+    }
+
+    const primaryPin = await getPrimaryPin();
+    if (primaryPin && trimmed === primaryPin.trim()) {
+      Alert.alert(
+        'Invalid Emergency PIN',
+        'Emergency PIN cannot be identical to your primary unlock PIN/password. Please choose a different PIN for duress.'
+      );
       return;
     }
 

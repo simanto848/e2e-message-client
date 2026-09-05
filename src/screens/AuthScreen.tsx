@@ -79,8 +79,9 @@ export function AuthScreen({ onAuthenticated }: Props) {
   const registerStrength = evaluatePasswordStrength(pinCode);
 
   const handleLogin = async () => {
-    if (!handle || !pinCode) {
-      Alert.alert('Missing Details', 'Please enter your handle and PIN code.');
+    const cleanHandle = handle.trim().replace(/^@+/, '');
+    if (!cleanHandle || !pinCode) {
+      Alert.alert('Missing Details', 'Please enter your handle and PIN/password.');
       return;
     }
 
@@ -96,7 +97,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
     }, 1300);
 
     try {
-      const res = await api.login(handle, pinCode);
+      const res = await api.login(`@${cleanHandle}`, pinCode);
       if (res.success && res.user && res.token) {
         setLoadingStep('Entering secure enclave...');
         await onAuthenticated(res.user, res.token, undefined, pinCode);
@@ -113,7 +114,8 @@ export function AuthScreen({ onAuthenticated }: Props) {
   };
 
   const handleRegister = async () => {
-    if (!name || !handle || !inviteCode) {
+    const cleanHandle = handle.trim().replace(/^@+/, '');
+    if (!name.trim() || !cleanHandle || !inviteCode.trim()) {
       Alert.alert('Missing Details', 'Please enter your name, a handle, and an invite code.');
       return;
     }
@@ -134,9 +136,9 @@ export function AuthScreen({ onAuthenticated }: Props) {
       const fingerprint = await computeFingerprint(keyPair.publicKey);
 
       const res = await api.register({
-        name,
-        handle,
-        inviteCode,
+        name: name.trim(),
+        handle: `@${cleanHandle}`,
+        inviteCode: inviteCode.trim(),
         publicKey: keyPair.publicKey,
         pinCode,
         fingerprintHash: fingerprint,
@@ -233,9 +235,10 @@ export function AuthScreen({ onAuthenticated }: Props) {
                   style={styles.input}
                   placeholder="username"
                   placeholderTextColor={colors.textMuted}
-                  value={handle.replace('@', '')}
-                  onChangeText={t => setHandle(`@${t}`)}
+                  value={handle.replace(/^@+/, '')}
+                  onChangeText={t => setHandle(`@${t.replace(/^@+/, '')}`)}
                   autoCapitalize="none"
+                  autoCorrect={false}
                 />
               </View>
 
@@ -248,6 +251,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
                   value={inviteCode}
                   onChangeText={setInviteCode}
                   autoCapitalize="characters"
+                  autoCorrect={false}
                 />
               </View>
 
@@ -255,11 +259,13 @@ export function AuthScreen({ onAuthenticated }: Props) {
                 <KeyRound size={18} color={colors.textSecondary} />
                 <TextInput
                   style={styles.input}
-                  placeholder="Choose a PIN (4-6 digits)"
+                  placeholder="Choose a PIN or Passphrase"
                   placeholderTextColor={colors.textMuted}
                   secureTextEntry={true}
                   value={pinCode}
                   onChangeText={setPinCode}
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
               </View>
 
@@ -305,9 +311,10 @@ export function AuthScreen({ onAuthenticated }: Props) {
                   style={styles.input}
                   placeholder="username"
                   placeholderTextColor={colors.textMuted}
-                  value={handle.replace('@', '')}
-                  onChangeText={t => setHandle(`@${t}`)}
+                  value={handle.replace(/^@+/, '')}
+                  onChangeText={t => setHandle(`@${t.replace(/^@+/, '')}`)}
                   autoCapitalize="none"
+                  autoCorrect={false}
                 />
               </View>
 
@@ -318,9 +325,10 @@ export function AuthScreen({ onAuthenticated }: Props) {
                   placeholder="PIN or Password"
                   placeholderTextColor={colors.textMuted}
                   secureTextEntry={true}
-                  keyboardType="numeric"
                   value={pinCode}
                   onChangeText={setPinCode}
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
               </View>
 

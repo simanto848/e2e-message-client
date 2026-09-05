@@ -29,3 +29,10 @@ export async function getDuressAction(): Promise<DuressAction> {
 export async function setDuressAction(action: DuressAction): Promise<void> {
   await SecureStore.setItemAsync(DURESS_ACTION_KEY, action);
 }
+
+export async function clearDuressConfig(): Promise<void> {
+  await Promise.all([
+    SecureStore.deleteItemAsync(DURESS_PIN_KEY),
+    SecureStore.deleteItemAsync(DURESS_ACTION_KEY),
+  ]);
+}

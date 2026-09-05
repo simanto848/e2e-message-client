@@ -78,6 +78,7 @@ class WebRTCCallEngine {
   // leaving the call showing "Connected" with no audio ever flowing.
   private pendingIceCandidates: any[] = [];
   private remoteDescriptionSet = false;
+  private isVideo = false;
 
   /** Check if native WebRTC module is linked and ready */
   isSupported(): boolean {
@@ -216,6 +217,7 @@ class WebRTCCallEngine {
     handlers: CallEngineHandlers,
     isSpeakerOn = true
   ): Promise<void> {
+    this.isVideo = video;
     await this.startLocalMedia(video);
     // Audio routing is deferred to handleRemoteAnswer so it doesn't collide with ringtone audio mode
     const pc = this.createPeerConnection(myUserId, peerId, callId, video ? 'video' : 'audio', handlers);
@@ -245,6 +247,7 @@ class WebRTCCallEngine {
     handlers: CallEngineHandlers,
     isSpeakerOn = true
   ): Promise<void> {
+    this.isVideo = video;
     await this.startLocalMedia(video);
     this.startAudioRouting(video, isSpeakerOn);
     const pc = this.createPeerConnection(myUserId, peerId, callId, video ? 'video' : 'audio', handlers);
@@ -387,13 +390,14 @@ class WebRTCCallEngine {
   }
 
   /** End the call: notify the peer, then tear everything down locally. */
-  endCall(): void {
+  endCall(callType?: 'audio' | 'video'): void {
+    const finalType = callType || (this.isVideo ? 'video' : 'audio');
     if (this.myUserId && this.peerId && this.callId) {
       socketService.sendCallSignal({
         callId: this.callId,
         senderId: this.myUserId,
         targetId: this.peerId,
-        type: 'audio',
+        type: finalType,
         signalType: 'hangup',
       });
     }

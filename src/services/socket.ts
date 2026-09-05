@@ -18,6 +18,34 @@ export { SOCKET_SERVER_URL };
 
 class SocketService {
   private socket: Socket | null = null;
+  private listeners: Map<string, Set<Function>> = new Map();
+
+  private addEventListener<T extends Function>(event: string, callback: T): () => void {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event)!.add(callback);
+
+    if (this.socket) {
+      this.socket.on(event, callback as any);
+    }
+
+    return () => {
+      this.listeners.get(event)?.delete(callback);
+      if (this.socket) {
+        this.socket.off(event, callback as any);
+      }
+    };
+  }
+
+  private bindAllListeners() {
+    if (!this.socket) return;
+    this.listeners.forEach((callbacks, event) => {
+      callbacks.forEach(cb => {
+        this.socket?.on(event, cb as any);
+      });
+    });
+  }
 
   async connect() {
     if (this.socket && this.socket.connected) {
@@ -26,19 +54,13 @@ class SocketService {
 
     const token = await getSessionToken();
     if (!token) {
-      console.warn('[Mobile Socket] No session token available — not connecting');
+      if (__DEV__) {
+        console.warn('[Mobile Socket] No session token available — not connecting');
+      }
       return;
     }
 
     if (this.socket) {
-      // A socket already exists but isn't connected — most likely its
-      // built-in reconnection attempts ran out after a long network outage,
-      // or the OS suspended networking while the app was backgrounded.
-      // Resume this instance instead of calling io() again, which would
-      // leave the old socket's reconnection loop running in the background
-      // forever alongside a brand-new one — two live connections registered
-      // for the same user server-side, so every message/call signal gets
-      // delivered (and every socket listener fires) twice.
       this.socket.auth = { token };
       this.socket.connect();
       return;
@@ -46,11 +68,6 @@ class SocketService {
 
     this.socket = io(SOCKET_SERVER_URL, {
       transports: ['websocket', 'polling'],
-      // A secure messenger should keep trying to reconnect indefinitely
-      // rather than giving up after a handful of attempts and going silent
-      // — a finite cap here previously meant an extended network blip (a
-      // subway tunnel, a flaky hotel Wi-Fi) could leave the app permanently
-      // disconnected from realtime delivery until it was force-restarted.
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
@@ -58,25 +75,29 @@ class SocketService {
       auth: { token },
     });
 
+    this.bindAllListeners();
+
     this.socket.on('connect', () => {
-      console.log('[Mobile Socket] Connected & authenticated to JABY Gateway');
+      if (__DEV__) {
+        console.log('[Mobile Socket] Connected & authenticated to JABY Gateway');
+      }
     });
 
     this.socket.on('connect_error', err => {
-      console.warn('[Mobile Socket] Connection/auth error:', err.message);
+      if (__DEV__) {
+        console.warn('[Mobile Socket] Connection/auth error:', err.message);
+      }
     });
 
     this.socket.on('disconnect', reason => {
-      console.log('[Mobile Socket] Disconnected from JABY Gateway:', reason);
+      if (__DEV__) {
+        console.log('[Mobile Socket] Disconnected from JABY Gateway:', reason);
+      }
     });
   }
 
   /**
-   * Re-arm the connection after the app returns to the foreground. Mobile
-   * OSes routinely suspend a backgrounded app's sockets, and the app may
-   * have been backgrounded long enough that reconnection needs a fresh
-   * session token (e.g. after a re-login) — this is a no-op via the
-   * `this.socket.connected` guard above when the socket is already healthy.
+   * Re-arm the connection after the app returns to the foreground.
    */
   async reconnectIfNeeded() {
     if (this.socket?.connected) return;
@@ -89,14 +110,6 @@ class SocketService {
       this.socket = null;
     }
   }
-
-  // Contact requests are now sent/accepted purely over REST (api.ts) — the
-  // server pushes the 'contact_request_received' / 'contact_request_accepted'
-  // events below directly from the route handler once the database write
-  // succeeds. There's no socket emit here to duplicate: the earlier version
-  // called both, and the socket call always lost the race against the REST
-  // call that had already made the same change, so the *other* person never
-  // got notified. See server/src/realtime.ts for the fix.
 
   // Messaging
   sendMessage(message: Message) {
@@ -131,7 +144,7 @@ class SocketService {
 
   sendCallSignal(signal: {
     callId: string;
-    senderId: string; // must match the authenticated socket's user — server rejects otherwise
+    senderId: string;
     targetId: string;
     type: 'audio' | 'video';
     signalType: 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'reject';
@@ -150,77 +163,43 @@ class SocketService {
 
   // Listeners
   onContactRequestReceived(callback: (req: ContactRequestWithUser) => void) {
-    this.socket?.on('contact_request_received', callback);
-    return () => {
-      this.socket?.off('contact_request_received', callback);
-    };
+    return this.addEventListener('contact_request_received', callback);
   }
 
   onContactRequestAccepted(callback: (data: { requestId: string; contactId: string; acceptedBy?: string }) => void) {
-    this.socket?.on('contact_request_accepted', callback);
-    return () => {
-      this.socket?.off('contact_request_accepted', callback);
-    };
+    return this.addEventListener('contact_request_accepted', callback);
   }
 
   onReceiveMessage(callback: (msg: Message) => void) {
-    this.socket?.on('receive_message', callback);
-    return () => {
-      this.socket?.off('receive_message', callback);
-    };
+    return this.addEventListener('receive_message', callback);
   }
 
   onMessageStatusUpdate(callback: (data: { messageId: string; chatId: string; status: 'delivered' | 'read' }) => void) {
-    this.socket?.on('message_status_update', callback);
-    return () => {
-      this.socket?.off('message_status_update', callback);
-    };
+    return this.addEventListener('message_status_update', callback);
   }
 
   onTypingIndicator(callback: (data: { chatId: string; senderId: string; receiverId: string; isTyping: boolean }) => void) {
-    this.socket?.on('typing_indicator', callback);
-    return () => {
-      this.socket?.off('typing_indicator', callback);
-    };
+    return this.addEventListener('typing_indicator', callback);
   }
 
   onMessageDeletedEveryone(callback: (data: { messageId: string; chatId: string; deletedAt: number }) => void) {
-    this.socket?.on('message_deleted_everyone', callback);
-    return () => {
-      this.socket?.off('message_deleted_everyone', callback);
-    };
+    return this.addEventListener('message_deleted_everyone', callback);
   }
 
   onCallSignal(callback: (signal: any) => void) {
-    this.socket?.on('call_signal', callback);
-    return () => {
-      this.socket?.off('call_signal', callback);
-    };
+    return this.addEventListener('call_signal', callback);
   }
 
-  // Presence: who's online right now. presence_snapshot arrives once, right
-  // after connecting, with the full current list; presence_update arrives
-  // after that for individual online/offline changes.
   onPresenceSnapshot(callback: (userIds: string[]) => void) {
-    this.socket?.on('presence_snapshot', callback);
-    return () => {
-      this.socket?.off('presence_snapshot', callback);
-    };
+    return this.addEventListener('presence_snapshot', callback);
   }
 
   onPresenceUpdate(callback: (data: { userId: string; status: 'online' | 'offline'; timestamp: number }) => void) {
-    this.socket?.on('presence_update', callback);
-    return () => {
-      this.socket?.off('presence_update', callback);
-    };
+    return this.addEventListener('presence_update', callback);
   }
 
-  // Update Notification Listener
   onUpdateAvailable(callback: (release: any) => void) {
-    this.socket?.on('app:update_available', callback);
-    return () => {
-      this.socket?.off('app:update_available', callback);
-    };
+    return this.addEventListener('app:update_available', callback);
   }
 
   isConnected(): boolean {

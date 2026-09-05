@@ -134,13 +134,35 @@ export async function clearBackupSettings(): Promise<void> {
   ]);
 }
 
+export async function clearIdentityKeyPair(userId: string): Promise<void> {
+  await Promise.all([
+    SecureStore.deleteItemAsync(IDENTITY_KEYPAIR_PREFIX + safeKeySuffix(userId), SECURE_STORE_OPTIONS),
+    SecureStore.deleteItemAsync(HISTORICAL_KEYS_PREFIX + safeKeySuffix(userId), SECURE_STORE_OPTIONS),
+  ]);
+}
+
 /**
- * Clear everything for a full sign-out. Identity keypairs are intentionally
- * NOT cleared here (they stay namespaced per-account on this device) — a
- * user signing out and back in on the same device should still be able to
- * decrypt their own message history.
+ * Clear session tokens and auth credentials on normal sign out.
  */
 export async function clearSession(): Promise<void> {
   await Promise.all([clearSessionToken(), clearCurrentUserId(), clearPrimaryPin()]);
+}
+
+/**
+ * Full zeroize wipe: deletes session token, user ID, primary PIN, backup settings,
+ * duress configurations, identity keypairs, and all historical keyrings.
+ */
+export async function wipeAllSecureData(userId?: string | null): Promise<void> {
+  const uid = userId || (await getCurrentUserId());
+  const tasks: Promise<unknown>[] = [
+    clearSessionToken(),
+    clearCurrentUserId(),
+    clearPrimaryPin(),
+    clearBackupSettings(),
+  ];
+  if (uid) {
+    tasks.push(clearIdentityKeyPair(uid));
+  }
+  await Promise.all(tasks);
 }
 

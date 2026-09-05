@@ -32,13 +32,17 @@ import * as Crypto from 'expo-crypto';
 import nacl from 'tweetnacl';
 import { bytesToBase64, base64ToBytes, IdentityKeyPair } from './crypto';
 
-// 5,000 iterations provides fast client-side key stretching (~50ms) in pure
-// JS on mobile devices without freezing the React Native UI thread.
-const PBKDF2_ITERATIONS = 5000;
-const KEY_SIZE_WORDS = 256 / 32; // 32 bytes
+// 100,000 PBKDF2 iterations for industry-standard passphrase key stretching
+const PBKDF2_ITERATIONS = 100000;
+const KEY_SIZE_WORDS = 256 / 32; // 32 bytes (256-bit key)
 
-function bytesToWordArray(bytes: Uint8Array): CryptoJS.lib.WordArray {
-  return CryptoJS.lib.WordArray.create(bytes as unknown as number[]);
+function bytesToWordArray(u8arr: Uint8Array): CryptoJS.lib.WordArray {
+  const len = u8arr.length;
+  const words: number[] = [];
+  for (let i = 0; i < len; i++) {
+    words[i >>> 2] |= (u8arr[i] & 0xff) << (24 - (i % 4) * 8);
+  }
+  return CryptoJS.lib.WordArray.create(words, len);
 }
 
 function wordArrayToBytes(wordArray: CryptoJS.lib.WordArray): Uint8Array {
@@ -76,7 +80,7 @@ export interface EncryptedBackupBlob {
 export function encryptBackup(payload: BackupPayload, passphrase: string): EncryptedBackupBlob {
   const saltBytes = Crypto.getRandomBytes(16);
   const nonceBytes = Crypto.getRandomBytes(nacl.secretbox.nonceLength);
-  const key = deriveKey(passphrase, saltBytes);
+  const key = deriveKey(passphrase, saltBytes, PBKDF2_ITERATIONS);
 
   const plaintextBytes = new TextEncoder().encode(JSON.stringify(payload));
   const boxed = nacl.secretbox(plaintextBytes, nonceBytes, key);
@@ -92,8 +96,7 @@ export function encryptBackup(payload: BackupPayload, passphrase: string): Encry
  * Decrypt a backup blob. Returns null if the passphrase is wrong or the blob
  * was tampered with — callers must treat null as "cannot restore", never
  * fall back to a default/empty payload as if it succeeded.
- * Tries the fast 5,000-iteration key first, and falls back to legacy 100,000
- * iterations if needed.
+ * Tries 100,000 iterations first, and falls back to legacy 5,000 iterations if needed.
  */
 export function decryptBackup(blob: EncryptedBackupBlob, passphrase: string): BackupPayload | null {
   try {
@@ -101,13 +104,13 @@ export function decryptBackup(blob: EncryptedBackupBlob, passphrase: string): Ba
     const nonceBytes = base64ToBytes(blob.iv);
     const boxed = base64ToBytes(blob.encryptedData);
 
-    // Fast attempt with current 5,000-iteration key
+    // Primary attempt with 100,000-iteration key
     let key = deriveKey(passphrase, saltBytes, PBKDF2_ITERATIONS);
     let opened = nacl.secretbox.open(boxed, nonceBytes, key);
 
-    // Legacy fallback to 100,000 iterations for backups created on older versions
+    // Fallback to 5,000 iterations for legacy backups
     if (!opened) {
-      key = deriveKey(passphrase, saltBytes, 100000);
+      key = deriveKey(passphrase, saltBytes, 5000);
       opened = nacl.secretbox.open(boxed, nonceBytes, key);
     }
 

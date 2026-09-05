@@ -72,9 +72,18 @@ export function useWebRTCCall({
     setCallState(prev => ({ ...prev, isReconnecting: state === 'disconnected' }));
   };
 
+  // Clean up timer on unmount
+  useEffect(() => {
+    return () => {
+      if (callTimerRef.current) {
+        clearInterval(callTimerRef.current);
+        callTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const handleStartCall = async (type: 'audio' | 'video') => {
-    if (!activeChatId || !currentUser || !mySecretKey) return;
-    if (callState.active) return;
+    if (!currentUser || !activeChatId || !mySecretKey) return;
     const activeChat = chats.find(c => c.id === activeChatId);
     if (!activeChat) return;
 
@@ -99,8 +108,9 @@ export function useWebRTCCall({
       }
     }
 
-    const sas = await generateCallSasWords(mySecretKey, activeChat.participant.publicKey, Date.now());
-    const callId = `call_${Date.now()}_${currentUser.id}`;
+    const callTimestamp = Date.now();
+    const sas = await generateCallSasWords(mySecretKey, activeChat.participant.publicKey, callTimestamp);
+    const callId = `call_${callTimestamp}_${currentUser.id}`;
     activeCallIdRef.current = callId;
 
     callAudio.playRingtone();
@@ -173,10 +183,7 @@ export function useWebRTCCall({
     }
 
     activeCallIdRef.current = pending.callId;
-
     await callAudio.stopAudio();
-    setCallState(prev => ({ ...prev, status: 'connected' }));
-    startCallTimer();
 
     try {
       await webrtcCallEngine.acceptCall(
@@ -191,6 +198,8 @@ export function useWebRTCCall({
         },
         callState.isSpeakerOn
       );
+      setCallState(prev => ({ ...prev, status: 'connected' }));
+      startCallTimer();
       setLocalStream(webrtcCallEngine.getLocalStream());
     } catch (err) {
       console.error('[Call] Failed to accept call:', err);
@@ -204,21 +213,22 @@ export function useWebRTCCall({
   const handleHangupCall = () => {
     stopCallTimer();
 
+    const currentCall = callStateRef.current;
     const pending = pendingIncomingCallRef.current;
-    if (pending && callState.isIncoming && callState.status === 'ringing' && currentUser) {
-      webrtcCallEngine.rejectIncoming(currentUser.id, pending.senderId, pending.callId, callState.type);
+    if (pending && currentCall.isIncoming && currentCall.status === 'ringing' && currentUser) {
+      webrtcCallEngine.rejectIncoming(currentUser.id, pending.senderId, pending.callId, currentCall.type);
     } else {
-      webrtcCallEngine.endCall();
+      webrtcCallEngine.endCall(currentCall.type);
     }
     callAudio.playHangup();
 
     setLocalStream(null);
     setRemoteStream(null);
     pendingIncomingCallRef.current = null;
-    const finalReason = callStateRef.current.status === 'connected' || callStateRef.current.duration > 0
+    const finalReason = currentCall.status === 'connected' || currentCall.duration > 0
       ? 'completed'
-      : (callState.isIncoming ? 'declined' : 'missed');
-    onLogCallToChat(callStateRef.current, finalReason);
+      : (currentCall.isIncoming ? 'declined' : 'missed');
+    onLogCallToChat(currentCall, finalReason);
     setCallState(prev => ({ ...prev, active: false, status: 'ended', duration: 0 }));
   };
 

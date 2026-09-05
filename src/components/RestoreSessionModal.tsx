@@ -5,8 +5,7 @@ import {
   Modal,
   TouchableOpacity,
   StyleSheet,
-  TouchableWithoutFeedback,
-  Platform,
+  Alert,
 } from 'react-native';
 import { KeyRound, ShieldCheck, RefreshCw, X, Sparkles } from './Icons';
 import { colors, shadows } from '../theme';
@@ -18,29 +17,30 @@ interface Props {
 }
 
 export function RestoreSessionModal({ visible, onRestore, onStartFresh }: Props) {
+  const handleConfirmStartFresh = () => {
+    Alert.alert(
+      'Start Fresh?',
+      'Creating a new cryptographic identity means previous local message history that was encrypted with old keys cannot be decrypted on this device.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Start Fresh',
+          style: 'destructive',
+          onPress: onStartFresh,
+        },
+      ]
+    );
+  };
+
   return (
     <Modal
       visible={visible}
       animationType="fade"
       transparent={true}
-      onRequestClose={onStartFresh}
+      onRequestClose={() => {}}
     >
       <View style={styles.backdrop}>
-        {/* Tap outside to dismiss as fresh */}
-        <TouchableWithoutFeedback onPress={onStartFresh}>
-          <View style={StyleSheet.absoluteFillObject} />
-        </TouchableWithoutFeedback>
-
         <View style={styles.dialogCard}>
-          {/* Close button */}
-          <TouchableOpacity
-            style={styles.closeBtn}
-            onPress={onStartFresh}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <X size={18} color={colors.textSecondary} />
-          </TouchableOpacity>
-
           {/* Key Icon Badge */}
           <View style={styles.iconCircle}>
             <KeyRound size={28} color={colors.primary} />
@@ -92,7 +92,7 @@ export function RestoreSessionModal({ visible, onRestore, onStartFresh }: Props)
 
             <TouchableOpacity
               style={styles.freshBtn}
-              onPress={onStartFresh}
+              onPress={handleConfirmStartFresh}
               activeOpacity={0.75}
             >
               <RefreshCw size={15} color={colors.textSecondary} />

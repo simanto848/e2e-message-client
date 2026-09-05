@@ -67,15 +67,14 @@ export function VoiceRecorder({
         }
         recordingRef.current = recording;
         setSeconds(0);
+        let currentSeconds = 0;
         interval = setInterval(() => {
-          setSeconds(s => {
-            if (s + 1 >= 300) {
-              clearInterval(interval);
-              setTimeout(() => handleSendRef.current(), 0);
-              return 300;
-            }
-            return s + 1;
-          });
+          currentSeconds += 1;
+          setSeconds(currentSeconds);
+          if (currentSeconds >= 300) {
+            clearInterval(interval);
+            handleSendRef.current();
+          }
         }, 1000);
       })
       .catch(err => {

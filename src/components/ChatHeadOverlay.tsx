@@ -47,8 +47,6 @@ export function ChatHeadOverlay({
   onStartCall,
   onDismiss,
 }: Props) {
-  if (!activeChat) return null;
-
   const [isExpanded, setIsExpanded] = useState(false);
   const [inputText, setInputText] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -58,6 +56,20 @@ export function ChatHeadOverlay({
   const pan = useRef(new Animated.ValueXY({ x: SCREEN_WIDTH - HEAD_SIZE - 16, y: 180 })).current;
   const dismissScale = useRef(new Animated.Value(0)).current;
   const scrollViewRef = useRef<ScrollView>(null);
+  const isNearDismissRef = useRef(false);
+  const panCoordsRef = useRef({ x: SCREEN_WIDTH - HEAD_SIZE - 16, y: 180 });
+
+  useEffect(() => {
+    const id = pan.addListener(val => {
+      panCoordsRef.current = val;
+    });
+    return () => {
+      pan.removeListener(id);
+    };
+  }, [pan]);
+
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
 
   // PanResponder for smooth dragging and snapping
   const panResponder = useRef(
@@ -73,10 +85,8 @@ export function ChatHeadOverlay({
           useNativeDriver: true,
         }).start();
         pan.setOffset({
-          // @ts-ignore
-          x: pan.x._value,
-          // @ts-ignore
-          y: pan.y._value,
+          x: panCoordsRef.current.x,
+          y: panCoordsRef.current.y,
         });
         pan.setValue({ x: 0, y: 0 });
       },
@@ -84,21 +94,21 @@ export function ChatHeadOverlay({
         pan.setValue({ x: gestureState.dx, y: gestureState.dy });
 
         // Check proximity to bottom center dismiss target
-        // @ts-ignore
-        const currentY = pan.y._offset + gestureState.dy;
-        // @ts-ignore
-        const currentX = pan.x._offset + gestureState.dx;
+        const currentX = panCoordsRef.current.x + gestureState.dx;
+        const currentY = panCoordsRef.current.y + gestureState.dy;
         const targetX = SCREEN_WIDTH / 2 - HEAD_SIZE / 2;
         const targetY = SCREEN_HEIGHT - 120;
 
         const distance = Math.hypot(currentX - targetX, currentY - targetY);
         if (distance < DISMISS_THRESHOLD) {
-          if (!isNearDismiss) {
+          if (!isNearDismissRef.current) {
+            isNearDismissRef.current = true;
             setIsNearDismiss(true);
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
           }
         } else {
-          if (isNearDismiss) {
+          if (isNearDismissRef.current) {
+            isNearDismissRef.current = false;
             setIsNearDismiss(false);
           }
         }
@@ -113,17 +123,17 @@ export function ChatHeadOverlay({
         pan.flattenOffset();
 
         // If dropped near dismiss zone, dismiss the chat head
-        // @ts-ignore
-        const finalY = pan.y._value;
-        // @ts-ignore
-        const finalX = pan.x._value;
+        const finalX = panCoordsRef.current.x;
+        const finalY = panCoordsRef.current.y;
         const targetX = SCREEN_WIDTH / 2 - HEAD_SIZE / 2;
         const targetY = SCREEN_HEIGHT - 120;
         const distance = Math.hypot(finalX - targetX, finalY - targetY);
 
         if (distance < DISMISS_THRESHOLD) {
+          isNearDismissRef.current = false;
+          setIsNearDismiss(false);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-          onDismiss();
+          onDismissRef.current();
           return;
         }
 
@@ -155,6 +165,8 @@ export function ChatHeadOverlay({
       scrollViewRef.current?.scrollToEnd({ animated: true });
     }, 150);
   };
+
+  if (!activeChat) return null;
 
   const participant = activeChat.participant;
 

@@ -17,7 +17,7 @@ import {
 import { X, KeyRound, Lock, ShieldCheck, Eye, EyeOff, Check } from './Icons';
 import { colors, shadows } from '../theme';
 import { api } from '../services/api';
-import { saveSessionToken } from '../utils/keyStore';
+import { saveSessionToken, savePrimaryPin, saveBackupPassphrase } from '../utils/keyStore';
 import { evaluatePasswordStrength } from '../utils/passwordStrength';
 
 interface Props {
@@ -89,6 +89,8 @@ export function ChangePasswordModal({ visible, onClose, onPasswordUpdated }: Pro
         if (res.token) {
           await saveSessionToken(res.token);
         }
+        await savePrimaryPin(newPassword);
+        await saveBackupPassphrase(newPassword);
         Alert.alert('Success', 'Your password has been successfully updated.', [
           {
             text: 'OK',

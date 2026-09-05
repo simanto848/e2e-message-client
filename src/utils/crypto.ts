@@ -136,14 +136,18 @@ export async function generateSafetyNumbers(publicKeyA: string, publicKeyB: stri
   const combined = [publicKeyA, publicKeyB].sort().join('::JABY_SAFETY_NUMBER_V2::');
   
   const chunks: string[] = [];
-  // Derive 12 blocks of 5 digits each using deterministic cryptographic blocks
-  for (let blockIdx = 0; blockIdx < 3; blockIdx++) {
-    const blockHash = await sha256Hash(`${combined}::block_${blockIdx}`);
-    for (let subIdx = 0; subIdx < 4; subIdx++) {
-      const hexSub = blockHash.substring(subIdx * 6, (subIdx + 1) * 6);
-      const num = parseInt(hexSub, 16);
-      const fiveDigits = (num % 100000).toString().padStart(5, '0');
-      chunks.push(fiveDigits);
+  let counter = 0;
+  // Derive 12 blocks of 5 digits with zero modulo bias via rejection sampling
+  while (chunks.length < 12) {
+    const blockHash = await sha256Hash(`${combined}::block_${counter++}`);
+    const bytes = hexToBytes(blockHash);
+    for (let i = 0; i + 3 < bytes.length && chunks.length < 12; i += 4) {
+      const val = ((bytes[i] << 24) >>> 0) + (bytes[i + 1] << 16) + (bytes[i + 2] << 8) + bytes[i + 3];
+      // 2^32 = 4,294,967,296. Largest multiple of 100,000 <= 2^32 is 4,294,900,000.
+      if (val < 4294900000) {
+        const fiveDigits = (val % 100000).toString().padStart(5, '0');
+        chunks.push(fiveDigits);
+      }
     }
   }
 
@@ -161,12 +165,6 @@ export async function computeFingerprint(publicKey: string): Promise<string> {
 // Message encryption — real ECDH (X25519) + authenticated encryption (nacl.box)
 // ---------------------------------------------------------------------------
 
-/**
- * Encrypt a message for a specific recipient using real public-key crypto:
- * nacl.box performs an X25519 Diffie-Hellman between mySecretKey and
- * theirPublicKey to derive a shared secret, then encrypts+authenticates the
- * plaintext with XSalsa20-Poly1305 under that secret. Only the intended
- * recipient (holder of the matching private key) can decrypt it, and any
 /**
  * Encrypt a message with Perfect Forward Secrecy (PFS) and Ephemeral Ratchet.
  *
@@ -189,8 +187,8 @@ export function encryptMessage(
   const theirPublicKey = base64ToBytes(theirPublicKeyBase64);
   const myPublicKey = base64ToBytes(myPublicKeyBase64);
 
-  if (mySecretKey.length !== 32 || theirPublicKey.length !== 32) {
-    throw new Error(`Invalid key size for encryption: secretKey=${mySecretKey.length} bytes, publicKey=${theirPublicKey.length} bytes (expected 32 bytes)`);
+  if (mySecretKey.length !== 32 || theirPublicKey.length !== 32 || myPublicKey.length !== 32) {
+    throw new Error(`Invalid key size for encryption: secretKey=${mySecretKey.length} bytes, publicKey=${theirPublicKey.length} bytes, myPublicKey=${myPublicKey.length} bytes (expected 32 bytes)`);
   }
 
   // 1. Ephemeral Ratchet Keypair (PFS)
@@ -329,16 +327,30 @@ export async function generateCallSasWords(
 ): Promise<string[]> {
   const mySecretKey = base64ToBytes(mySecretKeyBase64);
   const theirPublicKey = base64ToBytes(theirPublicKeyBase64);
+  if (mySecretKey.length !== 32 || theirPublicKey.length !== 32) {
+    return ['Invalid', 'Key', 'Size', 'Error'];
+  }
   const sharedSecret = nacl.box.before(theirPublicKey, mySecretKey); // real ECDH shared secret
 
   const seed = `${bytesToHex(sharedSecret)}:${Math.floor(callTimestamp / 60000)}`;
   const hex = await sha256Hash(seed);
-  const bytes = hexToBytes(hex);
+  let bytes = hexToBytes(hex);
 
   const words: string[] = [];
-  for (let i = 0; i < 4; i++) {
-    const idx = (bytes[i * 2] * 256 + bytes[i * 2 + 1]) % SAS_DICTIONARY.length;
-    words.push(SAS_DICTIONARY[idx]);
+  let byteOffset = 0;
+  let counter = 0;
+  // Largest multiple of 47 below 65536 is 65518 (1394 * 47)
+  while (words.length < 4) {
+    if (byteOffset + 1 >= bytes.length) {
+      const moreHex = await sha256Hash(`${seed}::sas_more_${counter++}`);
+      bytes = hexToBytes(moreHex);
+      byteOffset = 0;
+    }
+    const val = (bytes[byteOffset] << 8) | bytes[byteOffset + 1];
+    byteOffset += 2;
+    if (val < 65518) {
+      words.push(SAS_DICTIONARY[val % SAS_DICTIONARY.length]);
+    }
   }
   return words;
 }

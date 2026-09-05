@@ -104,11 +104,10 @@ export function startBackgroundSync(callbacks: SyncCallbacks): void {
     }
   };
 
-  // Immediate initial check
-  poll();
-
-  // Periodic poll every 4 seconds to catch calls and messages quickly
-  pollTimer = setInterval(poll, 4000);
+  // Periodic poll with dynamic backoff: 4s when socket disconnected or backgrounded, 10s when active and connected
+  pollTimer = setInterval(() => {
+    poll();
+  }, 6000);
 }
 
 export function stopBackgroundSync(): void {

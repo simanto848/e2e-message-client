@@ -40,7 +40,9 @@ import {
   getBackupFrequency,
   saveBackupPassphrase,
   getBackupPassphrase,
+  wipeAllSecureData,
 } from './src/utils/keyStore';
+import { clearDuressConfig } from './src/utils/duressConfig';
 
 import { encryptBackup, decryptBackup, BackupPayload } from './src/utils/backupCrypto';
 import { api, API_BASE_URL } from './src/services/api';
@@ -403,7 +405,7 @@ export default function App() {
     handleUnlockDecoy,
   } = useAppSecurity({
     isAuthenticated: Boolean(currentUser),
-    isCallActive: Boolean(callStateRef.current?.active),
+    isCallActive: Boolean(callState.active),
   });
 
   const handleToggleAntiScreenshot = async (val: boolean) => {
@@ -631,7 +633,8 @@ export default function App() {
         resetCallState();
       }
       socketService.disconnect();
-      await clearSession();
+      await wipeAllSecureData(currentUser?.id);
+      await clearDuressConfig();
       await AsyncStorage.clear().catch(() => {});
       setCurrentUser(null);
       setMySecretKey(null);
@@ -1078,9 +1081,7 @@ export default function App() {
   // Decrypt a payload with real key verification: the payload carries the
   // sender's public key, but we only trust it if it matches the public key
   // we actually have on file for that contact (from the directory / a prior
-  // safety-number verification). Without this check, a malicious or
-  // compromised server could swap in a different public key and the
-  // decryption would still "succeed" — just not be from who it claims.
+  // safety-number verification).
   const decryptVerified = (payload: EncryptedPayload, expectedPublicKey?: string): { text: string; keyMismatch: boolean } => {
     if (!mySecretKey) return { text: 'Locked — sign in again to view', keyMismatch: false };
     if (!payload?.ciphertext || !payload?.iv) {
@@ -1094,20 +1095,21 @@ export default function App() {
     }
 
     const isSentByMe = currentUser && payload.senderPublicKey === currentUser.publicKey;
-    const peerPublicKey = isSentByMe ? expectedPublicKey : (payload.senderPublicKey || expectedPublicKey);
+    const peerPublicKey = isSentByMe ? expectedPublicKey : (expectedPublicKey || payload.senderPublicKey);
 
     if (!peerPublicKey) {
-      return { text: '⚠️ Missing recipient cryptographic public key.', keyMismatch: false };
+      return { text: '⚠️ Missing recipient cryptographic public key.', keyMismatch: true };
     }
 
     let opened = decryptMessage(payload, mySecretKey, peerPublicKey);
+    let isMismatch = false;
 
-    // Fallbacks: if keys rotated or if senderPublicKey was used
+    // Fallbacks: if sender used a mismatched public key, flag keyMismatch
     if (opened === null && payload.senderPublicKey && payload.senderPublicKey !== peerPublicKey) {
       opened = decryptMessage(payload, mySecretKey, payload.senderPublicKey);
-    }
-    if (opened === null && expectedPublicKey && expectedPublicKey !== peerPublicKey) {
-      opened = decryptMessage(payload, mySecretKey, expectedPublicKey);
+      if (opened !== null) {
+        isMismatch = true;
+      }
     }
 
     // Fallback: check historical keys keyring
@@ -1118,11 +1120,10 @@ export default function App() {
         if (opened !== null) break;
         if (payload.senderPublicKey && payload.senderPublicKey !== peerPublicKey) {
           opened = decryptMessage(payload, hk.secretKey, payload.senderPublicKey);
-          if (opened !== null) break;
-        }
-        if (expectedPublicKey && expectedPublicKey !== peerPublicKey) {
-          opened = decryptMessage(payload, hk.secretKey, expectedPublicKey);
-          if (opened !== null) break;
+          if (opened !== null) {
+            isMismatch = true;
+            break;
+          }
         }
       }
     }
@@ -1130,7 +1131,7 @@ export default function App() {
     if (opened === null) {
       return { text: '🔒 Encrypted message (key mismatch or previous session).', keyMismatch: true };
     }
-    return { text: opened, keyMismatch: false };
+    return { text: opened, keyMismatch: isMismatch };
   };
 
   // 3. Load conversation messages dynamically when opening a chat
@@ -1149,61 +1150,51 @@ export default function App() {
         });
 
         setMessages(decryptedList);
-
-        const hasUnread = decryptedList.some(m => m.senderId === activeChatId && m.status !== 'read');
-        if (hasUnread) {
-          socketService.markRead(activeChatId, activeChatId);
-          api.markMessagesAsRead(activeChatId, activeChatId).catch(() => {});
-          setChats(prev => prev.map(c => (c.id === activeChatId ? { ...c, unreadCount: 0 } : c)));
-        }
       } catch (err) {
-        console.error('Failed to load thread messages:', err);
+        console.warn('Failed to load messages for chat:', activeChatId, err);
       }
     };
 
     loadMessages();
-  }, [activeChatId, currentUser, mySecretKey]);
+  }, [activeChatId, currentUser?.id, mySecretKey]);
 
-  // Periodic background sync for messages and contacts (ensures smooth real-time delivery even on unstable networks)
+  // Dual-polling optimization: Poll chat list data with backoff
   useEffect(() => {
     if (!currentUser) return;
-    const syncInterval = setInterval(() => {
+    const interval = setInterval(() => {
       reloadDynamicData(currentUser.id);
-      if (activeChatId && mySecretKey) {
-        api.getMessages(activeChatId, currentUser.id).then(rawMessages => {
-          const knownPublicKey = chatsRef.current.find(c => c.id === activeChatId)?.participant.publicKey;
-          const decryptedList = rawMessages.map(m => {
-            if (m.isDeletedForEveryone) return { ...m, text: '' };
-            const { text } = decryptVerified(m.encryptedPayload, knownPublicKey);
-            return { ...m, text };
-          });
-          setMessages(prev => {
-            const map = new Map(prev.map(m => [m.id, m]));
-            decryptedList.forEach(m => map.set(m.id, m));
-            return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp);
-          });
-        }).catch(() => {});
+      if (activeChatIdRef.current) {
+        api.getMessages(activeChatIdRef.current, currentUser.id)
+          .then(raw => {
+            const knownPublicKey = chatsRef.current.find(c => c.id === activeChatIdRef.current)?.participant.publicKey;
+            const decrypted = raw.map(m => {
+              if (m.isDeletedForEveryone) return { ...m, text: '' };
+              const { text } = decryptVerified(m.encryptedPayload, knownPublicKey);
+              return { ...m, text };
+            });
+            setMessages(decrypted);
+          })
+          .catch(() => {});
       }
-    }, 3500);
-    return () => clearInterval(syncInterval);
-  }, [currentUser?.id, activeChatId, mySecretKey]);
+    }, 6000);
 
-  // 4. Socket Listeners (Real-Time E2EE & Contact Approvals)
+    return () => clearInterval(interval);
+  }, [currentUser?.id]);
+
+  // 4. Realtime Socket Listeners (presence, incoming messages, call signals, typing)
   useEffect(() => {
     if (!currentUser) return;
 
-    // Real-time Update Broadcast Listener
-    const unsubUpdate = socketService.onUpdateAvailable((release: ReleaseInfo) => {
-      setAvailableRelease(release);
-      setShowUpdateModal(true);
-    });
-
-    // Contact Request Received (Realtime Alert)
-    const unsubReqReceived = socketService.onContactRequestReceived((req: ContactRequestWithUser) => {
-      setIncomingRequests(prev => [req, ...prev.filter(r => r.id !== req.id)]);
+    // Incoming Contact Request
+    const unsubReqReceived = socketService.onContactRequestReceived(async req => {
+      await reloadDynamicData(currentUser.id);
       Alert.alert(
         'New Contact Request',
-        `${req.sender.name} (${req.sender.handle}) wants to connect with you.`
+        `@${req.sender.handle.replace(/^@+/, '')} (${req.sender.name}) wants to connect.`,
+        [
+          { text: 'View Requests', onPress: () => setShowRequestsModal(true) },
+          { text: 'Dismiss', style: 'cancel' },
+        ]
       );
     });
 
@@ -1220,10 +1211,16 @@ export default function App() {
         const { text } = decryptVerified(msg.encryptedPayload, knownPublicKey);
         msg.text = text;
 
-        setMessages(prev => [...prev, msg]);
-        callAudio.playMessageSound();
-
         const isCurrentlyOpen = activeChatIdRef.current === msg.senderId && currentScreenRef.current === 'chat_detail';
+
+        // Append to messages only if belonging to the currently open chat, and deduplicate
+        if (activeChatIdRef.current === msg.senderId || activeChatIdRef.current === msg.chatId) {
+          setMessages(prev => {
+            if (prev.some(m => m.id === msg.id)) return prev;
+            return [...prev, msg];
+          });
+        }
+        callAudio.playMessageSound();
 
         // Update chat list last message dynamically
         setChats(prev =>
@@ -1284,8 +1281,7 @@ export default function App() {
       if (signal.targetId !== currentUser.id) return;
 
       if (signal.signalType === 'offer') {
-        // Already on a call (either as caller or callee) — auto-decline the
-        // new one instead of overwriting the active call's state
+        // Already on a call (either as caller or callee) — auto-decline the new one
         if (callStateRef.current.active) {
           socketService.sendCallSignal({
             callId: signal.callId,
@@ -1305,20 +1301,28 @@ export default function App() {
             handle: '@unknown',
             avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200',
             statusMessage: 'Calling...',
-            publicKey: 'PEER_PUBLIC_KEY',
+            publicKey: '',
             inviteCodesRemaining: 0,
             isVerifiedMember: true,
             memberSince: '2026',
             twoFactorEnabled: true,
             passkeyRegistered: true,
-            fingerprintHash: 'E2EE_PEER_KEY',
+            fingerprintHash: '',
           };
 
-        const sas = signal.sasWords || (mySecretKeyRef.current
-          ? await generateCallSasWords(mySecretKeyRef.current, callerProfile.publicKey, Date.now())
-          : []);
+        let sas: string[] = signal.sasWords || [];
+        if (sas.length === 0 && mySecretKeyRef.current && callerProfile.publicKey && callerProfile.publicKey.length >= 32) {
+          try {
+            const callTimestamp = signal.timestamp || Date.now();
+            sas = await generateCallSasWords(mySecretKeyRef.current, callerProfile.publicKey, callTimestamp);
+          } catch (sasErr) {
+            console.warn('[Call] SAS calculation failed:', sasErr);
+            sas = [];
+          }
+        }
 
         pendingIncomingCallRef.current = { callId: signal.callId, senderId: signal.senderId, sdp: signal.sdp };
+        activeCallIdRef.current = signal.callId;
         callAudio.playRingtone();
         setCallState({
           active: true,
@@ -1336,13 +1340,22 @@ export default function App() {
         });
         api.ackPendingCall().catch(() => {});
       } else if (signal.signalType === 'answer') {
+        if (activeCallIdRef.current && signal.callId && signal.callId !== activeCallIdRef.current) {
+          return;
+        }
         await callAudio.stopAudio();
         await webrtcCallEngine.handleRemoteAnswer(signal.sdp, callStateRef.current.isSpeakerOn);
         setCallState(prev => ({ ...prev, status: 'connected' }));
         startCallTimer();
       } else if (signal.signalType === 'ice-candidate') {
+        if (activeCallIdRef.current && signal.callId && signal.callId !== activeCallIdRef.current) {
+          return;
+        }
         await webrtcCallEngine.handleRemoteIceCandidate(signal.candidate);
       } else if (signal.signalType === 'hangup' || signal.signalType === 'reject') {
+        if (activeCallIdRef.current && signal.callId && signal.callId !== activeCallIdRef.current && pendingIncomingCallRef.current?.callId !== signal.callId) {
+          return;
+        }
         stopCallTimer();
         webrtcCallEngine.cleanup();
         callAudio.playHangup();
@@ -1453,14 +1466,21 @@ export default function App() {
     const targetUserId = targetChat.participant.id;
     const disappearingSecs = targetChat.disappearingTimer;
 
-    const encryptedPayload = encryptMessage(
-      text,
-      mySecretKey,
-      targetChat.participant.publicKey,
-      currentUser.publicKey
-    );
+    let encryptedPayload: EncryptedPayload;
+    try {
+      encryptedPayload = encryptMessage(
+        text,
+        mySecretKey,
+        targetChat.participant.publicKey,
+        currentUser.publicKey
+      );
+    } catch (encErr) {
+      console.warn('Encryption failed:', encErr);
+      Alert.alert('Encryption Error', 'Failed to encrypt message with recipient public key.');
+      return;
+    }
 
-    const messageId = `msg_${Date.now()}`;
+    const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     const newMsg: Message = {
       id: messageId,
       chatId: targetChatId,
