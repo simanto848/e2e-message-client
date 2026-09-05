@@ -98,7 +98,7 @@ export function VoiceRecorder({
     // Pulsing live recording halo
     const loopAnim = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.4, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1.45, duration: 700, useNativeDriver: true }),
         Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
       ])
     );
@@ -232,11 +232,13 @@ export function VoiceRecorder({
     >
       {/* Discard / Delete Button */}
       <TouchableOpacity
-        style={styles.cancelButton}
+        style={[styles.cancelButton, isUploading && styles.cancelButtonDisabled]}
         onPress={handleCancel}
         disabled={isUploading}
-        activeOpacity={0.7}
+        activeOpacity={0.65}
         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        accessibilityRole="button"
+        accessibilityLabel="Discard voice recording"
       >
         <Trash2 size={18} color="#ef4444" />
       </TouchableOpacity>
@@ -246,7 +248,18 @@ export function VoiceRecorder({
         {/* Pulsing Live Beacon & Time */}
         <View style={styles.timerGroup}>
           <View style={styles.pulseWrapper}>
-            <Animated.View style={[styles.pulseHalo, { transform: [{ scale: pulseAnim }] }]} />
+            <Animated.View
+              style={[
+                styles.pulseHalo,
+                {
+                  transform: [{ scale: pulseAnim }],
+                  opacity: pulseAnim.interpolate({
+                    inputRange: [1, 1.45],
+                    outputRange: [0.55, 0.08],
+                  }),
+                },
+              ]}
+            />
             <View style={[styles.pulseDot, isNearingLimit && styles.pulseDotWarning]} />
           </View>
           <Text style={[styles.recordingTimer, isNearingLimit && styles.recordingTimerWarning]}>
@@ -272,7 +285,11 @@ export function VoiceRecorder({
 
         {/* Security / Encryption Pill Badge */}
         <View style={[styles.badgePill, isUploading && styles.uploadingBadgePill]}>
-          <Lock size={10} color={isUploading ? '#b45309' : colors.primaryDark} style={{ marginRight: 3 }} />
+          <Lock
+            size={10}
+            color={isUploading ? '#b45309' : '#047857'}
+            style={{ marginRight: 3.5 }}
+          />
           <Text style={[styles.badgeText, isUploading && styles.uploadingBadgeText]}>
             {isUploading ? 'ENCRYPTING' : 'E2EE'}
           </Text>
@@ -284,12 +301,14 @@ export function VoiceRecorder({
         style={[styles.sendVoiceButton, isUploading && styles.sendVoiceButtonDisabled]}
         onPress={handleSend}
         disabled={isUploading}
-        activeOpacity={0.85}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel="Send voice note"
       >
         {isUploading ? (
           <ActivityIndicator size="small" color="#ffffff" />
         ) : (
-          <Send size={18} color="#ffffff" />
+          <Send size={17} color="#ffffff" />
         )}
       </TouchableOpacity>
     </Animated.View>
@@ -298,26 +317,26 @@ export function VoiceRecorder({
 
 const styles = StyleSheet.create({
   micButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
     ...shadows.sm,
   },
   recordingContainer: {
-    flex: 1,
+    width: '100%',
     height: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#ffffff',
     borderRadius: 26,
-    paddingHorizontal: 8,
-    borderWidth: 1,
+    paddingHorizontal: 7,
+    borderWidth: 1.5,
     borderColor: '#e2e8f0',
-    ...shadows.md,
+    ...shadows.sm,
   },
   cancelButton: {
     width: 38,
@@ -329,17 +348,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  cancelButtonDisabled: {
+    opacity: 0.4,
+  },
   centerTrack: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
   },
   timerGroup: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    minWidth: 54,
   },
   pulseWrapper: {
     width: 14,
@@ -352,7 +375,7 @@ const styles = StyleSheet.create({
     width: 14,
     height: 14,
     borderRadius: 7,
-    backgroundColor: 'rgba(239, 68, 68, 0.35)',
+    backgroundColor: 'rgba(239, 68, 68, 0.45)',
   },
   pulseDot: {
     width: 7,
@@ -365,20 +388,23 @@ const styles = StyleSheet.create({
   },
   recordingTimer: {
     color: '#0f172a',
-    fontSize: 14,
+    fontSize: 13.5,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
-    letterSpacing: -0.3,
+    letterSpacing: -0.2,
   },
   recordingTimerWarning: {
     color: '#b45309',
   },
   eqContainer: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 2.5,
-    height: 30,
-    paddingHorizontal: 4,
+    height: 32,
+    paddingHorizontal: 6,
+    overflow: 'hidden',
   },
   eqBar: {
     width: 2.5,
@@ -391,16 +417,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 3,
     borderRadius: 6,
-    backgroundColor: colors.primaryLight,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
   },
   uploadingBadgePill: {
     backgroundColor: '#fef3c7',
+    borderColor: '#fde68a',
   },
   badgeText: {
-    color: colors.primaryDark,
-    fontSize: 9,
+    color: '#047857',
+    fontSize: 9.5,
     fontWeight: '800',
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
   },
   uploadingBadgeText: {
     color: '#b45309',
@@ -415,7 +444,7 @@ const styles = StyleSheet.create({
     ...shadows.sm,
   },
   sendVoiceButtonDisabled: {
-    backgroundColor: '#94a3b8',
+    backgroundColor: '#6ee7b7',
   },
 });
 

@@ -10,6 +10,7 @@ import {
 } from './Icons';
 import { ChatThread, DisappearingTimer } from '../types';
 import { colors, shadows } from '../theme';
+import { formatDisappearingTimer } from '../utils/timerUtils';
 
 interface Props {
   visible: boolean;
@@ -130,7 +131,7 @@ export function ChatMenuModal({
                   <Text style={styles.menuText}>Disappearing Messages</Text>
                 </View>
                 <Text style={styles.activeTimerBadge}>
-                  {chat.disappearingTimer > 0 ? `${chat.disappearingTimer}s` : 'Off'}
+                  {chat.disappearingTimer > 0 ? formatDisappearingTimer(chat.disappearingTimer) : 'Off'}
                 </Text>
               </View>
 

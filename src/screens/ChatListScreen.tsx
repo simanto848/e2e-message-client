@@ -4,6 +4,7 @@ import { Avatar } from '../components/Avatar';
 import { Search, Pin, ShieldCheck, Flame, Plus, CheckCircle2, UserPlus, X, UserCheck, Check, CheckCheck } from '../components/Icons';
 import { ChatThread } from '../types';
 import { colors, shadows } from '../theme';
+import { formatDisappearingTimer } from '../utils/timerUtils';
 
 interface Props {
   chats: ChatThread[];
@@ -201,7 +202,7 @@ export function ChatListScreen({
                     {item.disappearingTimer > 0 && (
                       <View style={styles.timerPill}>
                         <Flame size={10} color="#d97706" />
-                        <Text style={styles.timerPillText}>{item.disappearingTimer}s</Text>
+                        <Text style={styles.timerPillText}>{formatDisappearingTimer(item.disappearingTimer)}</Text>
                       </View>
                     )}
 

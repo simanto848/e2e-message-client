@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator } fr
 import { ShieldCheck, Flame, Check, CheckCheck, Play, Pause, Trash2, ImageIcon, Phone, PhoneOff, Video } from './Icons';
 import { Message } from '../types';
 import { colors, shadows } from '../theme';
+import { formatDisappearingTimer } from '../utils/timerUtils';
 
 type ImageResolution = { status: 'loading' } | { status: 'ready'; dataUri: string } | { status: 'error' };
 
@@ -161,7 +162,7 @@ export function ChatBubble({
           <View style={styles.ephemeralHeader}>
             <Flame size={12} color={isMe ? '#fef08a' : '#d97706'} />
             <Text style={[styles.ephemeralText, isMe && styles.myEphemeralText]}>
-              {timeLeft !== null ? `${timeLeft}s remaining` : `${message.disappearingTimer}s timer`}
+              {timeLeft !== null ? `${formatDisappearingTimer(timeLeft)} remaining` : `${formatDisappearingTimer(message.disappearingTimer)} timer`}
             </Text>
           </View>
         )}

@@ -22,7 +22,7 @@ export interface UserProfile {
   backupFrequency?: BackupFrequency;
 }
 
-export type DisappearingTimer = 0 | 5 | 15 | 30 | 60 | 300 | 3600 | 86400; // seconds (0 = off)
+export type DisappearingTimer = number; // seconds (0 = off)
 
 export interface EncryptedPayload {
   iv: string;

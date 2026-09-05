@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
 import { Avatar } from '../components/Avatar';
 import {
@@ -32,9 +33,11 @@ import { ChatThread, Message, UserProfile, Attachment, DisappearingTimer } from 
 import { ChatBubble } from '../components/ChatBubble';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 import { ChatMenuModal } from '../components/ChatMenuModal';
+import { DisappearingTimerModal } from '../components/DisappearingTimerModal';
 import { colors, shadows } from '../theme';
 import { encryptMessage, decryptMessage, IdentityKeyPair } from '../utils/crypto';
 import { api } from '../services/api';
+import { formatDisappearingTimer } from '../utils/timerUtils';
 import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
 
 // Matches the server's MAX_ATTACHMENT_BYTES (server/src/routes/media.routes.ts).
@@ -61,8 +64,6 @@ interface Props {
 
 type ImageResolution = { status: 'loading' } | { status: 'ready'; dataUri: string } | { status: 'error' };
 
-const TIMER_OPTIONS: DisappearingTimer[] = [0, 5, 15, 30, 60, 300, 3600, 86400];
-
 export function ChatScreen({
   chat,
   currentUser,
@@ -86,6 +87,7 @@ export function ChatScreen({
   const [isRecording, setIsRecording] = useState(false);
   const [isSendingImage, setIsSendingImage] = useState(false);
   const [showMenuModal, setShowMenuModal] = useState(false);
+  const [showDisappearingModal, setShowDisappearingModal] = useState(false);
   const [resolvedImages, setResolvedImages] = useState<Record<string, ImageResolution>>({});
   const [playingAudioMsgId, setPlayingAudioMsgId] = useState<string | null>(null);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
@@ -381,11 +383,9 @@ export function ChatScreen({
     setLocalReactions(prev => ({ ...prev, [msgId]: emoji }));
   };
 
-  const cycleTimer = () => {
-    const currentIndex = TIMER_OPTIONS.indexOf(chat.disappearingTimer);
-    const nextIndex = (currentIndex + 1) % TIMER_OPTIONS.length;
-    const nextTimer = TIMER_OPTIONS[nextIndex];
-    onUpdateDisappearingTimer(nextTimer);
+  const openDisappearingModal = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    setShowDisappearingModal(true);
   };
 
   return (
@@ -421,10 +421,19 @@ export function ChatScreen({
 
         {/* Action Buttons */}
         <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.timerToggle} onPress={cycleTimer}>
+          <TouchableOpacity
+            style={[
+              styles.timerToggle,
+              chat.disappearingTimer > 0 && styles.timerToggleActive,
+            ]}
+            onPress={openDisappearingModal}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel="Disappearing messages timer settings"
+          >
             <Flame size={14} color={chat.disappearingTimer > 0 ? '#d97706' : colors.textMuted} />
             <Text style={[styles.timerToggleText, chat.disappearingTimer > 0 && styles.activeTimerText]}>
-              {chat.disappearingTimer > 0 ? `${chat.disappearingTimer}s` : 'Off'}
+              {formatDisappearingTimer(chat.disappearingTimer)}
             </Text>
           </TouchableOpacity>
 
@@ -444,12 +453,16 @@ export function ChatScreen({
 
       {/* Ephemeral Timer Banner */}
       {chat.disappearingTimer > 0 && (
-        <View style={styles.ephemeralBanner}>
+        <TouchableOpacity
+          style={styles.ephemeralBanner}
+          onPress={openDisappearingModal}
+          activeOpacity={0.8}
+        >
           <Flame size={12} color="#d97706" />
           <Text style={styles.ephemeralBannerText}>
-            Ephemeral Timer Active ({chat.disappearingTimer}s) · Messages self-destruct after viewing
+            Ephemeral Timer Active ({formatDisappearingTimer(chat.disappearingTimer)}) · Messages self-destruct after viewing
           </Text>
-        </View>
+        </TouchableOpacity>
       )}
 
       {/* Session Lock Banner (Previous Session / Key Mismatch) */}
@@ -602,6 +615,15 @@ export function ChatScreen({
         onDisconnectContact={onDisconnectContact || (() => {})}
         onClose={() => setShowMenuModal(false)}
       />
+
+      {/* Disappearing Timer Selector Modal */}
+      <DisappearingTimerModal
+        visible={showDisappearingModal}
+        currentTimer={chat.disappearingTimer}
+        contactName={participant.name}
+        onSelectTimer={onUpdateDisappearingTimer}
+        onClose={() => setShowDisappearingModal(false)}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -678,21 +700,25 @@ const styles = StyleSheet.create({
   timerToggle: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    backgroundColor: colors.surfaceElevated,
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    borderRadius: 8,
+    gap: 4,
+    backgroundColor: '#f1f5f9',
+    height: 34,
+    paddingHorizontal: 9,
+    borderRadius: 17,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#e2e8f0',
+  },
+  timerToggleActive: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#fde68a',
   },
   timerToggleText: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
-    color: colors.textSecondary,
+    color: '#64748b',
   },
   activeTimerText: {
-    color: '#d97706',
+    color: '#b45309',
   },
   iconButton: {
     padding: 7,
