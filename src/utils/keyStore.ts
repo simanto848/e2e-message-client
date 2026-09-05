@@ -18,9 +18,8 @@ const BACKUP_FREQUENCY_KEY = 'jaby_backup_frequency';
 const BACKUP_PASSPHRASE_KEY = 'jaby_backup_passphrase';
 
 
-export const SECURE_STORE_OPTIONS: SecureStore.SecureStoreOptions = {
-  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-};
+import { SECURE_STORE_OPTIONS } from './secureOptions';
+export { SECURE_STORE_OPTIONS };
 
 // SecureStore keys are restricted to [A-Za-z0-9._-]; sanitize just in case a
 // userId ever contains something outside that set.
@@ -41,6 +40,7 @@ export async function clearSessionToken(): Promise<void> {
 }
 
 export async function saveCurrentUserId(userId: string): Promise<void> {
+  await registerKnownUserId(userId);
   await SecureStore.setItemAsync(CURRENT_USER_ID_KEY, userId, SECURE_STORE_OPTIONS);
 }
 
@@ -74,6 +74,7 @@ export async function saveHistoricalKeyPair(userId: string, pair: IdentityKeyPai
 
 /** Store this device's real X25519 identity keypair for a given account. */
 export async function saveIdentityKeyPair(userId: string, pair: IdentityKeyPair): Promise<void> {
+  await registerKnownUserId(userId);
   const existing = await getIdentityKeyPair(userId);
   if (existing && existing.publicKey !== pair.publicKey) {
     // Preserve old keypair in historical keyring so past messages can still be decrypted
@@ -127,43 +128,105 @@ export async function getBackupPassphrase(): Promise<string | null> {
   return saved || null;
 }
 
+const KNOWN_USER_IDS_KEY = 'jaby_known_user_ids';
+
+async function getKnownUserIds(): Promise<string[]> {
+  try {
+    const raw = await SecureStore.getItemAsync(KNOWN_USER_IDS_KEY, SECURE_STORE_OPTIONS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function registerKnownUserId(userId: string): Promise<void> {
+  if (!userId) return;
+  try {
+    const ids = await getKnownUserIds();
+    if (!ids.includes(userId)) {
+      ids.push(userId);
+      await SecureStore.setItemAsync(KNOWN_USER_IDS_KEY, JSON.stringify(ids), SECURE_STORE_OPTIONS);
+    }
+  } catch {}
+}
+
 export async function clearBackupSettings(): Promise<void> {
-  await Promise.all([
+  await Promise.allSettled([
     SecureStore.deleteItemAsync(BACKUP_FREQUENCY_KEY, SECURE_STORE_OPTIONS),
     SecureStore.deleteItemAsync(BACKUP_PASSPHRASE_KEY, SECURE_STORE_OPTIONS),
   ]);
 }
 
 export async function clearIdentityKeyPair(userId: string): Promise<void> {
-  await Promise.all([
+  await Promise.allSettled([
     SecureStore.deleteItemAsync(IDENTITY_KEYPAIR_PREFIX + safeKeySuffix(userId), SECURE_STORE_OPTIONS),
     SecureStore.deleteItemAsync(HISTORICAL_KEYS_PREFIX + safeKeySuffix(userId), SECURE_STORE_OPTIONS),
   ]);
 }
 
 /**
- * Clear session tokens and auth credentials on normal sign out.
+ * Clear session tokens and auth credentials on sign out.
+ * Wipes the active session and device identity keys for the user so unencrypted
+ * private keys do not remain persisted across accounts.
  */
-export async function clearSession(): Promise<void> {
-  await Promise.all([clearSessionToken(), clearCurrentUserId(), clearPrimaryPin()]);
+export async function clearSession(userId?: string | null): Promise<void> {
+  let uid = userId;
+  if (!uid) {
+    try {
+      uid = await getCurrentUserId();
+    } catch {}
+  }
+
+  const tasks: Promise<unknown>[] = [
+    clearSessionToken(),
+    clearCurrentUserId(),
+    clearPrimaryPin(),
+  ];
+
+  if (uid) {
+    tasks.push(clearIdentityKeyPair(uid));
+  }
+
+  await Promise.allSettled(tasks);
 }
 
 /**
  * Full zeroize wipe: deletes session token, user ID, primary PIN, backup settings,
- * duress configurations, identity keypairs, and all historical keyrings.
+ * duress configurations, identity keypairs, and all historical keyrings across ALL known UIDs.
  */
 export async function wipeAllSecureData(userId?: string | null): Promise<void> {
-  const uid = userId || (await getCurrentUserId());
+  let allUids: string[] = [];
+  try {
+    allUids = await getKnownUserIds();
+  } catch {}
+
+  if (userId && !allUids.includes(userId)) {
+    allUids.push(userId);
+  }
+
+  try {
+    const current = await getCurrentUserId();
+    if (current && !allUids.includes(current)) {
+      allUids.push(current);
+    }
+  } catch {}
+
   const tasks: Promise<unknown>[] = [
     clearSessionToken(),
     clearCurrentUserId(),
     clearPrimaryPin(),
     clearBackupSettings(),
     clearDuressConfig(),
+    SecureStore.deleteItemAsync(KNOWN_USER_IDS_KEY, SECURE_STORE_OPTIONS).catch(() => {}),
   ];
-  if (uid) {
+
+  // Purge identity keypairs and historical keyrings for every account ever active on this device
+  for (const uid of allUids) {
     tasks.push(clearIdentityKeyPair(uid));
   }
-  await Promise.all(tasks);
+
+  await Promise.allSettled(tasks);
 }
 

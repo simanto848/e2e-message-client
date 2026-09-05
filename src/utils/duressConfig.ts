@@ -3,7 +3,8 @@
  * Kept in OS-backed SecureStore so it is never exposed in plaintext files.
  */
 import * as SecureStore from 'expo-secure-store';
-import { getPrimaryPin, SECURE_STORE_OPTIONS } from './keyStore';
+import { getPrimaryPin } from './keyStore';
+import { SECURE_STORE_OPTIONS } from './secureOptions';
 
 const DURESS_PIN_KEY = 'jaby_duress_pin';
 const DURESS_ACTION_KEY = 'jaby_duress_action';

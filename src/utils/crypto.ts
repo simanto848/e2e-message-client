@@ -332,7 +332,7 @@ export async function generateCallSasWords(
   }
   const sharedSecret = nacl.box.before(theirPublicKey, mySecretKey); // real ECDH shared secret
 
-  const seed = `${bytesToHex(sharedSecret)}:${Math.floor(callTimestamp / 60000)}`;
+  const seed = `${bytesToHex(sharedSecret)}:${callTimestamp}`;
   const hex = await sha256Hash(seed);
   let bytes = hexToBytes(hex);
 

@@ -640,7 +640,7 @@ export default function App() {
         callAudio.releaseAudioSession();
         resetCallState();
       }
-      socketService.disconnect();
+      socketService.disconnect({ clearListeners: true });
       await wipeAllSecureData(currentUser?.id);
       await clearDuressConfig();
       await AsyncStorage.clear().catch(() => {});
@@ -1642,7 +1642,7 @@ export default function App() {
     setIsChatHeadDismissed(false);
     setActiveChatHeadContactId(null);
     await clearSession();
-    socketService.disconnect();
+    socketService.disconnect({ clearListeners: true });
     setCurrentUser(null);
     setMySecretKey(null);
     setCurrentScreen('auth');
@@ -1884,7 +1884,7 @@ export default function App() {
 
         {/* Contact Requests Modal */}
         <ContactRequestsModal
-          visible={showRequestsModal}
+          visible={!isDecoyMode && showRequestsModal}
           incomingRequests={incomingRequests}
           outgoingRequests={outgoingRequests}
           onAccept={handleAcceptContactRequest}
@@ -1894,7 +1894,7 @@ export default function App() {
 
         {/* Search Operative & Connect Modal */}
         <SearchOperativeModal
-          visible={showSearchModal}
+          visible={!isDecoyMode && showSearchModal}
           currentUserId={currentUser?.id || ''}
           onSendRequest={handleSendContactRequest}
           onOpenChat={peerId => {
@@ -1906,14 +1906,14 @@ export default function App() {
 
         {/* Ciphertext Inspector Modal */}
         <CipherInspectorModal
-          visible={!!inspectingMessage}
+          visible={!isDecoyMode && !!inspectingMessage}
           message={inspectingMessage}
           onClose={() => setInspectingMessage(null)}
         />
 
         {/* Safety Number Verification Modal */}
         <SafetyNumberModal
-          visible={!!safetyModalChat}
+          visible={!isDecoyMode && !!safetyModalChat}
           chat={safetyModalChat}
           currentUser={currentUser}
           participant={safetyModalChat?.participant || null}
@@ -1951,7 +1951,7 @@ export default function App() {
 
         {/* VIP Invite Manager Modal */}
         <InviteManagerModal
-          visible={showInvitesModal}
+          visible={!isDecoyMode && showInvitesModal}
           invites={invites}
           remainingCount={currentUser?.inviteCodesRemaining ?? 0}
           onGenerateInvite={handleGenerateInvite}
@@ -1960,7 +1960,7 @@ export default function App() {
 
         {/* Linked Devices Modal */}
         <LinkedDevicesModal
-          visible={showLinkedDevicesModal}
+          visible={!isDecoyMode && showLinkedDevicesModal}
           devices={linkedDevices}
           onRevokeDevice={async deviceId => {
             if (currentUser) {
@@ -1979,7 +1979,7 @@ export default function App() {
             your private key it can never be decrypted again after losing
             this device. */}
         <CloudBackupModal
-          visible={showCloudBackupModal}
+          visible={!isDecoyMode && showCloudBackupModal}
           initialMode={cloudBackupInitialMode}
           metadata={cloudBackupMetadata}
           backupFrequency={backupFrequency}

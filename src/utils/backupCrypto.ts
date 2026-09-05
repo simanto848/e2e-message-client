@@ -78,8 +78,8 @@ export interface EncryptedBackupBlob {
 
 /** Encrypt a backup payload with a passphrase-derived key. Real crypto, not a placeholder. */
 export function encryptBackup(payload: BackupPayload, passphrase: string): EncryptedBackupBlob {
-  if (!passphrase || typeof passphrase !== 'string' || passphrase.trim().length < 6) {
-    throw new Error('Backup encryption passphrase must be at least 6 characters long');
+  if (!passphrase || typeof passphrase !== 'string' || passphrase.trim().length < 8) {
+    throw new Error('Backup encryption passphrase must be at least 8 characters long');
   }
   const saltBytes = Crypto.getRandomBytes(16);
   const nonceBytes = Crypto.getRandomBytes(nacl.secretbox.nonceLength);
@@ -99,24 +99,26 @@ export function encryptBackup(payload: BackupPayload, passphrase: string): Encry
  * Decrypt a backup blob. Returns null if the passphrase is wrong or the blob
  * was tampered with — callers must treat null as "cannot restore", never
  * fall back to a default/empty payload as if it succeeded.
- * Tries 100,000 iterations first, and falls back to legacy 5,000 iterations if needed.
+ * Strictly enforces 100,000 PBKDF2 iterations and payload sanity bounds.
  */
 export function decryptBackup(blob: EncryptedBackupBlob, passphrase: string): BackupPayload | null {
   try {
+    if (!blob || !blob.encryptedData || !blob.salt || !blob.iv) return null;
+    // Bounds check to protect memory & prevent DoS (max 2MB)
+    if (blob.encryptedData.length > 2 * 1024 * 1024 || blob.salt.length > 128 || blob.iv.length > 128) {
+      return null;
+    }
+
     const saltBytes = base64ToBytes(blob.salt);
     const nonceBytes = base64ToBytes(blob.iv);
     const boxed = base64ToBytes(blob.encryptedData);
 
-    // Primary attempt with 100,000-iteration key
-    let key = deriveKey(passphrase, saltBytes, PBKDF2_ITERATIONS);
-    let opened = nacl.secretbox.open(boxed, nonceBytes, key);
-
-    // Fallback to 5,000 iterations for legacy backups
-    if (!opened) {
-      key = deriveKey(passphrase, saltBytes, 5000);
-      opened = nacl.secretbox.open(boxed, nonceBytes, key);
+    if (saltBytes.length !== 16 || nonceBytes.length !== nacl.secretbox.nonceLength) {
+      return null;
     }
 
+    const key = deriveKey(passphrase, saltBytes, PBKDF2_ITERATIONS);
+    const opened = nacl.secretbox.open(boxed, nonceBytes, key);
     if (!opened) return null;
 
     const parsed = JSON.parse(new TextDecoder().decode(opened));

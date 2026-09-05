@@ -21,6 +21,27 @@ interface Props {
   onReply?: (msg: Message) => void;
   imageResolution?: ImageResolution;
 }
+// Shared single interval across all ChatBubble instances to eliminate timer proliferation
+type TickerCallback = (now: number) => void;
+const tickerListeners = new Set<TickerCallback>();
+let sharedTickerInterval: ReturnType<typeof setInterval> | null = null;
+
+function subscribeToSharedTicker(cb: TickerCallback): () => void {
+  tickerListeners.add(cb);
+  if (!sharedTickerInterval) {
+    sharedTickerInterval = setInterval(() => {
+      const now = Date.now();
+      tickerListeners.forEach(listener => listener(now));
+    }, 1000);
+  }
+  return () => {
+    tickerListeners.delete(cb);
+    if (tickerListeners.size === 0 && sharedTickerInterval) {
+      clearInterval(sharedTickerInterval);
+      sharedTickerInterval = null;
+    }
+  };
+}
 
 export function ChatBubble({
   message,
@@ -43,19 +64,23 @@ export function ChatBubble({
   useEffect(() => {
     if (!message.expiresAt) return;
 
-    const initial = Math.max(0, Math.ceil((message.expiresAt - Date.now()) / 1000));
-    setTimeLeft(initial);
+    const computeRemaining = (now: number) => {
+      const curRemaining = Math.max(0, Math.ceil((message.expiresAt! - now) / 1000));
+      setTimeLeft(curRemaining);
+      return curRemaining;
+    };
+
+    const initial = computeRemaining(Date.now());
     if (initial <= 0) return;
 
-    const interval = setInterval(() => {
-      const curRemaining = Math.max(0, Math.ceil((message.expiresAt! - Date.now()) / 1000));
-      setTimeLeft(curRemaining);
-      if (curRemaining <= 0) {
-        clearInterval(interval);
+    const unsubscribe = subscribeToSharedTicker(now => {
+      const remaining = computeRemaining(now);
+      if (remaining <= 0) {
+        unsubscribe();
       }
-    }, 1000);
+    });
 
-    return () => clearInterval(interval);
+    return unsubscribe;
   }, [message.expiresAt]);
 
   if (message.isDeletedForEveryone) {
@@ -127,6 +152,28 @@ export function ChatBubble({
               }}
             >
               <Text style={styles.reactionEmoji}>↩️</Text>
+            </TouchableOpacity>
+          )}
+          {onInspectCiphertext && (
+            <TouchableOpacity
+              style={styles.reactionBtn}
+              onPress={() => {
+                onInspectCiphertext(message);
+                setShowReactions(false);
+              }}
+            >
+              <Text style={styles.reactionEmoji}>🛡️</Text>
+            </TouchableOpacity>
+          )}
+          {isMe && onDeleteForEveryone && (
+            <TouchableOpacity
+              style={styles.reactionBtn}
+              onPress={() => {
+                onDeleteForEveryone(message.id);
+                setShowReactions(false);
+              }}
+            >
+              <Text style={styles.reactionEmoji}>🗑️</Text>
             </TouchableOpacity>
           )}
         </View>
