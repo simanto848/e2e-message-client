@@ -133,9 +133,8 @@ class CallAudioManager {
   }
 
   /**
-   * Release expo-av audio session completely before WebRTC & InCallManager take over.
-   * We do NOT touch Audio.setAudioModeAsync during active call to avoid stomping
-   * Android's MODE_IN_COMMUNICATION.
+   * Release expo-av audio session completely and unblock the microphone so
+   * WebRTC and InCallManager can stream bidirectional audio without being muted.
    */
   async releaseAudioSession() {
     await this.stopAudio();
@@ -152,6 +151,45 @@ class CallAudioManager {
       }
     } catch {
       this.currentSound = null;
+    }
+
+    // CRITICAL: Unblock microphone for iOS and Android WebRTC VoIP streams!
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: true,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
+      });
+    } catch (err) {
+      console.warn('[CallAudio] Failed to unblock VoIP audio mode:', err);
+    }
+  }
+
+  async restoreDefaultAudioMode() {
+    this.isPlaying = false;
+    try {
+      if (this.currentSound) {
+        const sound = this.currentSound;
+        this.currentSound = null;
+        await sound.stopAsync().catch(() => {});
+        await sound.unloadAsync().catch(() => {});
+      }
+    } catch {
+      this.currentSound = null;
+    }
+
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+    } catch (err) {
+      console.warn('[CallAudio] Failed to restore default audio mode:', err);
     }
   }
 }

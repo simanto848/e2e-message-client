@@ -34,6 +34,7 @@ import {
   RNMediaStream,
 } from './webrtcAdapter';
 import { socketService } from '../services/socket';
+import { callAudio } from './callAudio';
 
 // Public STUN servers get you a direct connection when both devices are on
 // reasonably open networks. In practice, a meaningful fraction of real-world
@@ -90,16 +91,37 @@ class WebRTCCallEngine {
         'WebRTC native module is not available in standard Expo Go.\n\nTo enable peer-to-peer calling, run the development client build with "npx expo run:android" or "npx expo run:ios".'
       );
     }
-    const stream = (await mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: video ? { facingMode: 'user' } : false,
-    })) as unknown as MediaStream;
-    this.localStream = stream;
-    return stream;
+    // Ensure expo-av doesn't hold audio session in non-recording or ducked mode
+    await callAudio.restoreDefaultAudioMode().catch(() => {});
+
+    let stream: any = null;
+    try {
+      // react-native-webrtc canonical audio constraint
+      stream = await mediaDevices.getUserMedia({
+        audio: true,
+        video: video ? { facingMode: 'user' } : false,
+      });
+    } catch (err) {
+      console.warn('[WebRTC] getUserMedia audio:true fallback to explicit constraints:', err);
+      stream = await mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: video ? { facingMode: 'user' } : false,
+      });
+    }
+
+    // Explicitly ensure all captured local tracks are enabled and unmuted
+    if (stream) {
+      stream.getTracks().forEach((track: any) => {
+        track.enabled = true;
+      });
+    }
+
+    this.localStream = stream as unknown as MediaStream;
+    return this.localStream;
   }
 
   private createPeerConnection(myUserId: string, peerId: string, callId: string, callType: 'audio' | 'video', handlers: CallEngineHandlers): any {
@@ -141,6 +163,7 @@ class WebRTCCallEngine {
       }
     });
 
+    // Handle modern track events
     pc.addEventListener('track', (event: any) => {
       let stream = event.streams && event.streams[0];
       if (!stream && event.track && RNMediaStream) {
@@ -159,6 +182,16 @@ class WebRTCCallEngine {
           t.enabled = true;
         });
         handlers.onRemoteStream(stream);
+      }
+    });
+
+    // Register legacy addstream event in case native webrtc emits it
+    pc.addEventListener('addstream', (event: any) => {
+      if (event.stream) {
+        event.stream.getTracks().forEach((t: any) => {
+          t.enabled = true;
+        });
+        handlers.onRemoteStream(event.stream);
       }
     });
 
@@ -294,9 +327,15 @@ class WebRTCCallEngine {
    */
   private startAudioRouting(video: boolean, isSpeakerOn = true): void {
     try {
-      InCallManager?.start({ media: video ? 'video' : 'audio' });
+      InCallManager?.start({ media: video ? 'video' : 'audio', auto: false });
       InCallManager?.setKeepScreenOn(true);
       this.setSpeakerEnabled(isSpeakerOn);
+      // Native audio sessions (Android AudioManager / iOS AVAudioSession)
+      // take 100-500ms to complete mode transition after start().
+      // Staggered retries ensure speaker state sticks and doesn't get silenced.
+      setTimeout(() => this.setSpeakerEnabled(isSpeakerOn), 250);
+      setTimeout(() => this.setSpeakerEnabled(isSpeakerOn), 800);
+      setTimeout(() => this.setSpeakerEnabled(isSpeakerOn), 1500);
     } catch (err) {
       console.warn('[WebRTC] InCallManager.start failed:', err);
     }
@@ -397,6 +436,7 @@ class WebRTCCallEngine {
     } catch (err) {
       console.warn('[WebRTC] InCallManager.stop failed:', err);
     }
+    callAudio.restoreDefaultAudioMode().catch(() => {});
   }
 }
 

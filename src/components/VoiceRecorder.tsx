@@ -38,6 +38,13 @@ export function VoiceRecorder({
   const [seconds, setSeconds] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const eqBars = useRef([
+    new Animated.Value(6),
+    new Animated.Value(18),
+    new Animated.Value(10),
+    new Animated.Value(22),
+    new Animated.Value(14),
+  ]).current;
   const recordingRef = useRef<Audio.Recording | null>(null);
   const cancelledRef = useRef(false);
 
@@ -85,9 +92,23 @@ export function VoiceRecorder({
     );
     loopAnim.start();
 
+    const eqAnims = eqBars.map((val, i) => {
+      const minH = 6;
+      const maxH = [18, 24, 16, 22, 14][i];
+      const dur = [350, 480, 390, 520, 340][i];
+      return Animated.loop(
+        Animated.sequence([
+          Animated.timing(val, { toValue: maxH, duration: dur, useNativeDriver: false }),
+          Animated.timing(val, { toValue: minH, duration: dur, useNativeDriver: false }),
+        ])
+      );
+    });
+    eqAnims.forEach(anim => anim.start());
+
     return () => {
       cancelledRef.current = true;
       loopAnim.stop();
+      eqAnims.forEach(anim => anim.stop());
       if (interval) clearInterval(interval);
       // If this unmounts without an explicit send (e.g. the screen changes
       // mid-recording), stop and discard rather than leaking an open
@@ -182,20 +203,57 @@ export function VoiceRecorder({
 
   return (
     <View style={styles.recordingContainer}>
-      <TouchableOpacity style={styles.cancelButton} onPress={handleCancel} disabled={isUploading}>
-        <Trash2 size={18} color={colors.danger} />
+      <TouchableOpacity
+        style={styles.cancelButton}
+        onPress={handleCancel}
+        disabled={isUploading}
+        activeOpacity={0.7}
+      >
+        <Trash2 size={18} color="#ef4444" />
       </TouchableOpacity>
 
       <View style={styles.recordStatus}>
-        <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-          <Radio size={14} color={colors.danger} />
-        </Animated.View>
+        {/* Pulsing live indicator */}
+        <View style={styles.pulseWrapper}>
+          <Animated.View style={[styles.pulseHalo, { transform: [{ scale: pulseAnim }] }]} />
+          <View style={styles.pulseDot} />
+        </View>
+
+        {/* Digital Timer */}
         <Text style={styles.recordingTimer}>{formatTime(seconds)}</Text>
-        <Text style={styles.enclaveBadge}>{isUploading ? 'ENCRYPTING…' : 'RECORDING'}</Text>
+
+        {/* Dynamic Equalizer Bars */}
+        <View style={styles.eqContainer}>
+          {eqBars.map((barAnim, idx) => (
+            <Animated.View
+              key={idx}
+              style={[
+                styles.eqBar,
+                { height: barAnim },
+              ]}
+            />
+          ))}
+        </View>
+
+        {/* Status Badge */}
+        <View style={[styles.badgePill, isUploading && styles.uploadingBadgePill]}>
+          <Text style={[styles.enclaveBadge, isUploading && styles.uploadingBadgeText]}>
+            {isUploading ? 'ENCRYPTING…' : 'REC'}
+          </Text>
+        </View>
       </View>
 
-      <TouchableOpacity style={styles.sendVoiceButton} onPress={handleSend} disabled={isUploading}>
-        {isUploading ? <ActivityIndicator size="small" color="#ffffff" /> : <Send size={18} color="#ffffff" />}
+      <TouchableOpacity
+        style={styles.sendVoiceButton}
+        onPress={handleSend}
+        disabled={isUploading}
+        activeOpacity={0.85}
+      >
+        {isUploading ? (
+          <ActivityIndicator size="small" color="#ffffff" />
+        ) : (
+          <Send size={18} color="#ffffff" />
+        )}
       </TouchableOpacity>
     </View>
   );
@@ -203,8 +261,9 @@ export function VoiceRecorder({
 
 const styles = StyleSheet.create({
   micButton: {
-    padding: 10,
-    borderRadius: 24,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: colors.primaryLight,
     borderWidth: 1,
     borderColor: '#a7f3d0',
@@ -213,40 +272,98 @@ const styles = StyleSheet.create({
   },
   recordingContainer: {
     flex: 1,
+    height: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: '#ffffff',
     borderRadius: 24,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 6,
     borderWidth: 1,
-    borderColor: colors.danger,
+    borderColor: '#e2e8f0',
+    ...shadows.sm,
   },
   cancelButton: {
-    padding: 8,
-    backgroundColor: colors.dangerLight,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fee2e2',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   recordStatus: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
+    flex: 1,
+    paddingHorizontal: 8,
+  },
+  pulseWrapper: {
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pulseHalo: {
+    position: 'absolute',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(239, 68, 68, 0.25)',
+  },
+  pulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ef4444',
   },
   recordingTimer: {
-    color: colors.textPrimary,
+    color: '#0f172a',
     fontSize: 14,
     fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+    minWidth: 34,
+  },
+  eqContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    height: 26,
+    paddingHorizontal: 4,
+  },
+  eqBar: {
+    width: 3,
+    borderRadius: 1.5,
+    backgroundColor: colors.primary,
+  },
+  badgePill: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: colors.primaryLight,
+  },
+  uploadingBadgePill: {
+    backgroundColor: '#fef3c7',
   },
   enclaveBadge: {
     color: colors.primaryDark,
     fontSize: 9,
     fontWeight: '800',
-    letterSpacing: 1,
+    letterSpacing: 0.5,
+  },
+  uploadingBadgeText: {
+    color: '#b45309',
   },
   sendVoiceButton: {
-    padding: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: colors.primary,
-    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadows.sm,
   },
 });

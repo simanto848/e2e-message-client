@@ -12,20 +12,17 @@ import { NativeModules, Platform } from 'react-native';
  * allowing the entire messenger app to run seamlessly without crashing.
  */
 
-export const isWebRTCSupported: boolean =
-  Platform.OS !== 'web' &&
-  Boolean(NativeModules && NativeModules.WebRTCModule != null);
-
 let WebRTC: any = null;
 
-if (isWebRTCSupported) {
+if (Platform.OS !== 'web') {
   try {
     WebRTC = require('react-native-webrtc');
   } catch (error) {
-    console.warn('[WebRTC] Native module was present in NativeModules, but require("react-native-webrtc") failed:', error);
     WebRTC = null;
   }
 }
+
+export const isWebRTCSupported: boolean = Boolean(WebRTC && WebRTC.RTCPeerConnection);
 
 export const RTCPeerConnection = WebRTC?.RTCPeerConnection ?? null;
 export const RTCIceCandidate = WebRTC?.RTCIceCandidate ?? null;
@@ -47,12 +44,11 @@ export type MediaStream = any;
  * since it's also native code, unavailable in Expo Go/web.
  */
 let InCallManagerModule: any = null;
-if (isWebRTCSupported) {
+if (Platform.OS !== 'web') {
   try {
     const incall = require('react-native-incall-manager');
     InCallManagerModule = incall.default || incall;
   } catch (error) {
-    console.warn('[WebRTC] react-native-incall-manager was expected but failed to load:', error);
     InCallManagerModule = null;
   }
 }

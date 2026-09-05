@@ -133,6 +133,7 @@ export function ChatBubble({
         style={[
           styles.bubble,
           isMe ? styles.myBubble : styles.theirBubble,
+          isAudio && styles.audioBubble,
           message.disappearingTimer > 0 && styles.ephemeralBorder,
         ]}
       >
@@ -422,19 +423,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
+  audioBubble: {
+    minWidth: 235,
+    maxWidth: 270,
+  },
   audioRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
     paddingVertical: 4,
+    minHeight: 40,
   },
   playButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
+    ...shadows.sm,
   },
   myPlayButton: {
     backgroundColor: '#ffffff',
@@ -442,21 +448,25 @@ const styles = StyleSheet.create({
   waveformContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    gap: 2.5,
     flex: 1,
-    height: 30,
+    height: 32,
+    marginHorizontal: 8,
+    justifyContent: 'center',
   },
   waveBar: {
     width: 3,
-    borderRadius: 2,
+    borderRadius: 1.5,
   },
   audioDuration: {
-    fontSize: 11,
+    fontSize: 12,
     color: colors.textSecondary,
-    fontWeight: '600',
+    fontWeight: '700',
+    minWidth: 26,
+    textAlign: 'right',
   },
   myAudioDuration: {
-    color: 'rgba(255,255,255,0.9)',
+    color: 'rgba(255,255,255,0.95)',
   },
   speedBtn: {
     paddingHorizontal: 6,
