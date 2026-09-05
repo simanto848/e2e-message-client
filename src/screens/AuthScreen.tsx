@@ -127,8 +127,8 @@ export function AuthScreen({ onAuthenticated }: Props) {
       );
       return;
     }
-    if (!pinCode || pinCode.length < 4) {
-      Alert.alert('PIN Too Short', 'Choose a PIN or passphrase of at least 4 characters.');
+    if (!pinCode || pinCode.length < 6) {
+      Alert.alert('PIN Too Short', 'Choose a PIN or passcode of at least 6 characters for enclave protection.');
       return;
     }
 

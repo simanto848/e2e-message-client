@@ -25,6 +25,7 @@ import {
   Radio,
   Lock,
   Camera,
+  User,
 } from './Icons';
 import { CallState } from '../types';
 import { colors, shadows } from '../theme';
@@ -130,16 +131,16 @@ export function CallModal({
                 style={styles.fullCamera}
                 objectFit="cover"
               />
-            ) : (
+            ) : remote?.avatar ? (
               <Image
-                source={{
-                  uri:
-                    remote?.avatar ||
-                    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=800',
-                }}
+                source={{ uri: remote.avatar }}
                 style={styles.remoteVideoFeed}
                 blurRadius={2}
               />
+            ) : (
+              <View style={[styles.remoteVideoFeed, styles.avatarPlaceholder]}>
+                <User size={72} color={colors.textSecondary} />
+              </View>
             )}
 
             {/* Local Self-View PIP (Picture-In-Picture) — our own camera,
@@ -153,15 +154,15 @@ export function CallModal({
                   mirror={callState.isFrontCamera}
                   zOrder={1}
                 />
-              ) : (
+              ) : remote?.avatar ? (
                 <Image
-                  source={{
-                    uri:
-                      remote?.avatar ||
-                      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200',
-                  }}
+                  source={{ uri: remote.avatar }}
                   style={styles.pipAvatar}
                 />
+              ) : (
+                <View style={[styles.pipAvatar, styles.avatarPlaceholder]}>
+                  <User size={28} color={colors.textSecondary} />
+                </View>
               )}
               <View style={styles.pipBadge}>
                 <Text style={styles.pipBadgeText}>You</Text>
@@ -215,14 +216,16 @@ export function CallModal({
                 { transform: [{ scale: ringPulseAnim }] },
               ]}
             >
-              <Image
-                source={{
-                  uri:
-                    remote?.avatar ||
-                    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200',
-                }}
-                style={styles.avatar}
-              />
+              {remote?.avatar ? (
+                <Image
+                  source={{ uri: remote.avatar }}
+                  style={styles.avatar}
+                />
+              ) : (
+                <View style={[styles.avatar, styles.avatarPlaceholder]}>
+                  <User size={54} color={colors.primary} />
+                </View>
+              )}
             </Animated.View>
 
             <Text style={styles.callerName}>{remote?.name || 'Contact'}</Text>
@@ -511,6 +514,11 @@ const styles = StyleSheet.create({
     width: 108,
     height: 108,
     borderRadius: 54,
+  },
+  avatarPlaceholder: {
+    backgroundColor: '#1e293b',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   callerName: {
     fontSize: 22,

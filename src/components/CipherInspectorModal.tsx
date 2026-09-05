@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Modal, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
 import { ShieldCheck, X, Copy, Lock, Cpu, Key } from './Icons';
 import * as Clipboard from 'expo-clipboard';
 import { Message } from '../types';
@@ -17,7 +17,20 @@ export function CipherInspectorModal({ visible, message, onClose }: Props) {
   const payload = message.encryptedPayload;
 
   const copyToClipboard = async (text: string) => {
+    if (!text) return;
     await Clipboard.setStringAsync(text);
+    Alert.alert(
+      'Copied Securely',
+      'Encrypted payload copied to clipboard. For security, clipboard contents will auto-clear in 30 seconds.'
+    );
+    setTimeout(async () => {
+      try {
+        const current = await Clipboard.getStringAsync();
+        if (current === text) {
+          await Clipboard.setStringAsync('');
+        }
+      } catch {}
+    }, 30000);
   };
 
   return (

@@ -78,6 +78,9 @@ export interface EncryptedBackupBlob {
 
 /** Encrypt a backup payload with a passphrase-derived key. Real crypto, not a placeholder. */
 export function encryptBackup(payload: BackupPayload, passphrase: string): EncryptedBackupBlob {
+  if (!passphrase || typeof passphrase !== 'string' || passphrase.trim().length < 6) {
+    throw new Error('Backup encryption passphrase must be at least 6 characters long');
+  }
   const saltBytes = Crypto.getRandomBytes(16);
   const nonceBytes = Crypto.getRandomBytes(nacl.secretbox.nonceLength);
   const key = deriveKey(passphrase, saltBytes, PBKDF2_ITERATIONS);

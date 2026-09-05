@@ -127,11 +127,20 @@ class SocketService {
     await this.connect();
   }
 
-  disconnect() {
+  disconnect(options?: { clearListeners?: boolean }) {
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;
     }
+    if (options?.clearListeners) {
+      this.listeners.clear();
+      this.outgoingQueue = [];
+    }
+  }
+
+  cleanupListeners() {
+    this.listeners.clear();
+    this.outgoingQueue = [];
   }
 
   // Messaging
@@ -168,11 +177,19 @@ class SocketService {
     candidate?: unknown;
     sasWords?: string[];
   }) {
+    const payload = {
+      ...signal,
+      timestamp: Date.now(),
+    };
     if (this.socket?.connected) {
-      this.socket.emit('call_signal', {
-        ...signal,
-        timestamp: Date.now(),
-      });
+      this.socket.emit('call_signal', payload);
+    } else if (signal.signalType === 'hangup' || signal.signalType === 'reject') {
+      // Critical teardown signals should be queued so the peer is not left ringing/hanging
+      this.emitOrQueue('call_signal', payload);
+    } else {
+      if (__DEV__) {
+        console.warn('[Mobile Socket] Call signal dropped while disconnected:', signal.signalType);
+      }
     }
   }
 

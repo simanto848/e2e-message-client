@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -33,6 +33,16 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
   const [enteredPin, setEnteredPin] = useState('');
   const [pinError, setPinError] = useState('');
   const [showEraseModal, setShowEraseModal] = useState(false);
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
+
+  useEffect(() => {
+    if (lockoutSeconds <= 0) return;
+    const interval = setInterval(() => {
+      setLockoutSeconds(prev => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutSeconds]);
 
   if (!isLocked) return null;
 
@@ -63,6 +73,8 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
       if (result.success) {
         setEnteredPin('');
         setShowPinEntry(false);
+        setFailedAttempts(0);
+        setLockoutSeconds(0);
         onUnlock();
       }
     } finally {
@@ -72,6 +84,11 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
   };
 
   const handlePinSubmit = async () => {
+    if (lockoutSeconds > 0) {
+      setPinError(`Too many attempts. Locked for ${lockoutSeconds}s.`);
+      return;
+    }
+
     const trimmed = enteredPin.trim();
     if (!trimmed) {
       setPinError('Please enter your passcode');
@@ -85,6 +102,8 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
       if (duressPin && trimmed === duressPin) {
         setEnteredPin('');
         setShowPinEntry(false);
+        setFailedAttempts(0);
+        setLockoutSeconds(0);
         if (duressAction === 'wipe') {
           if (onEmergencyWipe) {
             onEmergencyWipe();
@@ -107,10 +126,21 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
           setEnteredPin('');
           setShowPinEntry(false);
           setPinError('');
+          setFailedAttempts(0);
+          setLockoutSeconds(0);
           onUnlock();
           return;
         } else {
-          setPinError('Incorrect PIN code');
+          setFailedAttempts(prev => {
+            const next = prev + 1;
+            if (next >= 5) {
+              setLockoutSeconds(30);
+              setPinError('Too many failed attempts. Locked for 30s.');
+              return 0;
+            }
+            setPinError(`Incorrect passcode (${next}/5 attempts)`);
+            return next;
+          });
           return;
         }
       }
@@ -118,6 +148,8 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
       // If no primary PIN was stored, fallback to standard unlock
       setEnteredPin('');
       setShowPinEntry(false);
+      setFailedAttempts(0);
+      setLockoutSeconds(0);
       onUnlock();
     } catch {
       setPinError('Verification failed');
@@ -146,7 +178,9 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
               <Text style={styles.title}>APP LOCKED</Text>
               <Text style={styles.subtitle}>
                 {showPinEntry
-                  ? 'Enter your passcode or duress safety PIN.'
+                  ? lockoutSeconds > 0
+                    ? `Too many attempts. Cooldown active (${lockoutSeconds}s).`
+                    : 'Enter your passcode to unlock.'
                   : 'Unlock JABY to access your messages and calls.'}
               </Text>
 
@@ -212,7 +246,7 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
                     }}
                   >
                     <KeyRound size={16} color={colors.textSecondary} />
-                    <Text style={styles.secondaryBtnText}>Enter Passcode / Duress PIN</Text>
+                    <Text style={styles.secondaryBtnText}>Use Passcode</Text>
                   </TouchableOpacity>
                 </View>
               )}

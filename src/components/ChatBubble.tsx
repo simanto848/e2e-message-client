@@ -43,13 +43,18 @@ export function ChatBubble({
   useEffect(() => {
     if (!message.expiresAt) return;
 
-    const updateTimer = () => {
-      const remaining = Math.max(0, Math.ceil((message.expiresAt! - Date.now()) / 1000));
-      setTimeLeft(remaining);
-    };
+    const initial = Math.max(0, Math.ceil((message.expiresAt - Date.now()) / 1000));
+    setTimeLeft(initial);
+    if (initial <= 0) return;
 
-    updateTimer();
-    const interval = setInterval(updateTimer, 1000);
+    const interval = setInterval(() => {
+      const curRemaining = Math.max(0, Math.ceil((message.expiresAt! - Date.now()) / 1000));
+      setTimeLeft(curRemaining);
+      if (curRemaining <= 0) {
+        clearInterval(interval);
+      }
+    }, 1000);
+
     return () => clearInterval(interval);
   }, [message.expiresAt]);
 

@@ -64,11 +64,16 @@ export function useWebRTCCall({
   useEffect(() => {
     return () => {
       stopCallTimer();
+      if (callStateRef.current.active) {
+        webrtcCallEngine.endCall(callStateRef.current.type);
+      }
     };
   }, []);
 
   const handleCallConnectionStateChange = (state: string) => {
-    console.log('[Call] connection state:', state);
+    if (__DEV__) {
+      console.log('[Call] connection state:', state);
+    }
     if (state === 'failed') {
       setCallState(prev => ({ ...prev, isReconnecting: false }));
       Alert.alert('Call Disconnected', 'The connection was lost and could not be recovered.');
@@ -77,16 +82,6 @@ export function useWebRTCCall({
     }
     setCallState(prev => ({ ...prev, isReconnecting: state === 'disconnected' }));
   };
-
-  // Clean up timer on unmount
-  useEffect(() => {
-    return () => {
-      if (callTimerRef.current) {
-        clearInterval(callTimerRef.current);
-        callTimerRef.current = null;
-      }
-    };
-  }, []);
 
   const handleStartCall = async (type: 'audio' | 'video') => {
     if (!currentUser || !activeChatId || !mySecretKey) return;
@@ -116,7 +111,8 @@ export function useWebRTCCall({
 
     const callTimestamp = Date.now();
     const sas = await generateCallSasWords(mySecretKey, activeChat.participant.publicKey, callTimestamp);
-    const callId = `call_${callTimestamp}_${currentUser.id}`;
+    const randomNonce = Math.random().toString(36).slice(2, 9);
+    const callId = `call_${callTimestamp}_${currentUser.id}_${randomNonce}`;
     activeCallIdRef.current = callId;
 
     callAudio.playRingtone();
@@ -239,27 +235,21 @@ export function useWebRTCCall({
   };
 
   const handleToggleMute = () => {
-    setCallState(prev => {
-      const nextMute = !prev.isMuted;
-      webrtcCallEngine.setMuted(nextMute);
-      return { ...prev, isMuted: nextMute };
-    });
+    const nextMute = !callStateRef.current.isMuted;
+    webrtcCallEngine.setMuted(nextMute);
+    setCallState(prev => ({ ...prev, isMuted: nextMute }));
   };
 
   const handleToggleVideo = () => {
-    setCallState(prev => {
-      const nextVideoOff = !prev.isVideoOff;
-      webrtcCallEngine.setVideoEnabled(!nextVideoOff);
-      return { ...prev, isVideoOff: nextVideoOff };
-    });
+    const nextVideoOff = !callStateRef.current.isVideoOff;
+    webrtcCallEngine.setVideoEnabled(!nextVideoOff);
+    setCallState(prev => ({ ...prev, isVideoOff: nextVideoOff }));
   };
 
   const handleToggleSpeaker = () => {
-    setCallState(prev => {
-      const nextSpeaker = !prev.isSpeakerOn;
-      webrtcCallEngine.setSpeakerEnabled(nextSpeaker);
-      return { ...prev, isSpeakerOn: nextSpeaker };
-    });
+    const nextSpeaker = !callStateRef.current.isSpeakerOn;
+    webrtcCallEngine.setSpeakerEnabled(nextSpeaker);
+    setCallState(prev => ({ ...prev, isSpeakerOn: nextSpeaker }));
   };
 
   const handleFlipCamera = () => {

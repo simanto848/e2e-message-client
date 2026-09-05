@@ -10,21 +10,35 @@
  * Call beginExternalActivity() right before launching a picker/camera Intent
  * and endExternalActivity() in a finally block once it resolves, so the
  * lock effect can tell "we caused this background transition" apart from
- * "the user actually left the app". A counter (not a boolean) so nested or
- * overlapping calls can't leave it stuck suppressed if one resolves before
- * another starts.
+ * "the user actually left the app".
  */
+const MAX_EXTERNAL_ACTIVITY_DURATION_MS = 60000; // 60s self-healing timeout
+
 let activeExternalActivities = 0;
+let lastActivityTimestamp = 0;
 
 export function beginExternalActivity(): void {
   activeExternalActivities++;
+  lastActivityTimestamp = Date.now();
 }
 
 export function endExternalActivity(): void {
-  // Decrease immediately without a 2.5s lingering window that suppresses auto-lock
   activeExternalActivities = Math.max(0, activeExternalActivities - 1);
+  if (activeExternalActivities === 0) {
+    lastActivityTimestamp = 0;
+  }
 }
 
 export function isExternalActivityActive(): boolean {
-  return activeExternalActivities > 0;
+  if (activeExternalActivities <= 0) return false;
+  // Guard against runaway or leaked external activity flags
+  if (lastActivityTimestamp > 0 && Date.now() - lastActivityTimestamp > MAX_EXTERNAL_ACTIVITY_DURATION_MS) {
+    if (__DEV__) {
+      console.warn('[AppLockGuard] External activity guard timed out after 60s — auto-clearing');
+    }
+    activeExternalActivities = 0;
+    lastActivityTimestamp = 0;
+    return false;
+  }
+  return true;
 }

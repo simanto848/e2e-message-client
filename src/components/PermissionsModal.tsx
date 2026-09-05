@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, Modal, TouchableOpacity, StyleSheet } from 'react-native';
-import { Camera, Mic, ImageIcon, ShieldCheck, CheckCircle2, ChevronRight } from './Icons';
+import { Camera, Mic, ImageIcon, ShieldCheck, CheckCircle2, ChevronRight, Bell } from './Icons';
 import { AppPermissionsStatus, requestSinglePermission } from '../utils/permissions';
 import { colors, shadows } from '../theme';
 
@@ -19,7 +19,7 @@ export function PermissionsModal({
   onRefreshStatus,
   onDismiss,
 }: Props) {
-  const handleSinglePerm = async (type: 'camera' | 'microphone' | 'photos') => {
+  const handleSinglePerm = async (type: 'camera' | 'microphone' | 'photos' | 'notifications') => {
     await requestSinglePermission(type);
     if (onRefreshStatus) onRefreshStatus();
   };
@@ -94,6 +94,26 @@ export function PermissionsModal({
                 <Text style={styles.permDesc}>To send pictures and attachments</Text>
               </View>
               {status.photos ? (
+                <CheckCircle2 size={18} color={colors.primary} />
+              ) : (
+                <ChevronRight size={18} color={colors.textSecondary} />
+              )}
+            </TouchableOpacity>
+
+            {/* Notifications */}
+            <TouchableOpacity
+              style={[styles.permItem, status.notifications && styles.permItemGranted]}
+              onPress={() => !status.notifications && handleSinglePerm('notifications')}
+              activeOpacity={status.notifications ? 1 : 0.7}
+            >
+              <View style={styles.permIconBox}>
+                <Bell size={20} color={status.notifications ? colors.primary : '#3b82f6'} />
+              </View>
+              <View style={styles.permTextCol}>
+                <Text style={styles.permName}>Notifications</Text>
+                <Text style={styles.permDesc}>To receive calls and message alerts</Text>
+              </View>
+              {status.notifications ? (
                 <CheckCircle2 size={18} color={colors.primary} />
               ) : (
                 <ChevronRight size={18} color={colors.textSecondary} />

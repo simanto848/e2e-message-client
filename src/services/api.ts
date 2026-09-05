@@ -1,22 +1,11 @@
-/**
- * Dynamic Backend API Client for JABY Mobile App
- *
- * Every request now carries the real session token (issued by /auth/login or
- * /auth/register, verified server-side) in the Authorization header. The
- * server derives "who is making this request" from that token — the userId
- * values still passed in some function signatures below are used only to
- * address requests (e.g. "which chat"), and the server independently
- * rejects any attempt to act as someone else even if a caller here got it
- * wrong, so this client code is defense-in-depth, not the actual boundary.
- */
 import {
   UserProfile,
   ChatThread,
   Message,
+  ContactRequestWithUser,
   InviteCode,
   Attachment,
   EncryptedPayload,
-  ContactRequestWithUser,
   SearchOperativeResult,
   DisappearingTimer,
   BackupFrequency,
@@ -35,25 +24,52 @@ async function authedJsonHeaders(): Promise<Record<string, string>> {
   return { 'Content-Type': 'application/json', ...(await authHeaders()) };
 }
 
+/**
+ * Safely parse HTTP responses without throwing SyntaxError on HTML/non-JSON (e.g. 502/504 Gateway errors).
+ */
+async function safeParseResponse<T = any>(res: Response, fallback: T): Promise<T> {
+  try {
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (!res.ok && typeof data === 'object' && data !== null && !('success' in data)) {
+        return { success: false, error: data.error || data.message || `HTTP ${res.status}` } as any;
+      }
+      return data;
+    }
+    const text = await res.text();
+    if (!res.ok) {
+      return { success: false, error: `HTTP ${res.status}: ${text.slice(0, 100)}` } as any;
+    }
+    return fallback;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network parse error' } as any;
+  }
+}
+
 export const api = {
   // Health Check
   async checkHealth() {
     try {
       const res = await fetch(`${API_BASE_URL}/health`);
-      return await res.json();
+      return await safeParseResponse(res, { status: 'offline' });
     } catch {
       return { status: 'offline' };
     }
   },
 
   // Auth: Login (no token needed yet — this is what obtains one)
-  async login(handle: string, pinCode: string) {
-    const res = await fetch(`${API_BASE_URL}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ handle, pinCode }),
-    });
-    return await res.json();
+  async login(handle: string, pinCode: string): Promise<{ success: boolean; token?: string; user?: UserProfile; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handle, pinCode }),
+      });
+      return await safeParseResponse(res, { success: false, error: 'Network error' });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Login connection failed' };
+    }
   },
 
   // Auth: Register (no token needed yet)
@@ -64,24 +80,32 @@ export const api = {
     publicKey: string;
     pinCode: string;
     fingerprintHash?: string;
-  }) {
-    const res = await fetch(`${API_BASE_URL}/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    return await res.json();
+  }): Promise<{ success: boolean; token?: string; user?: UserProfile; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      return await safeParseResponse(res, { success: false, error: 'Network error' });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Registration connection failed' };
+    }
   },
 
   // Auth: Update profile (name/status/avatar, and — for key rotation on a
   // fresh device — a new publicKey). Always acts as the authenticated caller.
-  async updateProfile(params: { name?: string; statusMessage?: string; avatar?: string; publicKey?: string }) {
-    const res = await fetch(`${API_BASE_URL}/auth/profile`, {
-      method: 'PUT',
-      headers: await authedJsonHeaders(),
-      body: JSON.stringify(params),
-    });
-    return await res.json();
+  async updateProfile(params: { name?: string; statusMessage?: string; avatar?: string; publicKey?: string }): Promise<{ success: boolean; user?: UserProfile; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/profile`, {
+        method: 'PUT',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify(params),
+      });
+      return await safeParseResponse(res, { success: false, error: 'Network error' });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Update profile failed' };
+    }
   },
 
   // Settings & Privacy: update settings stored on server
@@ -97,7 +121,7 @@ export const api = {
         headers: await authedJsonHeaders(),
         body: JSON.stringify(settings),
       });
-      return await res.json();
+      return await safeParseResponse(res, { success: false, error: 'Failed to update settings' });
     } catch (err: any) {
       return { success: false, error: err.message || 'Failed to update settings' };
     }
@@ -105,12 +129,16 @@ export const api = {
 
   // Auth: Update password/PIN
   async updatePassword(currentPassword: string, newPassword: string): Promise<{ success: boolean; error?: string; message?: string; token?: string }> {
-    const res = await fetch(`${API_BASE_URL}/auth/password`, {
-      method: 'PUT',
-      headers: await authedJsonHeaders(),
-      body: JSON.stringify({ currentPassword, newPassword }),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/password`, {
+        method: 'PUT',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      return await safeParseResponse(res, { success: false, error: 'Failed to update password' });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Network error updating password' };
+    }
   },
 
   // Signs a direct-to-Cloudinary avatar upload — see src/utils/avatarUpload.ts.
@@ -124,18 +152,40 @@ export const api = {
     apiKey: string;
     cloudName: string;
   }> {
-    const res = await fetch(`${API_BASE_URL}/auth/avatar-signature`, {
-      method: 'POST',
-      headers: await authHeaders(),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/avatar-signature`, {
+        method: 'POST',
+        headers: await authHeaders(),
+      });
+      return await safeParseResponse(res, {
+        success: false,
+        error: 'Failed to get avatar signature',
+        timestamp: 0,
+        signature: '',
+        folder: '',
+        publicId: '',
+        apiKey: '',
+        cloudName: '',
+      });
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'Network error',
+        timestamp: 0,
+        signature: '',
+        folder: '',
+        publicId: '',
+        apiKey: '',
+        cloudName: '',
+      };
+    }
   },
 
   // Contacts: Fetch Approved Contacts / Threads
   async getContacts(userId: string): Promise<ChatThread[]> {
     try {
       const res = await fetch(`${API_BASE_URL}/contacts/${userId}`, { headers: await authHeaders() });
-      const data = await res.json();
+      const data = await safeParseResponse(res, { contacts: [] });
       return data.contacts || [];
     } catch {
       return [];
@@ -146,7 +196,7 @@ export const api = {
   async searchOperatives(query: string): Promise<SearchOperativeResult[]> {
     try {
       const res = await fetch(`${API_BASE_URL}/contacts/search?q=${encodeURIComponent(query)}`, { headers: await authHeaders() });
-      const data = await res.json();
+      const data = await safeParseResponse(res, { results: [] });
       return data.results || [];
     } catch {
       return [];
@@ -157,7 +207,7 @@ export const api = {
   async getContactRequests(userId: string): Promise<{ incoming: ContactRequestWithUser[]; outgoing: ContactRequestWithUser[] }> {
     try {
       const res = await fetch(`${API_BASE_URL}/contacts/requests/${userId}`, { headers: await authHeaders() });
-      const data = await res.json();
+      const data = await safeParseResponse(res, { requests: { incoming: [], outgoing: [] } });
       return data.requests || { incoming: [], outgoing: [] };
     } catch {
       return { incoming: [], outgoing: [] };
@@ -165,33 +215,45 @@ export const api = {
   },
 
   // Contacts: Send Connection Request
-  async sendContactRequest(receiverId: string) {
-    const res = await fetch(`${API_BASE_URL}/contacts/request`, {
-      method: 'POST',
-      headers: await authedJsonHeaders(),
-      body: JSON.stringify({ receiverId }),
-    });
-    return await res.json();
+  async sendContactRequest(receiverId: string): Promise<{ success: boolean; request?: any; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/contacts/request`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify({ receiverId }),
+      });
+      return await safeParseResponse(res, { success: false, error: 'Network error' });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to send request' };
+    }
   },
 
   // Contacts: Accept Connection Request
   async acceptContactRequest(requestId: string) {
-    const res = await fetch(`${API_BASE_URL}/contacts/accept`, {
-      method: 'POST',
-      headers: await authedJsonHeaders(),
-      body: JSON.stringify({ requestId }),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/contacts/accept`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify({ requestId }),
+      });
+      return await safeParseResponse(res, { success: false, error: 'Network error' });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to accept request' };
+    }
   },
 
   // Contacts: Decline Connection Request
   async declineContactRequest(requestId: string) {
-    const res = await fetch(`${API_BASE_URL}/contacts/decline`, {
-      method: 'POST',
-      headers: await authedJsonHeaders(),
-      body: JSON.stringify({ requestId }),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/contacts/decline`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify({ requestId }),
+      });
+      return await safeParseResponse(res, { success: false, error: 'Network error' });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to decline request' };
+    }
   },
 
   // Messages: Send Message via REST for guaranteed DB persistence
@@ -202,7 +264,7 @@ export const api = {
         headers: await authedJsonHeaders(),
         body: JSON.stringify(msg),
       });
-      return await res.json();
+      return await safeParseResponse(res, { success: false });
     } catch (err) {
       console.warn('REST sendMessage failed, fallback to socket:', err);
       return { success: false };
@@ -217,7 +279,7 @@ export const api = {
         headers: await authedJsonHeaders(),
         body: JSON.stringify({ peerId, chatId }),
       });
-      return await res.json();
+      return await safeParseResponse(res, { success: false });
     } catch (err) {
       console.warn('REST markMessagesAsRead failed:', err);
       return { success: false };
@@ -228,7 +290,7 @@ export const api = {
   async getMessages(chatId: string, userId: string): Promise<Message[]> {
     try {
       const res = await fetch(`${API_BASE_URL}/contacts/messages/${chatId}/${userId}`, { headers: await authHeaders() });
-      const data = await res.json();
+      const data = await safeParseResponse(res, { messages: [] });
       return data.messages || [];
     } catch {
       return [];
@@ -237,55 +299,75 @@ export const api = {
 
   // Messages: Update Disappearing Timer
   async updateDisappearingTimer(peerId: string, timer: DisappearingTimer) {
-    const res = await fetch(`${API_BASE_URL}/contacts/disappearing-timer`, {
-      method: 'PUT',
-      headers: await authedJsonHeaders(),
-      body: JSON.stringify({ peerId, timer }),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/contacts/disappearing-timer`, {
+        method: 'PUT',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify({ peerId, timer }),
+      });
+      return await safeParseResponse(res, { success: false });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to update timer' };
+    }
   },
 
   // Contacts: Clear Chat History
   async clearChatHistory(peerId: string) {
-    const res = await fetch(`${API_BASE_URL}/contacts/clear-history`, {
-      method: 'POST',
-      headers: await authedJsonHeaders(),
-      body: JSON.stringify({ peerId }),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/contacts/clear-history`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify({ peerId }),
+      });
+      return await safeParseResponse(res, { success: false });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to clear chat history' };
+    }
   },
 
   // Contacts: Disconnect Contact
   async disconnectContact(peerId: string) {
-    const res = await fetch(`${API_BASE_URL}/contacts/disconnect`, {
-      method: 'POST',
-      headers: await authedJsonHeaders(),
-      body: JSON.stringify({ peerId }),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/contacts/disconnect`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify({ peerId }),
+      });
+      return await safeParseResponse(res, { success: false });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to disconnect contact' };
+    }
   },
 
   // Invites: Validate
   async validateInvite(code: string) {
-    const res = await fetch(`${API_BASE_URL}/invites/validate/${encodeURIComponent(code)}`);
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/invites/validate/${encodeURIComponent(code)}`);
+      return await safeParseResponse(res, { valid: false });
+    } catch {
+      return { valid: false };
+    }
   },
 
   // Invites: Create
-  async createInvite(daysValid = 7) {
-    const res = await fetch(`${API_BASE_URL}/invites/create`, {
-      method: 'POST',
-      headers: await authedJsonHeaders(),
-      body: JSON.stringify({ daysValid }),
-    });
-    return await res.json();
+  async createInvite(daysValid = 7): Promise<{ success: boolean; invite?: InviteCode; remainingCodes?: number; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/invites/create`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify({ daysValid }),
+      });
+      return await safeParseResponse(res, { success: false });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to create invite' };
+    }
   },
 
   // Invites: Fetch user invites
   async getUserInvites(userId: string): Promise<InviteCode[]> {
     try {
       const res = await fetch(`${API_BASE_URL}/invites/user/${userId}`, { headers: await authHeaders() });
-      const data = await res.json();
+      const data = await safeParseResponse(res, { invites: [] });
       return data.invites || [];
     } catch {
       return [];
@@ -306,31 +388,54 @@ export const api = {
     },
     tokenOverride?: string
   ) {
-    const headers = tokenOverride
-      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenOverride}` }
-      : await authedJsonHeaders();
-    const res = await fetch(`${API_BASE_URL}/backup/save`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(backupData),
-    });
-    return await res.json();
+    try {
+      const headers = tokenOverride
+        ? { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenOverride}` }
+        : await authedJsonHeaders();
+      const res = await fetch(`${API_BASE_URL}/backup/save`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(backupData),
+      });
+      return await safeParseResponse(res, { success: false });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to save cloud backup' };
+    }
   },
 
   // Cloud Backup: Fetch
-  async getCloudBackup(userId: string, tokenOverride?: string) {
-    const headers = tokenOverride
-      ? { Authorization: `Bearer ${tokenOverride}` }
-      : await authHeaders();
-    const res = await fetch(`${API_BASE_URL}/backup/${userId}`, { headers });
-    return await res.json();
+  async getCloudBackup(userId: string, tokenOverride?: string): Promise<{
+    success: boolean;
+    backup?: {
+      encryptedData: string;
+      salt: string;
+      iv: string;
+      backupSizeKb?: number;
+      backupVersion?: string;
+      totalMessagesCount?: number;
+      totalChatsCount?: number;
+      keyFingerprint?: string;
+      createdAt?: string;
+      timestamp?: number | string;
+    } | null;
+    error?: string;
+  }> {
+    try {
+      const headers = tokenOverride
+        ? { Authorization: `Bearer ${tokenOverride}` }
+        : await authHeaders();
+      const res = await fetch(`${API_BASE_URL}/backup/${userId}`, { headers });
+      return await safeParseResponse(res, { success: false });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to fetch cloud backup' };
+    }
   },
 
   // Linked Devices: Fetch
   async getLinkedDevices(userId: string) {
     try {
       const res = await fetch(`${API_BASE_URL}/backup/devices/${userId}`, { headers: await authHeaders() });
-      const data = await res.json();
+      const data = await safeParseResponse(res, { devices: [] });
       return data.devices || [];
     } catch {
       return [];
@@ -339,11 +444,15 @@ export const api = {
 
   // Linked Devices: Revoke
   async revokeDevice(userId: string, deviceId: string) {
-    const res = await fetch(`${API_BASE_URL}/backup/devices/${userId}/${deviceId}`, {
-      method: 'DELETE',
-      headers: await authHeaders(),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/backup/devices/${userId}/${deviceId}`, {
+        method: 'DELETE',
+        headers: await authHeaders(),
+      });
+      return await safeParseResponse(res, { success: false });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to revoke device' };
+    }
   },
 
   // Media Upload — file bytes are already encrypted client-side (same
@@ -359,20 +468,28 @@ export const api = {
     receiverId: string;
     encryptedPayload: EncryptedPayload;
   }): Promise<{ success: boolean; attachment?: Attachment; error?: string }> {
-    const res = await fetch(`${API_BASE_URL}/media/upload`, {
-      method: 'POST',
-      headers: await authedJsonHeaders(),
-      body: JSON.stringify(params),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/media/upload`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify(params),
+      });
+      return await safeParseResponse(res, { success: false, error: 'Upload failed' });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Upload connection failed' };
+    }
   },
 
   // Fetch a previously-uploaded encrypted attachment's ciphertext for decryption.
   async getMedia(attachmentId: string): Promise<{ success: boolean; attachment?: Attachment & { encryptedPayload: EncryptedPayload }; error?: string }> {
-    const res = await fetch(`${API_BASE_URL}/media/${attachmentId}`, {
-      headers: await authHeaders(),
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${API_BASE_URL}/media/${attachmentId}`, {
+        headers: await authHeaders(),
+      });
+      return await safeParseResponse(res, { success: false, error: 'Fetch media failed' });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Network error fetching media' };
+    }
   },
 
   // Poll for background incoming calls and unread messages
@@ -404,7 +521,7 @@ export const api = {
       const res = await fetch(`${API_BASE_URL}/notifications/poll`, {
         headers: await authHeaders(),
       });
-      return await res.json();
+      return await safeParseResponse(res, { success: false, error: 'Network unavailable' });
     } catch {
       return { success: false, error: 'Network unavailable' };
     }
@@ -417,7 +534,7 @@ export const api = {
         method: 'POST',
         headers: await authedJsonHeaders(),
       });
-      return await res.json();
+      return await safeParseResponse(res, { success: false });
     } catch {
       return { success: false };
     }

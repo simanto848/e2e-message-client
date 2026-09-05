@@ -2,11 +2,12 @@ import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from './api';
 import { chatHeadNative } from './chatHeadNative';
+import { socketService } from './socket';
 
 const KEY_BACKGROUND_SYNC = '@jaby_background_sync_enabled';
 const KEY_CHAT_HEADS = '@jaby_chat_heads_enabled';
 
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let isPolling = false;
 let isSyncActive = true;
 let chatHeadsActive = true;
@@ -104,15 +105,24 @@ export function startBackgroundSync(callbacks: SyncCallbacks): void {
     }
   };
 
-  // Periodic poll with dynamic backoff: 4s when socket disconnected or backgrounded, 10s when active and connected
-  pollTimer = setInterval(() => {
-    poll();
-  }, 6000);
+  // Dynamic backoff scheduling: 5s when socket is disconnected, 15s when socket is healthy and connected
+  const scheduleNext = () => {
+    if (pollTimer === null) return;
+    const intervalMs = socketService.isConnected() ? 15000 : 5000;
+    pollTimer = setTimeout(async () => {
+      await poll();
+      scheduleNext();
+    }, intervalMs);
+  };
+
+  pollTimer = setTimeout(() => {
+    poll().finally(() => scheduleNext());
+  }, 1000);
 }
 
 export function stopBackgroundSync(): void {
   if (pollTimer) {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
     pollTimer = null;
   }
 }

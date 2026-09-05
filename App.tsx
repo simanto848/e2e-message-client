@@ -117,7 +117,7 @@ const DECOY_USER: UserProfile = {
   id: 'decoy_operative',
   name: 'Alex Vance',
   handle: '@alex_v',
-  avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+  avatar: '',
   statusMessage: 'Available for work',
   publicKey: 'decoy_public_key_77x89q21',
   fingerprintHash: 'D901 8832 4410 7621',
@@ -132,7 +132,7 @@ const DECOY_PARTICIPANT_1: UserProfile = {
   id: 'decoy_p1',
   name: 'Sam Taylor',
   handle: '@sam_t',
-  avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80',
+  avatar: '',
   statusMessage: 'In a meeting',
   publicKey: 'decoy_pk_sam',
   fingerprintHash: '4481 9920 1123',
@@ -147,7 +147,7 @@ const DECOY_PARTICIPANT_2: UserProfile = {
   id: 'decoy_p2',
   name: 'Project Notes',
   handle: '@notes_sync',
-  avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=150&q=80',
+  avatar: '',
   statusMessage: 'Cloud archives',
   publicKey: 'decoy_pk_notes',
   fingerprintHash: '7721 3302 9901',
@@ -355,8 +355,9 @@ export default function App() {
     setChats(prev => prev.map(c => (c.id === peer.id ? { ...c, lastMessage: newMsg, unreadCount: 0 } : c)));
 
     if (!isIncoming) {
-      api.sendMessage(newMsg).catch(err => console.warn('Call log REST send err:', err));
-      socketService.sendMessage(newMsg);
+      const wireMsg: Message = { ...newMsg, text: '' };
+      api.sendMessage(wireMsg).catch(err => console.warn('Call log REST send err:', err));
+      socketService.sendMessage(wireMsg);
     }
   };
 
@@ -904,7 +905,6 @@ export default function App() {
     await saveCurrentUserId(user.id);
     if (pinCode) {
       await savePrimaryPin(pinCode);
-      await saveBackupPassphrase(pinCode);
     }
 
     let keyPair = freshKeyPair || (await getIdentityKeyPair(user.id));
@@ -1065,14 +1065,16 @@ export default function App() {
       try {
         const backupRes = await api.getCloudBackup(userId);
         if (backupRes?.success && backupRes.backup) {
-          const remoteTime = new Date(backupRes.backup.timestamp).getTime();
+          const b = backupRes.backup;
+          const rawTime = b.timestamp || b.createdAt;
+          const remoteTime = rawTime ? new Date(rawTime).getTime() : Date.now();
           setCloudBackupMetadata(prev => ({
             ...prev,
-            lastBackupTime: remoteTime,
-            totalMessagesCount: backupRes.backup.totalMessagesCount,
-            totalChatsCount: backupRes.backup.totalChatsCount,
-            backupSizeKb: backupRes.backup.backupSizeKb,
-            keyFingerprint: backupRes.backup.keyFingerprint || prev.keyFingerprint,
+            lastBackupTime: isNaN(remoteTime) ? Date.now() : remoteTime,
+            totalMessagesCount: typeof b.totalMessagesCount === 'number' ? b.totalMessagesCount : prev.totalMessagesCount,
+            totalChatsCount: typeof b.totalChatsCount === 'number' ? b.totalChatsCount : prev.totalChatsCount,
+            backupSizeKb: typeof b.backupSizeKb === 'number' ? b.backupSizeKb : prev.backupSizeKb,
+            keyFingerprint: b.keyFingerprint || prev.keyFingerprint,
           }));
         }
       } catch {
@@ -1093,12 +1095,6 @@ export default function App() {
     if (!mySecretKey) return { text: 'Locked — sign in again to view', keyMismatch: false };
     if (!payload?.ciphertext || !payload?.iv) {
       return { text: '', keyMismatch: false };
-    }
-
-    // Gracefully format seed / demo messages if present
-    if (typeof payload.ciphertext === 'string' && payload.ciphertext.startsWith('ENC_BLOB_')) {
-      const cleanSeedText = payload.ciphertext.replace('ENC_BLOB_', '').replace(/_/g, ' ');
-      return { text: cleanSeedText, keyMismatch: false };
     }
 
     const isSentByMe = currentUser && payload.senderPublicKey === currentUser.publicKey;
@@ -1313,7 +1309,7 @@ export default function App() {
             id: signal.senderId,
             name: 'Unknown Caller',
             handle: '@unknown',
-            avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200',
+            avatar: '',
             statusMessage: 'Calling...',
             publicKey: '',
             inviteCodesRemaining: 0,
@@ -1528,11 +1524,12 @@ export default function App() {
       )
     );
 
-    // Guaranteed database write to backend
-    api.sendMessage(newMsg).catch(err => console.warn('REST send err:', err));
+    // Guaranteed database write to backend (text stripped on wire for zero plaintext exposure)
+    const wireMsg: Message = { ...newMsg, text: '' };
+    api.sendMessage(wireMsg).catch(err => console.warn('REST send err:', err));
 
     // Real-time forward via Socket.IO
-    socketService.sendMessage(newMsg);
+    socketService.sendMessage(wireMsg);
   };
 
   const handleSendMessage = async (text: string, attachment?: Attachment, replyToId?: string) => {
@@ -1609,9 +1606,13 @@ export default function App() {
     try {
       const res = await api.createInvite(7);
       if (res.success && res.invite) {
-        setInvites(prev => [res.invite, ...prev]);
-        setCurrentUser(prev => prev ? { ...prev, inviteCodesRemaining: res.remainingCodes } : null);
-        Alert.alert('Invite Code Created', `Code: ${res.invite.code}\nValid for 7 days.`);
+        const newInvite = res.invite;
+        setInvites(prev => [newInvite, ...prev]);
+        if (typeof res.remainingCodes === 'number') {
+          const remaining = res.remainingCodes;
+          setCurrentUser(prev => prev ? { ...prev, inviteCodesRemaining: remaining } : null);
+        }
+        Alert.alert('Invite Code Created', `Code: ${newInvite.code}\nValid for 7 days.`);
       }
     } catch {
       Alert.alert('Error', 'Unable to mint invite code.');

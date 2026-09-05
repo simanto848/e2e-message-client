@@ -7,6 +7,7 @@ export interface AppPermissionsStatus {
   camera: boolean;
   microphone: boolean;
   photos: boolean;
+  notifications?: boolean;
   allGranted: boolean;
 }
 
@@ -27,7 +28,9 @@ export async function openAppSettings() {
 /**
  * Request a single hardware permission
  */
-export async function requestSinglePermission(type: 'camera' | 'microphone' | 'photos'): Promise<boolean> {
+export async function requestSinglePermission(
+  type: 'camera' | 'microphone' | 'photos' | 'notifications'
+): Promise<boolean> {
   beginExternalActivity();
   try {
     if (Platform.OS === 'android') {
@@ -41,6 +44,12 @@ export async function requestSinglePermission(type: 'camera' | 'microphone' | 'p
           perm = PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES;
         } else {
           perm = PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE;
+        }
+      } else if (type === 'notifications') {
+        if (Number(Platform.Version) >= 33) {
+          perm = (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS;
+        } else {
+          return true;
         }
       }
 
@@ -71,6 +80,8 @@ export async function requestSinglePermission(type: 'camera' | 'microphone' | 'p
       } else if (type === 'photos') {
         const res = await ImagePicker.requestMediaLibraryPermissionsAsync();
         return res.granted;
+      } else if (type === 'notifications') {
+        return true;
       }
     }
     return true;
@@ -100,6 +111,9 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
           PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO,
           PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO
         );
+        if ((PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS) {
+          permissionsToRequest.push((PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS);
+        }
       } else {
         permissionsToRequest.push(
           PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
@@ -128,11 +142,21 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
           (await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE));
       }
 
+      let notifGranted = true;
+      const postNotifKey = (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS;
+      if (Number(Platform.Version) >= 33 && postNotifKey) {
+        notifGranted =
+          (granted as Record<string, string>)[postNotifKey] ===
+            PermissionsAndroid.RESULTS.GRANTED ||
+          (await PermissionsAndroid.check(postNotifKey));
+      }
+
       return {
         camera: cameraGranted,
         microphone: micGranted,
         photos: photosGranted,
-        allGranted: cameraGranted && micGranted && photosGranted,
+        notifications: notifGranted,
+        allGranted: cameraGranted && micGranted && photosGranted && notifGranted,
       };
     } catch (err) {
       console.warn('Failed to request Android permissions:', err);
@@ -157,6 +181,7 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
         camera,
         microphone,
         photos,
+        notifications: true,
         allGranted: camera && microphone && photos,
       };
     } catch (err) {
@@ -172,6 +197,7 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
     camera: true,
     microphone: true,
     photos: true,
+    notifications: true,
     allGranted: true,
   };
 }
@@ -192,14 +218,20 @@ export async function checkAppPermissions(): Promise<AppPermissionsStatus> {
         photos = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
       }
 
+      let notifications = true;
+      if (Number(Platform.Version) >= 33 && (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS) {
+        notifications = await PermissionsAndroid.check((PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS);
+      }
+
       return {
         camera,
         microphone,
         photos,
-        allGranted: camera && microphone && photos,
+        notifications,
+        allGranted: camera && microphone && photos && notifications,
       };
     } catch {
-      return { camera: false, microphone: false, photos: false, allGranted: false };
+      return { camera: false, microphone: false, photos: false, notifications: false, allGranted: false };
     }
   } else if (Platform.OS === 'ios') {
     try {
@@ -217,12 +249,13 @@ export async function checkAppPermissions(): Promise<AppPermissionsStatus> {
         camera,
         microphone,
         photos,
+        notifications: true,
         allGranted: camera && microphone && photos,
       };
     } catch {
-      return { camera: false, microphone: false, photos: false, allGranted: false };
+      return { camera: false, microphone: false, photos: false, notifications: false, allGranted: false };
     }
   }
 
-  return { camera: true, microphone: true, photos: true, allGranted: true };
+  return { camera: true, microphone: true, photos: true, notifications: true, allGranted: true };
 }

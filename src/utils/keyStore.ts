@@ -18,7 +18,7 @@ const BACKUP_FREQUENCY_KEY = 'jaby_backup_frequency';
 const BACKUP_PASSPHRASE_KEY = 'jaby_backup_passphrase';
 
 
-const SECURE_STORE_OPTIONS: SecureStore.SecureStoreOptions = {
+export const SECURE_STORE_OPTIONS: SecureStore.SecureStoreOptions = {
   keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
 };
 
@@ -124,8 +124,7 @@ export async function saveBackupPassphrase(passphrase: string): Promise<void> {
 
 export async function getBackupPassphrase(): Promise<string | null> {
   const saved = await SecureStore.getItemAsync(BACKUP_PASSPHRASE_KEY, SECURE_STORE_OPTIONS);
-  if (saved) return saved;
-  return getPrimaryPin();
+  return saved || null;
 }
 
 export async function clearBackupSettings(): Promise<void> {
