@@ -1,8 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated, Alert, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Animated,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Mic, Trash2, Send, Radio } from './Icons';
+import * as Haptics from 'expo-haptics';
+import { Mic, Trash2, Send, Lock } from './Icons';
 import { Attachment } from '../types';
 import { colors, shadows } from '../theme';
 import { encryptMessage } from '../utils/crypto';
@@ -11,6 +20,7 @@ import { api } from '../services/api';
 
 // Matches the server's MAX_ATTACHMENT_BYTES (server/src/routes/media.routes.ts).
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const BAR_COUNT = 14;
 
 interface Props {
   isRecording: boolean;
@@ -38,26 +48,28 @@ export function VoiceRecorder({
   const [seconds, setSeconds] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const eqBars = useRef([
-    new Animated.Value(6),
-    new Animated.Value(18),
-    new Animated.Value(10),
-    new Animated.Value(22),
-    new Animated.Value(14),
-  ]).current;
+  const slideAnim = useRef(new Animated.Value(20)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  // 14 animated equalizer bars for rich visual rhythm
+  const eqBars = useRef(
+    Array.from({ length: BAR_COUNT }, () => new Animated.Value(6))
+  ).current;
+
   const recordingRef = useRef<Audio.Recording | null>(null);
   const cancelledRef = useRef(false);
-
-  // This component only ever mounts while already "recording" (see
-  // ChatScreen's isRecording ? <VoiceRecorder .../> : ... branch — the mic
-  // button lives in the `false` branch and swaps to a fresh mount of this
-  // component on press), so starting the real microphone capture on mount
-  // is the right lifecycle hook.
   const handleSendRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     cancelledRef.current = false;
     let interval: NodeJS.Timeout;
+
+    // Trigger entrance haptics & animation
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    Animated.parallel([
+      Animated.timing(slideAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
+      Animated.timing(fadeAnim, { toValue: 1, duration: 250, useNativeDriver: true }),
+    ]).start();
 
     startVoiceRecording()
       .then(recording => {
@@ -83,22 +95,26 @@ export function VoiceRecorder({
         onCancelRecord();
       });
 
+    // Pulsing live recording halo
     const loopAnim = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.3, duration: 600, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1.4, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
       ])
     );
     loopAnim.start();
 
+    // Harmonic staggered heights & durations for 14 waveform bars
+    const heights = [10, 22, 14, 26, 18, 28, 16, 24, 20, 28, 14, 22, 12, 18];
+    const durations = [380, 480, 340, 520, 420, 560, 390, 470, 510, 440, 360, 500, 410, 460];
+
     const eqAnims = eqBars.map((val, i) => {
-      const minH = 6;
-      const maxH = [18, 24, 16, 22, 14][i];
-      const dur = [350, 480, 390, 520, 340][i];
+      const maxH = heights[i % heights.length];
+      const dur = durations[i % durations.length];
       return Animated.loop(
         Animated.sequence([
           Animated.timing(val, { toValue: maxH, duration: dur, useNativeDriver: false }),
-          Animated.timing(val, { toValue: minH, duration: dur, useNativeDriver: false }),
+          Animated.timing(val, { toValue: 6, duration: dur, useNativeDriver: false }),
         ])
       );
     });
@@ -109,9 +125,6 @@ export function VoiceRecorder({
       loopAnim.stop();
       eqAnims.forEach(anim => anim.stop());
       if (interval) clearInterval(interval);
-      // If this unmounts without an explicit send (e.g. the screen changes
-      // mid-recording), stop and discard rather than leaking an open
-      // recording session.
       if (recordingRef.current) {
         discardVoiceRecording(recordingRef.current);
         recordingRef.current = null;
@@ -121,6 +134,7 @@ export function VoiceRecorder({
   }, []);
 
   const handleCancel = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
     const recording = recordingRef.current;
     recordingRef.current = null;
     if (recording) {
@@ -136,6 +150,7 @@ export function VoiceRecorder({
     recordingRef.current = null;
     onStopRecord();
 
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     const duration = Math.max(1, seconds);
     setIsUploading(true);
 
@@ -154,8 +169,6 @@ export function VoiceRecorder({
         encoding: FileSystem.EncodingType.Base64,
       });
 
-      // Same E2E crypto used for text messages — the file's raw bytes,
-      // base64-encoded, are just the "plaintext" being encrypted.
       const encryptedPayload = encryptMessage(base64Data, mySecretKey, receiverPublicKey, myPublicKey);
 
       const result = await api.uploadMedia({
@@ -164,8 +177,6 @@ export function VoiceRecorder({
         size: info.exists ? info.size : base64Data.length,
         mimeType: 'audio/m4a',
         duration,
-        // Real amplitude-based waveform extraction is a larger feature —
-        // keep the synthetic bars for the visual for now.
         waveform: [10, 25, 45, 20, 60, 35, 15, 50, 40, 20, 70, 30, 10],
         receiverId,
         encryptedPayload,
@@ -188,8 +199,15 @@ export function VoiceRecorder({
 
   if (!isRecording) {
     return (
-      <TouchableOpacity style={styles.micButton} onPress={onStartRecord}>
-        <Mic size={20} color={colors.primaryDark} />
+      <TouchableOpacity
+        style={styles.micButton}
+        onPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+          onStartRecord();
+        }}
+        activeOpacity={0.8}
+      >
+        <Mic size={20} color="#ffffff" />
       </TouchableOpacity>
     );
   }
@@ -200,50 +218,70 @@ export function VoiceRecorder({
     return `${mins}:${rem.toString().padStart(2, '0')}`;
   };
 
+  const isNearingLimit = seconds >= 270; // Last 30s of 5m cap
+
   return (
-    <View style={styles.recordingContainer}>
+    <Animated.View
+      style={[
+        styles.recordingContainer,
+        {
+          opacity: fadeAnim,
+          transform: [{ translateY: slideAnim }],
+        },
+      ]}
+    >
+      {/* Discard / Delete Button */}
       <TouchableOpacity
         style={styles.cancelButton}
         onPress={handleCancel}
         disabled={isUploading}
         activeOpacity={0.7}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
         <Trash2 size={18} color="#ef4444" />
       </TouchableOpacity>
 
-      <View style={styles.recordStatus}>
-        {/* Pulsing live indicator */}
-        <View style={styles.pulseWrapper}>
-          <Animated.View style={[styles.pulseHalo, { transform: [{ scale: pulseAnim }] }]} />
-          <View style={styles.pulseDot} />
+      {/* Center Live Recording Track */}
+      <View style={styles.centerTrack}>
+        {/* Pulsing Live Beacon & Time */}
+        <View style={styles.timerGroup}>
+          <View style={styles.pulseWrapper}>
+            <Animated.View style={[styles.pulseHalo, { transform: [{ scale: pulseAnim }] }]} />
+            <View style={[styles.pulseDot, isNearingLimit && styles.pulseDotWarning]} />
+          </View>
+          <Text style={[styles.recordingTimer, isNearingLimit && styles.recordingTimerWarning]}>
+            {formatTime(seconds)}
+          </Text>
         </View>
 
-        {/* Digital Timer */}
-        <Text style={styles.recordingTimer}>{formatTime(seconds)}</Text>
-
-        {/* Dynamic Equalizer Bars */}
+        {/* Dynamic Waveform Visualizer */}
         <View style={styles.eqContainer}>
           {eqBars.map((barAnim, idx) => (
             <Animated.View
               key={idx}
               style={[
                 styles.eqBar,
-                { height: barAnim },
+                {
+                  height: barAnim,
+                  backgroundColor: isNearingLimit ? '#f59e0b' : colors.primary,
+                },
               ]}
             />
           ))}
         </View>
 
-        {/* Status Badge */}
+        {/* Security / Encryption Pill Badge */}
         <View style={[styles.badgePill, isUploading && styles.uploadingBadgePill]}>
-          <Text style={[styles.enclaveBadge, isUploading && styles.uploadingBadgeText]}>
-            {isUploading ? 'ENCRYPTING…' : 'REC'}
+          <Lock size={10} color={isUploading ? '#b45309' : colors.primaryDark} style={{ marginRight: 3 }} />
+          <Text style={[styles.badgeText, isUploading && styles.uploadingBadgeText]}>
+            {isUploading ? 'ENCRYPTING' : 'E2EE'}
           </Text>
         </View>
       </View>
 
+      {/* Send Action Button */}
       <TouchableOpacity
-        style={styles.sendVoiceButton}
+        style={[styles.sendVoiceButton, isUploading && styles.sendVoiceButtonDisabled]}
         onPress={handleSend}
         disabled={isUploading}
         activeOpacity={0.85}
@@ -254,100 +292,111 @@ export function VoiceRecorder({
           <Send size={18} color="#ffffff" />
         )}
       </TouchableOpacity>
-    </View>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   micButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.primaryLight,
-    borderWidth: 1,
-    borderColor: '#a7f3d0',
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
+    ...shadows.sm,
   },
   recordingContainer: {
     flex: 1,
-    height: 48,
+    height: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#ffffff',
-    borderRadius: 24,
-    paddingHorizontal: 6,
+    borderRadius: 26,
+    paddingHorizontal: 8,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    ...shadows.sm,
+    ...shadows.md,
   },
   cancelButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#fef2f2',
     borderWidth: 1,
     borderColor: '#fee2e2',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  recordStatus: {
+  centerTrack: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    flex: 1,
+    justifyContent: 'space-between',
     paddingHorizontal: 8,
   },
+  timerGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   pulseWrapper: {
-    width: 18,
-    height: 18,
+    width: 14,
+    height: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
   pulseHalo: {
     position: 'absolute',
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: 'rgba(239, 68, 68, 0.25)',
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: 'rgba(239, 68, 68, 0.35)',
   },
   pulseDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
     backgroundColor: '#ef4444',
+  },
+  pulseDotWarning: {
+    backgroundColor: '#f59e0b',
   },
   recordingTimer: {
     color: '#0f172a',
     fontSize: 14,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
-    minWidth: 34,
+    letterSpacing: -0.3,
+  },
+  recordingTimerWarning: {
+    color: '#b45309',
   },
   eqContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    height: 26,
+    gap: 2.5,
+    height: 30,
     paddingHorizontal: 4,
   },
   eqBar: {
-    width: 3,
+    width: 2.5,
     borderRadius: 1.5,
     backgroundColor: colors.primary,
   },
   badgePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 6,
-    paddingVertical: 2,
+    paddingVertical: 3,
     borderRadius: 6,
     backgroundColor: colors.primaryLight,
   },
   uploadingBadgePill: {
     backgroundColor: '#fef3c7',
   },
-  enclaveBadge: {
+  badgeText: {
     color: colors.primaryDark,
     fontSize: 9,
     fontWeight: '800',
@@ -357,12 +406,16 @@ const styles = StyleSheet.create({
     color: '#b45309',
   },
   sendVoiceButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
     ...shadows.sm,
   },
+  sendVoiceButtonDisabled: {
+    backgroundColor: '#94a3b8',
+  },
 });
+
