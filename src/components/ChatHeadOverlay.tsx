@@ -157,6 +157,14 @@ export function ChatHeadOverlay({
     })
   ).current;
 
+  useEffect(() => {
+    if (isExpanded) {
+      setTimeout(() => {
+        scrollViewRef.current?.scrollToEnd({ animated: false });
+      }, 60);
+    }
+  }, [isExpanded, messages.length]);
+
   const handleSend = () => {
     if (!inputText.trim()) return;
     onSendMessage(inputText.trim());
@@ -289,7 +297,6 @@ export function ChatHeadOverlay({
                 style={styles.messagesList}
                 contentContainerStyle={styles.messagesContent}
                 showsVerticalScrollIndicator={false}
-                onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: false })}
               >
                 {messages.length === 0 ? (
                   <View style={styles.emptyMessagesContainer}>

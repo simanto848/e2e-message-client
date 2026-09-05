@@ -497,6 +497,7 @@ export default function App() {
     showInvitesModal,
     showSearchModal,
     showRequestsModal,
+    hasRestorePrompt: false,
     currentScreen,
   });
 
@@ -515,6 +516,7 @@ export default function App() {
     showInvitesModal,
     showSearchModal,
     showRequestsModal,
+    hasRestorePrompt: Boolean(restoreSessionPrompt),
     currentScreen,
   };
 
@@ -527,7 +529,12 @@ export default function App() {
         return true;
       }
 
-      // 2. If call is active or ringing, prevent accidental exit
+      // 2. If restore session modal is prompting, prevent bypass
+      if (state.hasRestorePrompt) {
+        return true;
+      }
+
+      // 3. If call is active or ringing, prevent accidental exit
       if (state.callActive) {
         return true;
       }
@@ -1102,7 +1109,7 @@ export default function App() {
     }
 
     let opened = decryptMessage(payload, mySecretKey, peerPublicKey);
-    let isMismatch = false;
+    let isMismatch = !isSentByMe && Boolean(expectedPublicKey && payload.senderPublicKey && payload.senderPublicKey !== expectedPublicKey);
 
     // Fallbacks: if sender used a mismatched public key, flag keyMismatch
     if (opened === null && payload.senderPublicKey && payload.senderPublicKey !== peerPublicKey) {
@@ -1158,28 +1165,35 @@ export default function App() {
     loadMessages();
   }, [activeChatId, currentUser?.id, mySecretKey]);
 
-  // Dual-polling optimization: Poll chat list data with backoff
+  // Periodic background/fallback sync: only active when app is active, unlocked, and authenticated
   useEffect(() => {
-    if (!currentUser) return;
-    const interval = setInterval(() => {
-      reloadDynamicData(currentUser.id);
-      if (activeChatIdRef.current) {
-        api.getMessages(activeChatIdRef.current, currentUser.id)
-          .then(raw => {
-            const knownPublicKey = chatsRef.current.find(c => c.id === activeChatIdRef.current)?.participant.publicKey;
-            const decrypted = raw.map(m => {
-              if (m.isDeletedForEveryone) return { ...m, text: '' };
-              const { text } = decryptVerified(m.encryptedPayload, knownPublicKey);
-              return { ...m, text };
-            });
-            setMessages(decrypted);
-          })
-          .catch(() => {});
+    if (!currentUser || isAppLocked) return;
+
+    const poll = async () => {
+      if (AppState.currentState !== 'active' || isAppLocked) return;
+      await reloadDynamicData(currentUser.id);
+
+      // Only re-fetch messages if socket is not connected (fallback mode)
+      if (activeChatIdRef.current && !socketService.isConnected()) {
+        try {
+          const raw = await api.getMessages(activeChatIdRef.current, currentUser.id);
+          const knownPublicKey = chatsRef.current.find(c => c.id === activeChatIdRef.current)?.participant.publicKey;
+          const decrypted = raw.map(m => {
+            if (m.isDeletedForEveryone) return { ...m, text: '' };
+            const { text } = decryptVerified(m.encryptedPayload, knownPublicKey);
+            return { ...m, text };
+          });
+          setMessages(decrypted);
+        } catch {}
       }
-    }, 6000);
+    };
+
+    // If socket is connected, poll every 25s as a gentle health check; if disconnected, poll every 7s
+    const pollIntervalMs = socketService.isConnected() ? 25000 : 7000;
+    const interval = setInterval(poll, pollIntervalMs);
 
     return () => clearInterval(interval);
-  }, [currentUser?.id]);
+  }, [currentUser?.id, isAppLocked]);
 
   // 4. Realtime Socket Listeners (presence, incoming messages, call signals, typing)
   useEffect(() => {
@@ -1313,7 +1327,14 @@ export default function App() {
         let sas: string[] = signal.sasWords || [];
         if (sas.length === 0 && mySecretKeyRef.current && callerProfile.publicKey && callerProfile.publicKey.length >= 32) {
           try {
-            const callTimestamp = signal.timestamp || Date.now();
+            let callTimestamp = signal.timestamp;
+            if (!callTimestamp && signal.callId && signal.callId.startsWith('call_')) {
+              const parts = signal.callId.split('_');
+              if (parts[1] && !isNaN(Number(parts[1]))) {
+                callTimestamp = Number(parts[1]);
+              }
+            }
+            if (!callTimestamp) callTimestamp = Date.now();
             sas = await generateCallSasWords(mySecretKeyRef.current, callerProfile.publicKey, callTimestamp);
           } catch (sasErr) {
             console.warn('[Call] SAS calculation failed:', sasErr);

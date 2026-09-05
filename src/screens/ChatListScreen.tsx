@@ -138,6 +138,7 @@ export function ChatListScreen({
         }
         renderItem={({ item }) => {
           const participant = item.participant;
+          if (!participant) return null;
           const lastMsg = item.lastMessage;
           const isOnline = onlineUserIds.has(participant.id);
           const isLastMsgMine = !!(lastMsg && currentUserId && lastMsg.senderId === currentUserId);

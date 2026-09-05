@@ -9,6 +9,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { IdentityKeyPair } from './crypto';
 import { BackupFrequency } from '../types';
+import { clearDuressConfig } from './duressConfig';
 
 const SESSION_TOKEN_KEY = 'jaby_session_token';
 const CURRENT_USER_ID_KEY = 'jaby_current_user_id';
@@ -159,6 +160,7 @@ export async function wipeAllSecureData(userId?: string | null): Promise<void> {
     clearCurrentUserId(),
     clearPrimaryPin(),
     clearBackupSettings(),
+    clearDuressConfig(),
   ];
   if (uid) {
     tasks.push(clearIdentityKeyPair(uid));

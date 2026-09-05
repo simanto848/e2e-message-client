@@ -79,7 +79,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
   const registerStrength = evaluatePasswordStrength(pinCode);
 
   const handleLogin = async () => {
-    const cleanHandle = handle.trim().replace(/^@+/, '');
+    const cleanHandle = handle.trim().replace(/^@+/, '').replace(/\s+/g, '');
     if (!cleanHandle || !pinCode) {
       Alert.alert('Missing Details', 'Please enter your handle and PIN/password.');
       return;
@@ -114,9 +114,17 @@ export function AuthScreen({ onAuthenticated }: Props) {
   };
 
   const handleRegister = async () => {
-    const cleanHandle = handle.trim().replace(/^@+/, '');
+    const cleanHandle = handle.trim().replace(/^@+/, '').replace(/\s+/g, '');
     if (!name.trim() || !cleanHandle || !inviteCode.trim()) {
       Alert.alert('Missing Details', 'Please enter your name, a handle, and an invite code.');
+      return;
+    }
+    const handleRegex = /^[a-zA-Z0-9_]{3,30}$/;
+    if (!handleRegex.test(cleanHandle)) {
+      Alert.alert(
+        'Invalid Handle',
+        'Handle must be 3–30 characters long and contain only letters, numbers, and underscores.'
+      );
       return;
     }
     if (!pinCode || pinCode.length < 4) {

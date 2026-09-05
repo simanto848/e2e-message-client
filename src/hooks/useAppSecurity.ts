@@ -86,6 +86,11 @@ export function useAppSecurity({ isAuthenticated, isCallActive }: UseAppSecurity
     }
   }, [antiScreenshotEnabled]);
 
+  const isCallActiveRef = useRef(isCallActive);
+  useEffect(() => {
+    isCallActiveRef.current = isCallActive;
+  }, [isCallActive]);
+
   // Re-lock the enclave whenever the app leaves the foreground, respecting
   // the user's configured auto-lock delay (or remaining unlocked if set to Never/0).
   useEffect(() => {
@@ -93,7 +98,7 @@ export function useAppSecurity({ isAuthenticated, isCallActive }: UseAppSecurity
 
     const sub = AppState.addEventListener('change', nextState => {
       if (nextState === 'background') {
-        if (!isAuthenticated || isExternalActivityActive() || isCallActive) {
+        if (!isAuthenticated || isExternalActivityActive() || isCallActiveRef.current) {
           return;
         }
 
@@ -104,7 +109,7 @@ export function useAppSecurity({ isAuthenticated, isCallActive }: UseAppSecurity
 
         const delayMs = autoLockDelayRef.current * 1000;
         backgroundTimer = setTimeout(() => {
-          if (AppState.currentState === 'background' && !isExternalActivityActive() && !isCallActive) {
+          if (AppState.currentState === 'background' && !isExternalActivityActive() && !isCallActiveRef.current) {
             setIsAppLocked(true);
           }
         }, delayMs);
@@ -120,7 +125,7 @@ export function useAppSecurity({ isAuthenticated, isCallActive }: UseAppSecurity
       if (backgroundTimer) clearTimeout(backgroundTimer);
       sub.remove();
     };
-  }, [isAuthenticated, isCallActive]);
+  }, [isAuthenticated]);
 
   const handleUnlockDecoy = (onAfterUnlock?: () => void) => {
     setIsDecoyMode(true);

@@ -19,6 +19,7 @@ export { SOCKET_SERVER_URL };
 class SocketService {
   private socket: Socket | null = null;
   private listeners: Map<string, Set<Function>> = new Map();
+  private outgoingQueue: Array<{ event: string; payload: any }> = [];
 
   private addEventListener<T extends Function>(event: string, callback: T): () => void {
     if (!this.listeners.has(event)) {
@@ -81,6 +82,7 @@ class SocketService {
       if (__DEV__) {
         console.log('[Mobile Socket] Connected & authenticated to JABY Gateway');
       }
+      this.flushOutgoingQueue();
     });
 
     this.socket.on('connect_error', err => {
@@ -94,6 +96,27 @@ class SocketService {
         console.log('[Mobile Socket] Disconnected from JABY Gateway:', reason);
       }
     });
+  }
+
+  private emitOrQueue(event: string, payload: any) {
+    if (this.socket?.connected) {
+      this.socket.emit(event, payload);
+    } else {
+      if (this.outgoingQueue.length >= 50) {
+        this.outgoingQueue.shift();
+      }
+      this.outgoingQueue.push({ event, payload });
+      this.reconnectIfNeeded().catch(() => {});
+    }
+  }
+
+  private flushOutgoingQueue() {
+    if (!this.socket?.connected || this.outgoingQueue.length === 0) return;
+    const items = [...this.outgoingQueue];
+    this.outgoingQueue = [];
+    for (const item of items) {
+      this.socket.emit(item.event, item.payload);
+    }
   }
 
   /**
@@ -113,21 +136,15 @@ class SocketService {
 
   // Messaging
   sendMessage(message: Message) {
-    if (this.socket?.connected) {
-      this.socket.emit('send_message', message);
-    }
+    this.emitOrQueue('send_message', message);
   }
 
   sendStatus(messageId: string, chatId: string, status: 'delivered' | 'read') {
-    if (this.socket?.connected) {
-      this.socket.emit('message_status', { messageId, chatId, status });
-    }
+    this.emitOrQueue('message_status', { messageId, chatId, status });
   }
 
   markRead(peerId: string, chatId: string) {
-    if (this.socket?.connected) {
-      this.socket.emit('mark_read', { peerId, chatId });
-    }
+    this.emitOrQueue('mark_read', { peerId, chatId });
   }
 
   sendTyping(chatId: string, receiverId: string, isTyping: boolean) {
@@ -137,9 +154,7 @@ class SocketService {
   }
 
   deleteForEveryone(messageId: string, chatId: string, receiverId: string) {
-    if (this.socket?.connected) {
-      this.socket.emit('delete_for_everyone', { messageId, chatId, receiverId });
-    }
+    this.emitOrQueue('delete_for_everyone', { messageId, chatId, receiverId });
   }
 
   sendCallSignal(signal: {

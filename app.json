@@ -20,8 +20,9 @@
         "NSMicrophoneUsageDescription": "JABY needs microphone access for voice notes and calls.",
         "NSPhotoLibraryUsageDescription": "JABY needs photo library access to send encrypted images to your contacts."
       },
-      "bitcode": false,
-      "runtimeVersion": "1.0.0"
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "android": {
       "package": "com.jaby.securemessenger",
@@ -50,7 +51,9 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.FOREGROUND_SERVICE"
       ],
-      "runtimeVersion": "1.0.0"
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"

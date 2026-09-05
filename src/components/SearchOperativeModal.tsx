@@ -44,20 +44,32 @@ export function SearchOperativeModal({
       return;
     }
 
+    let cancelled = false;
+
     const search = async () => {
       setLoading(true);
       try {
         const list = await api.searchOperatives(query);
-        setResults(list);
+        if (!cancelled) {
+          const filtered = currentUserId ? list.filter(item => item.id !== currentUserId) : list;
+          setResults(filtered);
+        }
       } catch (err) {
-        console.error('Search error:', err);
+        if (!cancelled) {
+          console.error('Search error:', err);
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
 
     const debounce = setTimeout(search, 250);
-    return () => clearTimeout(debounce);
+    return () => {
+      cancelled = true;
+      clearTimeout(debounce);
+    };
   }, [query, visible, currentUserId]);
 
   useEffect(() => {

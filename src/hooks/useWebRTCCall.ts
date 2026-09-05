@@ -61,6 +61,12 @@ export function useWebRTCCall({
     }
   };
 
+  useEffect(() => {
+    return () => {
+      stopCallTimer();
+    };
+  }, []);
+
   const handleCallConnectionStateChange = (state: string) => {
     console.log('[Call] connection state:', state);
     if (state === 'failed') {
