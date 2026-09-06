@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator } from 'react-native';
-import { ShieldCheck, Flame, Check, CheckCheck, Play, Pause, Trash2, ImageIcon, Phone, PhoneOff, Video } from './Icons';
+import { Flame, Check, CheckCheck, Play, Pause, Trash2, ImageIcon, Phone, PhoneOff, Video } from './Icons';
 import { Message } from '../types';
 import { colors, shadows } from '../theme';
 import { formatDisappearingTimer } from '../utils/timerUtils';
@@ -62,7 +62,10 @@ export function ChatBubble({
   const QUICK_EMOJIS = ['👍', '❤️', '🔥', '🔒', '😂', '👀'];
 
   useEffect(() => {
-    if (!message.expiresAt) return;
+    if (!message.expiresAt) {
+      setTimeLeft(null);
+      return;
+    }
 
     const computeRemaining = (now: number) => {
       const curRemaining = Math.max(0, Math.ceil((message.expiresAt! - now) / 1000));
@@ -351,6 +354,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   ephemeralBorder: {
+    borderWidth: 1,
     borderStyle: 'dashed',
     borderColor: '#f59e0b',
   },
@@ -552,6 +556,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     zIndex: 100,
     ...shadows.md,
+    elevation: 8,
   },
   reactionsBarRight: {
     right: 16,

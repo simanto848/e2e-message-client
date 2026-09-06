@@ -394,6 +394,10 @@ export const ChevronRight = createIcon(() => (
   <Path d="m9 18 6-6-6-6" />
 ));
 
+export const ChevronDown = createIcon(() => (
+  <Path d="m6 9 6 6 6-6" />
+));
+
 export const Fingerprint = createIcon(() => (
   <>
     <Path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4" />

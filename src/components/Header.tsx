@@ -20,26 +20,45 @@ export function Header({
   onLockPress,
   onInvitesPress,
   onSettingsPress,
-  inviteCount = 3,
+  inviteCount = 0,
   isEnclaveActive = true,
 }: Props) {
   return (
     <View style={styles.header}>
       <View style={styles.leftRow}>
         <JabyLogo size={36} showText={true} subtitle="SECURE MESSENGER" />
+        <View style={[styles.enclaveDot, isEnclaveActive ? styles.enclaveOn : styles.enclaveOff]} />
       </View>
 
       <View style={styles.rightActions}>
-        <TouchableOpacity style={styles.pillButton} onPress={onInvitesPress}>
-          <Ticket size={14} color="#059669" />
+        <TouchableOpacity
+          style={styles.pillButton}
+          onPress={onInvitesPress}
+          accessibilityRole="button"
+          accessibilityLabel={`${inviteCount} invites remaining. Manage invites.`}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ticket size={14} color={colors.primaryDark} />
           <Text style={styles.pillText}>{inviteCount}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.iconButton} onPress={onSettingsPress}>
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={onSettingsPress}
+          accessibilityRole="button"
+          accessibilityLabel="Open settings"
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
           <Settings size={18} color={colors.textSecondary} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.lockButton} onPress={onLockPress}>
+        <TouchableOpacity
+          style={styles.lockButton}
+          onPress={onLockPress}
+          accessibilityRole="button"
+          accessibilityLabel="Lock app"
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
           <Lock size={16} color={colors.danger} />
         </TouchableOpacity>
       </View>
@@ -62,6 +81,18 @@ const styles = StyleSheet.create({
   leftRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
+  },
+  enclaveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  enclaveOn: {
+    backgroundColor: colors.primary,
+  },
+  enclaveOff: {
+    backgroundColor: colors.textMuted,
   },
   rightActions: {
     flexDirection: 'row',
@@ -80,22 +111,30 @@ const styles = StyleSheet.create({
     borderColor: '#a7f3d0',
   },
   pillText: {
-    color: '#059669',
+    color: colors.primaryDark,
     fontSize: 12,
     fontWeight: '700',
   },
   iconButton: {
+    minWidth: 40,
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
     padding: 7,
     backgroundColor: colors.surfaceElevated,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
   },
   lockButton: {
+    minWidth: 40,
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
     padding: 7,
     backgroundColor: colors.dangerLight,
     borderColor: '#fca5a5',
     borderWidth: 1,
-    borderRadius: 8,
+    borderRadius: 10,
   },
 });
