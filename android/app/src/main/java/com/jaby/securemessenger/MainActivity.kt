@@ -29,8 +29,12 @@ class MainActivity : ReactActivity() {
   private fun handleIntent(intent: android.content.Intent?) {
     val chatId = intent?.getStringExtra("chatId")
     if (!chatId.isNullOrEmpty()) {
+      val contactName = intent.getStringExtra("contactName") ?: ""
+      val fromChatHead = intent.getBooleanExtra("fromChatHead", false)
       ChatHeadModule.pendingChatId = chatId
-      ChatHeadModule.pendingContactName = intent.getStringExtra("contactName")
+      ChatHeadModule.pendingContactName = contactName
+      ChatHeadModule.fromChatHead = fromChatHead
+      ChatHeadModule.emitPendingIntent(chatId, contactName, fromChatHead)
     }
   }
 

@@ -104,9 +104,11 @@ class ChatHeadModule(private val reactContext: ReactApplicationContext) :
                 val map = Arguments.createMap().apply {
                     putString("chatId", id)
                     putString("contactName", pendingContactName ?: "")
+                    putBoolean("fromChatHead", fromChatHead)
                 }
                 pendingChatId = null
                 pendingContactName = null
+                fromChatHead = false
                 promise.resolve(map)
             } else {
                 promise.resolve(null)
@@ -116,8 +118,30 @@ class ChatHeadModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    override fun initialize() {
+        super.initialize()
+        Companion.reactContext = reactContext
+    }
+
     companion object {
         var pendingChatId: String? = null
         var pendingContactName: String? = null
+        var fromChatHead: Boolean = false
+        var reactContext: ReactApplicationContext? = null
+
+        fun emitPendingIntent(chatId: String, contactName: String, fromChatHead: Boolean) {
+            val ctx = reactContext ?: return
+            if (ctx.hasActiveReactInstance()) {
+                try {
+                    val map = Arguments.createMap().apply {
+                        putString("chatId", chatId)
+                        putString("contactName", contactName)
+                        putBoolean("fromChatHead", fromChatHead)
+                    }
+                    ctx.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                        .emit("onChatHeadIntent", map)
+                } catch (e: Exception) {}
+            }
+        }
     }
 }

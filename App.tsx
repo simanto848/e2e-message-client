@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, StatusBar, Alert, AppState, BackHandler, ToastAndroid, Platform, InteractionManager } from 'react-native';
+import { StyleSheet, View, StatusBar, Alert, AppState, BackHandler, ToastAndroid, Platform, InteractionManager, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ScreenCapture from 'expo-screen-capture';
 import * as Updates from 'expo-updates';
@@ -49,8 +49,6 @@ import { api, API_BASE_URL } from './src/services/api';
 import { socketService } from './src/services/socket';
 import { callAudio } from './src/utils/callAudio';
 import { webrtcCallEngine } from './src/utils/webrtcCall';
-import { isExternalActivityActive } from './src/utils/appLockGuard';
-import type { MediaStream } from './src/utils/webrtcAdapter';
 
 // Screens
 import { AuthScreen } from './src/screens/AuthScreen';
@@ -78,13 +76,13 @@ import { checkForAppUpdates, ReleaseInfo } from './src/services/updateService';
 import {
   requestAppPermissions,
   checkAppPermissions,
-  requestSinglePermission,
   AppPermissionsStatus,
 } from './src/utils/permissions';
 import { colors } from './src/theme';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useAppSecurity } from './src/hooks/useAppSecurity';
 import { useWebRTCCall } from './src/hooks/useWebRTCCall';
-import { ChatHeadOverlay } from './src/components/ChatHeadOverlay';
+import { ChatHeadOverlay, ChatHeadAttachmentData } from './src/components/ChatHeadOverlay';
 import { RestoreSessionModal } from './src/components/RestoreSessionModal';
 import { InAppNotificationBanner } from './src/components/InAppNotificationBanner';
 import { notificationService } from './src/services/notificationService';
@@ -283,6 +281,7 @@ export default function App() {
   // server/src/realtime.ts). Populated by a one-time snapshot right after
   // connecting, then kept current by individual online/offline events.
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
+  const [lastSeenMap, setLastSeenMap] = useState<Record<string, number>>({});
 
   const [inspectingMessage, setInspectingMessage] = useState<Message | null>(null);
   const [safetyModalChat, setSafetyModalChat] = useState<ChatThread | null>(null);
@@ -310,7 +309,9 @@ export default function App() {
   } | null>(null);
 
   const logCallToChat = (finalState: CallState, endReason: 'completed' | 'declined' | 'missed') => {
-    if (!currentUser || !mySecretKey || !finalState.remoteUser) return;
+    const user = currentUserRef.current;
+    const secret = mySecretKeyRef.current;
+    if (!user || !secret || !finalState.remoteUser) return;
 
     const peer = finalState.remoteUser;
     const isIncoming = Boolean(finalState.isIncoming);
@@ -328,7 +329,13 @@ export default function App() {
       ? `📞 ${label} declined`
       : `📞 ${label} not answered`;
 
-    const encryptedPayload = encryptMessage(text, mySecretKey, peer.publicKey, currentUser.publicKey);
+    let encryptedPayload;
+    try {
+      encryptedPayload = encryptMessage(text, secret, peer.publicKey, user.publicKey);
+    } catch (err) {
+      console.warn('[CallLog] Encryption notice:', err);
+      return;
+    }
     const callAttachment: Attachment = {
       id: `call_${Date.now()}`,
       name: label,
@@ -343,8 +350,8 @@ export default function App() {
     const newMsg: Message = {
       id: `msg_call_${Date.now()}`,
       chatId: peer.id,
-      senderId: isIncoming ? peer.id : currentUser.id,
-      receiverId: isIncoming ? currentUser.id : peer.id,
+      senderId: isIncoming ? peer.id : user.id,
+      receiverId: isIncoming ? user.id : peer.id,
       text,
       encryptedPayload,
       timestamp: Date.now(),
@@ -414,8 +421,35 @@ export default function App() {
   const handleToggleAntiScreenshot = async (val: boolean) => {
     setAntiScreenshotEnabled(val);
     setCurrentUser(prev => prev ? { ...prev, blockScreenshots: val } : null);
+    try {
+      if (val) {
+        await ScreenCapture.preventScreenCaptureAsync();
+      } else {
+        await ScreenCapture.allowScreenCaptureAsync();
+      }
+    } catch (err) {
+      console.warn('[AntiScreenshot] Screen-capture toggle notice:', err);
+    }
     api.updatePrivacySettings({ blockScreenshots: val }).catch(() => {});
   };
+
+  // Enforce OS-level screenshot blocking whenever the setting is on and a
+  // user is authenticated. Previously the toggle only flipped state without
+  // ever calling expo-screen-capture, so the privacy feature was a no-op.
+  useEffect(() => {
+    const enforce = async () => {
+      try {
+        if (antiScreenshotEnabled && currentUser) {
+          await ScreenCapture.preventScreenCaptureAsync();
+        } else {
+          await ScreenCapture.allowScreenCaptureAsync();
+        }
+      } catch (err) {
+        console.warn('[AntiScreenshot] Enforce notice:', err);
+      }
+    };
+    enforce();
+  }, [antiScreenshotEnabled, currentUser]);
 
   const handleToggleCallVerification = async (val: boolean) => {
     setCallVerificationEnabled(val);
@@ -461,8 +495,13 @@ export default function App() {
   const [backgroundSyncEnabled, setBackgroundSyncEnabledState] = useState(true);
   const [chatHeadsEnabled, setChatHeadsEnabledState] = useState(true);
   const [activeChatHeadContactId, setActiveChatHeadContactId] = useState<string | null>(null);
+  const [chatHeadContactIds, setChatHeadContactIds] = useState<string[]>([]);
   const [isChatHeadDismissed, setIsChatHeadDismissed] = useState(false);
+  const [isChatHeadExpanded, setIsChatHeadExpanded] = useState(false);
+  const [isOpenedFromChatHead, setIsOpenedFromChatHead] = useState(false);
   const [chatHeadMessages, setChatHeadMessages] = useState<Message[]>([]);
+  const activeChatHeadContactIdRef = useRef<string | null>(null);
+  activeChatHeadContactIdRef.current = activeChatHeadContactId;
 
   useEffect(() => {
     getBackgroundSyncSettings().then(settings => {
@@ -480,6 +519,27 @@ export default function App() {
     setChatHeadsEnabledState(val);
     await setChatHeadsEnabled(val);
     if (val) setIsChatHeadDismissed(false);
+  };
+
+  const handleCloseFloatingWindow = () => {
+    setIsChatHeadExpanded(false);
+    setIsOpenedFromChatHead(false);
+    // Only leave a bubble behind if that thread still has unread messages —
+    // minimizing a fully-read chat just exits, no stray bubble.
+    if (chatHeadsEnabled && currentUser && chatHeadThread && !isAppLocked && (chatHeadThread.unreadCount || 0) > 0) {
+      chatHeadNative
+        .showNativeChatHead({
+          contactId: chatHeadThread.id,
+          contactName: chatHeadThread.participant.name,
+          avatarUrl: chatHeadThread.participant.avatar,
+          unreadCount: chatHeadThread.unreadCount || 0,
+          isOnline: onlineUserIds.has(chatHeadThread.participant.id),
+        })
+        .catch(() => {});
+    } else {
+      chatHeadNative.hideNativeChatHead().catch(() => {});
+    }
+    BackHandler.exitApp();
   };
 
   // Android Hardware / Swipe Back Navigation Handler
@@ -502,6 +562,8 @@ export default function App() {
     showRequestsModal,
     hasRestorePrompt: false,
     currentScreen,
+    isOpenedFromChatHead: false,
+    isChatHeadExpanded: false,
   });
 
   backHandlerStateRef.current = {
@@ -521,11 +583,24 @@ export default function App() {
     showRequestsModal,
     hasRestorePrompt: Boolean(restoreSessionPrompt),
     currentScreen,
+    isOpenedFromChatHead,
+    isChatHeadExpanded,
   };
 
   useEffect(() => {
     const onHardwareBack = () => {
       const state = backHandlerStateRef.current;
+
+      // 0. If floating quick-chat from chat head is open, close floating window and return to external app/home screen!
+      if (state.isOpenedFromChatHead && state.isChatHeadExpanded) {
+        handleCloseFloatingWindow();
+        return true;
+      }
+
+      if (state.isChatHeadExpanded) {
+        setIsChatHeadExpanded(false);
+        return true;
+      }
 
       // 1. If screen is locked by Privacy Shield PIN, prevent bypassing
       if (state.isAppLocked) {
@@ -643,14 +718,22 @@ export default function App() {
         resetCallState();
       }
       socketService.disconnect({ clearListeners: true });
+      try {
+        stopBackgroundSync();
+      } catch {}
       await wipeAllSecureData(currentUser?.id);
       await clearDuressConfig();
-      await AsyncStorage.clear().catch(() => {});
+      // Preserve background-sync / chat-head prefs across wipe; only clear
+      // session-scoped keys. AsyncStorage.clear() previously wiped user prefs.
+      await AsyncStorage.multiRemove(['session_token', 'current_user_id']).catch(() => {});
       setCurrentUser(null);
       setMySecretKey(null);
       setChats([]);
       setMessages([]);
       setActiveChatId(null);
+      setHistoricalKeys([]);
+      setInvites([]);
+      setLinkedDevices([]);
       setIsAppLocked(false);
       setCurrentScreen('auth');
       Alert.alert('Enclave Zeroized', 'All keys, sessions, and cached data have been completely wiped.');
@@ -670,7 +753,7 @@ export default function App() {
     if (!currentUser) return;
     const sub = AppState.addEventListener('change', nextState => {
       if (nextState === 'active') {
-        socketService.reconnectIfNeeded();
+        socketService.reconnectIfNeeded().catch(err => console.warn('[Socket] Reconnect notice:', err));
         performAutoBackupIfNeeded();
       }
     });
@@ -1058,6 +1141,21 @@ export default function App() {
         return { ...c, lastMessage: { ...c.lastMessage, text } };
       });
 
+      // Synchronize last seen map with latest contact profile and message timestamps
+      const initialLastSeen: Record<string, number> = {};
+      contactList.forEach(c => {
+        if (c.participant?.id) {
+          const t = c.participant.lastActiveAt || c.lastMessage?.timestamp;
+          if (t && t > 0) {
+            initialLastSeen[c.participant.id] = t;
+          }
+        }
+      });
+      if (Object.keys(initialLastSeen).length > 0) {
+        // Fresh server data wins over stale local state.
+        setLastSeenMap(prev => ({ ...prev, ...initialLastSeen }));
+      }
+
       setChats(withDecryptedPreviews);
       setIncomingRequests(reqs.incoming || []);
       setOutgoingRequests(reqs.outgoing || []);
@@ -1143,24 +1241,30 @@ export default function App() {
   useEffect(() => {
     if (!currentUser || !activeChatId || !mySecretKey) return;
 
+    const targetChatId = activeChatId;
+    let cancelled = false;
     const loadMessages = async () => {
       try {
-        const rawMessages = await api.getMessages(activeChatId, currentUser.id);
-        const knownPublicKey = chats.find(c => c.id === activeChatId)?.participant.publicKey;
+        const rawMessages = await api.getMessages(targetChatId, currentUser.id);
+        if (cancelled || activeChatIdRef.current !== targetChatId) return;
+        const knownPublicKey = chatsRef.current.find(c => c.id === targetChatId)?.participant.publicKey;
 
         const decryptedList = rawMessages.map(m => {
           if (m.isDeletedForEveryone) return { ...m, text: '' };
-          const { text } = decryptVerified(m.encryptedPayload, knownPublicKey);
-          return { ...m, text };
+          const { text, keyMismatch } = decryptVerified(m.encryptedPayload, knownPublicKey);
+          return { ...m, text, keyMismatch: m.keyMismatch ?? keyMismatch };
         });
 
         setMessages(decryptedList);
       } catch (err) {
-        console.warn('Failed to load messages for chat:', activeChatId, err);
+        if (!cancelled) console.warn('Failed to load messages for chat:', targetChatId, err);
       }
     };
 
     loadMessages();
+    return () => {
+      cancelled = true;
+    };
   }, [activeChatId, currentUser?.id, mySecretKey]);
 
   // Periodic background/fallback sync: only active when app is active, unlocked, and authenticated
@@ -1223,11 +1327,11 @@ export default function App() {
     });
 
     // Incoming Encrypted Message
-    const unsubMsg = socketService.onReceiveMessage((msg: Message) => {
-      if (msg.receiverId === currentUser.id) {
-        const knownPublicKey = chatsRef.current.find(c => c.id === msg.senderId)?.participant.publicKey;
-        const { text, keyMismatch } = decryptVerified(msg.encryptedPayload, knownPublicKey);
-        msg.text = text;
+    const unsubMsg = socketService.onReceiveMessage((incoming: Message) => {
+      if (incoming.receiverId === currentUser.id) {
+        const knownPublicKey = chatsRef.current.find(c => c.id === incoming.senderId)?.participant.publicKey;
+        const { text, keyMismatch } = decryptVerified(incoming.encryptedPayload, knownPublicKey);
+        const msg: Message = { ...incoming, text, keyMismatch: incoming.keyMismatch ?? keyMismatch };
 
         if (keyMismatch && !isDecoyMode) {
           notificationService.showSecurityNotification({
@@ -1250,6 +1354,10 @@ export default function App() {
             return [...prev, msg];
           });
         }
+        if (msg.senderId) {
+          setLastSeenMap(prev => ({ ...prev, [msg.senderId]: msg.timestamp || Date.now() }));
+        }
+
         callAudio.playMessageSound();
 
         // Update chat list last message dynamically
@@ -1263,10 +1371,26 @@ export default function App() {
 
         if (isCurrentlyOpen) {
           socketService.sendStatus(msg.id, msg.chatId, 'read');
-          socketService.markRead(msg.senderId, msg.chatId);
           api.markMessagesAsRead(msg.senderId, msg.chatId).catch(() => {});
         } else {
           socketService.sendStatus(msg.id, msg.chatId, 'delivered');
+
+          // When new message arrives from another user, include them in chat heads (max 3 users).
+          // Normalize to the chat THREAD id (not the raw sender/participant id) so the
+          // same conversation can never occupy two bubble slots at once.
+          const headThreadId =
+            chatsRef.current.find(
+              c => c.id === msg.senderId || c.id === msg.chatId || c.participant?.id === msg.senderId
+            )?.id || msg.chatId || msg.senderId;
+          setChatHeadContactIds(prev => {
+            const normalized = prev.map(
+              pid => chatsRef.current.find(c => c.id === pid || c.participant?.id === pid)?.id || pid
+            );
+            const filtered = normalized.filter(id => id !== headThreadId);
+            return [headThreadId, ...filtered].slice(0, 3);
+          });
+          setActiveChatHeadContactId(headThreadId);
+          setIsChatHeadDismissed(false);
 
           const senderProfile = chatsRef.current.find(c => c.id === msg.senderId)?.participant;
           const currentChat = chatsRef.current.find(c => c.id === msg.senderId);
@@ -1379,6 +1503,10 @@ export default function App() {
           }
         }
 
+        if (signal.senderId) {
+          setLastSeenMap(prev => ({ ...prev, [signal.senderId]: signal.timestamp || Date.now() }));
+        }
+
         pendingIncomingCallRef.current = { callId: signal.callId, senderId: signal.senderId, sdp: signal.sdp };
         activeCallIdRef.current = signal.callId;
         callAudio.playRingtone();
@@ -1418,6 +1546,22 @@ export default function App() {
         await webrtcCallEngine.handleRemoteAnswer(signal.sdp, callStateRef.current.isSpeakerOn);
         setCallState(prev => ({ ...prev, status: 'connected' }));
         startCallTimer();
+      } else if (signal.signalType === 'restart-offer' || signal.signalType === 'restart-answer') {
+        // Mid-call ICE restart renegotiation (same callId, never a new call —
+        // must NOT go through the offer path or the peer would re-ring).
+        if (!activeCallIdRef.current || !signal.callId || signal.callId !== activeCallIdRef.current) {
+          return;
+        }
+        if (!callStateRef.current.active) return;
+        try {
+          if (signal.signalType === 'restart-offer') {
+            await webrtcCallEngine.handleRestartOffer(signal.sdp);
+          } else {
+            await webrtcCallEngine.handleRestartAnswer(signal.sdp);
+          }
+        } catch (err) {
+          console.warn('[Call] ICE restart signaling failed:', err);
+        }
       } else if (signal.signalType === 'ice-candidate') {
         if (activeCallIdRef.current && signal.callId && signal.callId !== activeCallIdRef.current) {
           return;
@@ -1451,7 +1595,10 @@ export default function App() {
         onUnreadUpdate: data => {
           if (data.unreadThreads && data.unreadThreads.length > 0) {
             setIsChatHeadDismissed(false);
-            setActiveChatHeadContactId(data.unreadThreads[0].peerId);
+            const rawId = data.unreadThreads[0].peerId;
+            const normalizedId =
+              chatsRef.current.find(c => c.id === rawId || c.participant?.id === rawId)?.id || rawId;
+            setActiveChatHeadContactId(normalizedId);
             reloadDynamicData(currentUser.id);
           }
         },
@@ -1460,17 +1607,30 @@ export default function App() {
       stopBackgroundSync();
     }
 
-    // Presence: snapshot on connect, then incremental updates.
-    const unsubPresenceSnapshot = socketService.onPresenceSnapshot(userIds => {
-      setOnlineUserIds(new Set(userIds));
+    // Presence: snapshot on connect (with last-seen timestamps), then incremental updates.
+    const unsubPresenceSnapshot = socketService.onPresenceSnapshot(data => {
+      if (Array.isArray(data)) {
+        setOnlineUserIds(new Set(data));
+      } else if (data && typeof data === 'object') {
+        if (Array.isArray(data.online)) {
+          setOnlineUserIds(new Set(data.online));
+        }
+        if (data.lastSeen) {
+          setLastSeenMap(prev => ({ ...prev, ...data.lastSeen }));
+        }
+      }
     });
-    const unsubPresenceUpdate = socketService.onPresenceUpdate(({ userId, status }) => {
+    const unsubPresenceUpdate = socketService.onPresenceUpdate(({ userId, status, timestamp }) => {
       setOnlineUserIds(prev => {
         const next = new Set(prev);
         if (status === 'online') next.add(userId);
         else next.delete(userId);
         return next;
       });
+      if (status === 'offline') {
+        const ts = timestamp || Date.now();
+        setLastSeenMap(prev => ({ ...prev, [userId]: ts }));
+      }
     });
 
     return () => {
@@ -1712,24 +1872,64 @@ export default function App() {
     ? (activeChatId ? decoyMessages[activeChatId] || [] : [])
     : messages;
   const activeChat = displayedChats.find(c => c.id === activeChatId);
-  const chatHeadThread = (activeChatHeadContactId ? displayedChats.find(c => c.id === activeChatHeadContactId) : null) || displayedChats[0] || null;
+  // Messenger-style: in-app bubble exists ONLY for explicitly minimized /
+  // unread threads (chatHeadContactIds). No fallback to displayedChats[0] —
+  // that fallback is what kept a head floating over the chat list on fresh
+  // launch with zero unread. The outside-the-app case is covered by the
+  // native OS overlay (chatHeadNative), not this in-app view.
+  const chatHeadThread = activeChatHeadContactId
+    ? displayedChats.find(c => c.id === activeChatHeadContactId || c.participant?.id === activeChatHeadContactId) || null
+    : null;
+
+  // Multi-user Chat Head threads (up to 3 users max), deduped by thread id so
+  // one conversation can never render two bubbles even if the id list ever
+  // mixes raw participant ids and thread ids.
+  const chatHeadThreads: ChatThread[] = (() => {
+    const seen = new Set<string>();
+    const out: ChatThread[] = [];
+    for (const id of chatHeadContactIds) {
+      const t = displayedChats.find(c => c.id === id || c.participant?.id === id);
+      if (t && !seen.has(t.id)) {
+        seen.add(t.id);
+        out.push(t);
+      }
+      if (out.length >= 3) break;
+    }
+    return out;
+  })();
+
+  const effectiveChatHeadThreads: ChatThread[] = chatHeadThreads.length > 0
+    ? chatHeadThreads
+    : (chatHeadThread ? [chatHeadThread] : []);
+
+  const activeChatHeadThread = (activeChatHeadContactId
+    ? effectiveChatHeadThreads.find(c => c.id === activeChatHeadContactId)
+    : null) || effectiveChatHeadThreads[0] || null;
+
+  // While the in-app mini-chat is expanded, make sure the OS-level bubble is
+  // hidden so the two systems never show the same contact twice at once.
+  useEffect(() => {
+    if (isChatHeadExpanded) {
+      chatHeadNative.hideNativeChatHead().catch(() => {});
+    }
+  }, [isChatHeadExpanded]);
 
   // Load full conversation history for the active Chat Head (all messages decrypted)
   useEffect(() => {
-    if (!chatHeadThread || !currentUser || !mySecretKey) {
+    if (!activeChatHeadThread || !currentUser || !mySecretKey) {
       setChatHeadMessages([]);
       return;
     }
-    if (chatHeadThread.id === activeChatId) {
+    if (activeChatHeadThread.id === activeChatId) {
       setChatHeadMessages(messages);
       return;
     }
     let isMounted = true;
     api
-      .getMessages(chatHeadThread.id, currentUser.id)
+      .getMessages(activeChatHeadThread.id, currentUser.id)
       .then(rawMessages => {
         if (!isMounted) return;
-        const knownPublicKey = chatHeadThread.participant.publicKey;
+        const knownPublicKey = activeChatHeadThread.participant.publicKey;
         const decrypted: Message[] = rawMessages.map(msg => {
           if (msg.isDeletedForEveryone) return { ...msg, text: '' };
           if (msg.text) return msg;
@@ -1739,62 +1939,165 @@ export default function App() {
         setChatHeadMessages(decrypted);
       })
       .catch(() => {});
-
     return () => {
       isMounted = false;
     };
-  }, [chatHeadThread?.id, activeChatId, messages, currentUser?.id, mySecretKey]);
+  }, [activeChatHeadThread?.id, activeChatId, messages, currentUser?.id, mySecretKey]);
+
+  // Send Attachment directly from Chat Head Overlay
+  const handleSendAttachmentFromChatHead = async (
+    targetChatId: string,
+    asset: ChatHeadAttachmentData
+  ) => {
+    if (!currentUser || !mySecretKey) return;
+    const targetChat = chats.find(c => c.id === targetChatId);
+    if (!targetChat) return;
+
+    try {
+      const base64Data = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const encryptedPayload = encryptMessage(
+        base64Data,
+        mySecretKey,
+        targetChat.participant.publicKey,
+        currentUser.publicKey
+      );
+
+      const mimeType = asset.mimeType || (asset.type === 'audio' ? 'audio/m4a' : 'image/jpeg');
+      const uploadResult = await api.uploadMedia({
+        name: asset.name || (asset.type === 'audio' ? 'Voice Note' : 'photo.jpg'),
+        type: asset.type === 'audio' ? 'audio' : 'image',
+        size: asset.size || base64Data.length,
+        mimeType,
+        receiverId: targetChat.participant.id,
+        encryptedPayload,
+      });
+
+      if (uploadResult.success && uploadResult.attachment) {
+        await sendMessageToChat(
+          targetChatId,
+          asset.type === 'audio' ? '🎤 Encrypted Voice Message' : '📷 Encrypted Image',
+          uploadResult.attachment
+        );
+      }
+    } catch (err) {
+      console.warn('[App] Failed to send attachment from chat head:', err);
+    }
+  };
 
   // Outside-the-App Messenger Chat Heads: Automatically activates when app is minimized / in background
   useEffect(() => {
-    // Check if app was opened by tapping a floating Chat Head from outside the app
-    const checkPendingIntent = async () => {
-      const pending = await chatHeadNative.getPendingChatIntent();
-      if (pending && pending.chatId) {
-        setActiveChatId(pending.chatId);
-        setActiveChatHeadContactId(pending.chatId);
-        setCurrentScreen('chat_detail');
+    const handleChatHeadIntent = (data: { chatId: string; contactName?: string; fromChatHead?: boolean }) => {
+      if (data && data.chatId) {
+        // Native side sends a contact/thread id — normalize to thread id.
+        const normalizedId =
+          chatsRef.current.find(c => c.id === data.chatId || c.participant?.id === data.chatId)?.id || data.chatId;
+        setActiveChatHeadContactId(normalizedId);
+        setChatHeadContactIds(prev => {
+          const normalized = prev.map(
+            pid => chatsRef.current.find(c => c.id === pid || c.participant?.id === pid)?.id || pid
+          );
+          const filtered = normalized.filter(id => id !== normalizedId);
+          return [normalizedId, ...filtered].slice(0, 3);
+        });
+        setIsChatHeadDismissed(false);
+        setIsChatHeadExpanded(true); // Open floating quick chat directly!
+        if (data.fromChatHead) {
+          setIsOpenedFromChatHead(true);
+        }
       }
     };
 
-    checkPendingIntent();
+    // Check if app was opened by tapping a floating Chat Head from outside the app
+    const checkPendingIntent = async () => {
+      try {
+        const pending = await chatHeadNative.getPendingChatIntent();
+        if (pending) {
+          handleChatHeadIntent(pending);
+        }
+      } catch (err) {
+        console.warn('[ChatHead] Pending intent notice:', err);
+      }
+    };
+
+    checkPendingIntent().catch(() => {});
+
+    const intentSub = DeviceEventEmitter.addListener('onChatHeadIntent', handleChatHeadIntent);
 
     const sub = AppState.addEventListener('change', nextState => {
       if (nextState === 'active') {
-        // App returned to foreground: hide outside native overlay and check for pending tap intent
+        // App returned to foreground: hide outside native overlay so it can
+        // never linger on top of the in-app bubble (the double-bubble bug)
+        // and check for pending tap intent.
         chatHeadNative.hideNativeChatHead().catch(() => {});
-        checkPendingIntent();
+        checkPendingIntent().catch(() => {});
       } else if (nextState.match(/inactive|background/)) {
-        // App minimized / user went to home screen: automatically show native floating chat head outside app
-        if (chatHeadsEnabled && currentUser && chatHeadThread && !isAppLocked) {
-          chatHeadNative
-            .showNativeChatHead({
-              contactId: chatHeadThread.id,
-              contactName: chatHeadThread.participant.name,
-              avatarUrl: chatHeadThread.participant.avatar,
-              unreadCount: chatHeadThread.unreadCount || 0,
-              isOnline: onlineUserIds.has(chatHeadThread.participant.id),
-            })
-            .catch(() => {});
+        setIsOpenedFromChatHead(false);
+        setIsChatHeadExpanded(false);
+        // App minimized: show the native bubble ONLY if there are genuinely
+        // unread messages waiting (most recent first). Exiting after a normal
+        // chat with nothing unread leaves no bubble behind.
+        if (chatHeadsEnabled && currentUser && !isAppLocked && !isDecoyMode) {
+          const freshChats = chatsRef.current;
+          const unreadThreads = freshChats
+            .filter(c => (c.unreadCount || 0) > 0)
+            .sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
+          const preferred = activeChatHeadContactIdRef.current
+            ? unreadThreads.find(
+                t =>
+                  t.id === activeChatHeadContactIdRef.current ||
+                  t.participant?.id === activeChatHeadContactIdRef.current
+              )
+            : null;
+          const top = preferred || unreadThreads[0] || null;
+          if (top) {
+            chatHeadNative
+              .showNativeChatHead({
+                contactId: top.id,
+                contactName: top.participant.name,
+                avatarUrl: top.participant.avatar,
+                unreadCount: top.unreadCount || 0,
+                isOnline: onlineUserIds.has(top.participant.id),
+              })
+              .catch(() => {});
+          } else {
+            chatHeadNative.hideNativeChatHead().catch(() => {});
+          }
+        } else {
+          chatHeadNative.hideNativeChatHead().catch(() => {});
         }
       }
     });
 
     return () => {
       sub.remove();
+      intentSub.remove();
     };
-  }, [chatHeadsEnabled, currentUser, chatHeadThread, isAppLocked, onlineUserIds]);
+  }, [chatHeadsEnabled, currentUser, isAppLocked, isDecoyMode, onlineUserIds]);
 
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={styles.safeArea}>
-        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      <SafeAreaView
+        style={[
+          styles.safeArea,
+          isOpenedFromChatHead && isChatHeadExpanded && styles.safeAreaTranslucent,
+        ]}
+      >
+        <StatusBar
+          barStyle={isOpenedFromChatHead && isChatHeadExpanded ? 'light-content' : 'dark-content'}
+          backgroundColor={isOpenedFromChatHead && isChatHeadExpanded ? 'transparent' : colors.background}
+          translucent={isOpenedFromChatHead && isChatHeadExpanded}
+        />
 
-        {/* Screen Render */}
-        {currentScreen === 'auth' || !displayedUser ? (
-          <AuthScreen onAuthenticated={handleAuthenticated} />
-        ) : (
-          <View style={styles.appContainer}>
+        {/* Screen Render: only rendered when NOT in floating chat head mode */}
+        {!(isOpenedFromChatHead && isChatHeadExpanded) && (
+          <>
+            {currentScreen === 'auth' || !displayedUser ? (
+              <AuthScreen onAuthenticated={handleAuthenticated} />
+            ) : (
+              <View style={styles.appContainer}>
             {/* Top Header */}
             {currentScreen !== 'chat_detail' && (
               <Header
@@ -1815,11 +2118,19 @@ export default function App() {
                 loading={isDecoyMode ? false : isInitialChatsLoading}
                 incomingRequestsCount={isDecoyMode ? 0 : incomingRequests.length}
                 onlineUserIds={onlineUserIds}
+                lastSeenMap={lastSeenMap}
                 refreshing={isRefreshing}
                 onRefresh={handleRefresh}
                 onSelectChat={chatId => {
                   setActiveChatId(chatId);
                   setActiveChatHeadContactId(chatId);
+                  // User opened it full-screen — drop it from the minimized
+                  // bubble stack so the bubble doesn't linger over the chat.
+                  setChatHeadContactIds(prev => prev.filter(id => {
+                    const t = chats.find(c => c.id === id || c.participant?.id === id);
+                    return t ? t.id !== chatId : id !== chatId;
+                  }));
+                  setIsChatHeadExpanded(false);
                   setCurrentScreen('chat_detail');
                   if (!isDecoyMode && currentUser) {
                     const targetChat = chats.find(c => c.id === chatId);
@@ -1849,6 +2160,7 @@ export default function App() {
                 }}
                 messages={displayedMessages}
                 isOnline={onlineUserIds.has(activeChat.participant.id)}
+                lastActiveAt={lastSeenMap[activeChat.participant.id] ?? activeChat.participant.lastActiveAt}
                 onBack={() => {
                   setActiveChatId(null);
                   setCurrentScreen('chat_list');
@@ -1936,6 +2248,8 @@ export default function App() {
             )}
           </View>
         )}
+          </>
+        )}
 
         {/* Contact Requests Modal */}
         <ContactRequestsModal
@@ -1954,6 +2268,9 @@ export default function App() {
           onSendRequest={handleSendContactRequest}
           onOpenChat={peerId => {
             setActiveChatId(peerId);
+            setActiveChatHeadContactId(peerId);
+            setChatHeadContactIds(prev => prev.filter(id => id !== peerId));
+            setIsChatHeadExpanded(false);
             setCurrentScreen('chat_detail');
           }}
           onClose={() => setShowSearchModal(false)}
@@ -2199,37 +2516,85 @@ export default function App() {
           }}
         />
 
-        {/* Messenger Chat Head (activates natively outside the app over Android OS; in-app overlay only as fallback on platforms without native overlay support) */}
-        {!chatHeadNative.isSupported() &&
-          currentUser &&
+        {/* Floating mini-chat — OUTSIDE-ONLY. It renders solely for the
+            OS-bubble launch flow (isOpenedFromChatHead); inside the app there
+            is deliberately no floating bubble, only the native overlay when
+            the app is backgrounded. */}
+        {currentUser &&
           chatHeadsEnabled &&
-          !isChatHeadDismissed &&
-          currentScreen !== 'chat_detail' &&
           !isAppLocked &&
-          chatHeadThread && (
+          isOpenedFromChatHead &&
+          effectiveChatHeadThreads.length > 0 && (
             <ChatHeadOverlay
-              activeChat={chatHeadThread}
+              threads={effectiveChatHeadThreads}
+              activeThreadId={activeChatHeadThread?.id}
               currentUser={displayedUser || currentUser}
-              messages={chatHeadThread.id === activeChatId ? messages : chatHeadMessages}
-              unreadCount={chatHeadThread.unreadCount || 0}
-              isOnline={onlineUserIds.has(chatHeadThread.participant.id)}
-              onSendMessage={text => sendMessageToChat(chatHeadThread.id, text)}
+              messages={activeChatHeadThread?.id === activeChatId ? messages : chatHeadMessages}
+              unreadCount={activeChatHeadThread?.unreadCount || 0}
+              isOnline={activeChatHeadThread ? onlineUserIds.has(activeChatHeadThread.participant.id) : false}
+              onlineUserIds={onlineUserIds}
+              lastSeenMap={lastSeenMap}
+              isExpanded={isChatHeadExpanded}
+              onToggleExpand={setIsChatHeadExpanded}
+              isOpenedFromChatHead={isOpenedFromChatHead}
+              onSelectThread={threadId => setActiveChatHeadContactId(threadId)}
+              onCloseThread={threadId => {
+                setChatHeadContactIds(prev => {
+                  const updated = prev.filter(id => id !== threadId);
+                  if (updated.length === 0) {
+                    setIsChatHeadDismissed(true);
+                    setIsChatHeadExpanded(false);
+                  }
+                  return updated;
+                });
+                if (activeChatHeadContactId === threadId) {
+                  setActiveChatHeadContactId(null);
+                }
+              }}
+              onSendMessage={text => {
+                if (activeChatHeadThread) {
+                  sendMessageToChat(activeChatHeadThread.id, text);
+                }
+              }}
+              onSendAttachment={handleSendAttachmentFromChatHead}
               onOpenFullChat={chatId => {
+                setIsOpenedFromChatHead(false);
+                setIsChatHeadExpanded(false);
                 setActiveChatId(chatId);
                 setActiveChatHeadContactId(chatId);
+                setChatHeadContactIds(prev => prev.filter(id => id !== chatId));
                 setCurrentScreen('chat_detail');
               }}
-              onStartCall={type => {
-                setActiveChatId(chatHeadThread.id);
-                handleStartCall(type);
+              onStartCall={(type, threadId) => {
+                const targetId = threadId || activeChatHeadThread?.id;
+                if (targetId) {
+                  setActiveChatId(targetId);
+                  handleStartCall(type);
+                }
               }}
-              onDismiss={() => setIsChatHeadDismissed(true)}
+              onDismiss={() => {
+                if (isOpenedFromChatHead) {
+                  handleCloseFloatingWindow();
+                } else {
+                  setIsChatHeadDismissed(true);
+                  setIsChatHeadExpanded(false);
+                }
+              }}
+              onDismissFloating={handleCloseFloatingWindow}
             />
           )}
-        {/* Heads-Up In-App Notification Banner */}
+
+        {/* Heads-Up In-App Notification Banner (Interactive In-Header Quick Chat, Attachments & Calls) */}
         <InAppNotificationBanner
+          onQuickReply={(chatId, text) => sendMessageToChat(chatId, text)}
+          onSendAttachment={handleSendAttachmentFromChatHead}
+          onStartCall={(type, chatId) => {
+            setActiveChatId(chatId);
+            handleStartCall(type);
+          }}
           onOpenChat={chatId => {
             setActiveChatId(chatId);
+            setActiveChatHeadContactId(chatId);
             setCurrentScreen('chat_detail');
           }}
           onOpenSecurity={() => {
@@ -2247,6 +2612,9 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  safeAreaTranslucent: {
+    backgroundColor: 'transparent',
   },
   appContainer: {
     flex: 1,

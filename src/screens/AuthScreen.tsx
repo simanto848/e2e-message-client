@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, BackHandler, Animated, Easing } from 'react-native';
-import { ShieldCheck, Lock, KeyRound, Ticket, Fingerprint, ArrowRight, User } from '../components/Icons';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, BackHandler, Animated, Easing, KeyboardAvoidingView, Platform } from 'react-native';
+import { ShieldCheck, Lock, KeyRound, Ticket, Fingerprint, User } from '../components/Icons';
 import { JabyLogo } from '../components/JabyLogo';
 import { UserProfile } from '../types';
 import { computeFingerprint, generateIdentityKeyPair, IdentityKeyPair } from '../utils/crypto';
@@ -192,8 +192,16 @@ export function AuthScreen({ onAuthenticated }: Props) {
   };
 
   return (
-    <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* Logo and Brand */}
         <View style={styles.brandHeader}>
           <JabyLogo size={56} showText={true} subtitle="END-TO-END ENCRYPTED" />
@@ -244,7 +252,10 @@ export function AuthScreen({ onAuthenticated }: Props) {
                   placeholder="username"
                   placeholderTextColor={colors.textMuted}
                   value={handle.replace(/^@+/, '')}
-                  onChangeText={t => setHandle(`@${t.replace(/^@+/, '')}`)}
+                  onChangeText={t => {
+                    const stripped = t.replace(/^@+/, '');
+                    setHandle(stripped ? `@${stripped}` : '');
+                  }}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
@@ -320,7 +331,10 @@ export function AuthScreen({ onAuthenticated }: Props) {
                   placeholder="username"
                   placeholderTextColor={colors.textMuted}
                   value={handle.replace(/^@+/, '')}
-                  onChangeText={t => setHandle(`@${t.replace(/^@+/, '')}`)}
+                  onChangeText={t => {
+                    const stripped = t.replace(/^@+/, '');
+                    setHandle(stripped ? `@${stripped}` : '');
+                  }}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
@@ -391,8 +405,6 @@ export function AuthScreen({ onAuthenticated }: Props) {
           </Text>
         </View>
       </ScrollView>
-
-      {/* High-Tech Security Enclave Loader Overlay */}
       {loading && (
         <View style={styles.loadingOverlay}>
           <View style={styles.loadingCard}>
@@ -447,7 +459,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
           </View>
         </View>
       )}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
