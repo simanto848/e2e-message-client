@@ -57,7 +57,7 @@ export const chatHeadNative = {
     }
   },
 
-  async getPendingChatIntent(): Promise<{ chatId: string; contactName: string } | null> {
+  async getPendingChatIntent(): Promise<{ chatId: string; contactName: string; fromChatHead?: boolean } | null> {
     if (Platform.OS !== 'android' || !ChatHeadModule) return null;
     try {
       return await ChatHeadModule.getPendingChatIntent();
