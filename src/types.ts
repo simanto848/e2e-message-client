@@ -20,6 +20,7 @@ export interface UserProfile {
   callVerification?: boolean;
   autoLockDelay?: number;
   backupFrequency?: BackupFrequency;
+  lastActiveAt?: number;
 }
 
 export type DisappearingTimer = number; // seconds (0 = off)

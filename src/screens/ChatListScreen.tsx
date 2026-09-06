@@ -5,6 +5,7 @@ import { Search, Pin, ShieldCheck, Flame, Plus, CheckCircle2, UserPlus, X, UserC
 import { ChatThread } from '../types';
 import { colors, shadows } from '../theme';
 import { formatDisappearingTimer } from '../utils/timerUtils';
+import { formatLastSeen } from '../utils/dateUtils';
 
 interface Props {
   chats: ChatThread[];
@@ -12,6 +13,7 @@ interface Props {
   loading?: boolean;
   incomingRequestsCount: number;
   onlineUserIds: Set<string>;
+  lastSeenMap?: Record<string, number>;
   refreshing?: boolean;
   onRefresh?: () => void;
   onSelectChat: (chatId: string) => void;
@@ -37,6 +39,7 @@ export function ChatListScreen({
   loading = false,
   incomingRequestsCount,
   onlineUserIds,
+  lastSeenMap,
   refreshing = false,
   onRefresh,
   onSelectChat,
@@ -74,9 +77,18 @@ export function ChatListScreen({
           placeholderTextColor={colors.textMuted}
           value={searchQuery}
           onChangeText={setSearchQuery}
+          returnKeyType="search"
+          autoCapitalize="none"
+          autoCorrect={false}
+          clearButtonMode="while-editing"
         />
         {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchQuery('')}>
+          <TouchableOpacity
+            onPress={() => setSearchQuery('')}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
             <X size={16} color={colors.textMuted} />
           </TouchableOpacity>
         )}
@@ -84,7 +96,12 @@ export function ChatListScreen({
 
       {/* Incoming Requests Banner */}
       {incomingRequestsCount > 0 && (
-        <TouchableOpacity style={styles.requestsBanner} onPress={onOpenRequestsModal}>
+        <TouchableOpacity
+          style={styles.requestsBanner}
+          onPress={onOpenRequestsModal}
+          accessibilityRole="button"
+          accessibilityLabel={`${incomingRequestsCount} pending contact requests. Review.`}
+        >
           <ShieldCheck size={18} color={colors.primary} />
           <Text style={styles.requestsBannerText}>
             {incomingRequestsCount} pending contact request{incomingRequestsCount > 1 ? 's' : ''}
@@ -106,14 +123,18 @@ export function ChatListScreen({
         data={filteredChats}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.primary}
-            colors={[colors.primary]}
-            progressBackgroundColor={colors.surface}
-          />
+          onRefresh ? (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+              progressBackgroundColor={colors.surface}
+            />
+          ) : undefined
         }
         ListEmptyComponent={
           loading ? (
@@ -141,34 +162,48 @@ export function ChatListScreen({
           if (!participant) return null;
           const lastMsg = item.lastMessage;
           const isOnline = onlineUserIds.has(participant.id);
+          const lastActiveAt = lastSeenMap?.[participant.id] ?? participant.lastActiveAt;
           const isLastMsgMine = !!(lastMsg && currentUserId && lastMsg.senderId === currentUserId);
 
           return (
             <TouchableOpacity
               style={[styles.chatCard, item.pinned && styles.pinnedCard]}
               onPress={() => onSelectChat(item.id)}
+              accessibilityRole="button"
+              accessibilityLabel={`Open chat with ${participant.name}`}
             >
               {/* Avatar */}
               <View style={styles.avatarContainer}>
                 <Avatar uri={participant.avatar} name={participant.name} size={48} style={styles.avatar} />
-                {isOnline && <View style={styles.onlineDot} />}
+                {isOnline ? (
+                  <View style={styles.onlineDot} />
+                ) : (
+                  <View style={styles.offlineDot} />
+                )}
               </View>
 
               {/* Chat Info */}
               <View style={styles.chatInfo}>
                 <View style={styles.nameRow}>
                   <View style={styles.nameBadges}>
-                    <Text style={styles.nameText}>{participant.name}</Text>
+                    <Text style={styles.nameText} numberOfLines={1} ellipsizeMode="tail">{participant.name}</Text>
                     {item.isVerifiedSafetyNumber && (
                       <CheckCircle2 size={13} color={colors.primary} />
                     )}
                   </View>
 
-                  <Text style={styles.timeText}>
-                    {lastMsg
-                      ? new Date(lastMsg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                      : 'New'}
-                  </Text>
+                  <View style={styles.nameRightCol}>
+                    <Text style={styles.timeText}>
+                      {lastMsg
+                        ? new Date(lastMsg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : 'New'}
+                    </Text>
+                    {!isOnline && lastActiveAt ? (
+                      <Text style={styles.lastSeenListText} numberOfLines={1}>
+                        {formatLastSeen(lastActiveAt)}
+                      </Text>
+                    ) : null}
+                  </View>
                 </View>
 
                 <View style={styles.messageRow}>
@@ -190,6 +225,10 @@ export function ChatListScreen({
                       ) : lastMsg ? (
                         lastMsg.isDeletedForEveryone ? (
                           'Message deleted'
+                        ) : lastMsg.attachment?.type === 'image' && !lastMsg.text ? (
+                          '📷 Photo'
+                        ) : lastMsg.attachment?.type === 'audio' && !lastMsg.text ? (
+                          '🎤 Voice message'
                         ) : (
                           lastMsg.text || 'Encrypted message'
                         )
@@ -209,7 +248,7 @@ export function ChatListScreen({
 
                     {item.unreadCount > 0 && (
                       <View style={styles.unreadBadge}>
-                        <Text style={styles.unreadText}>{item.unreadCount}</Text>
+                        <Text style={styles.unreadText}>{item.unreadCount > 99 ? '99+' : item.unreadCount}</Text>
                       </View>
                     )}
 
@@ -226,6 +265,9 @@ export function ChatListScreen({
       <TouchableOpacity
         style={styles.fab}
         onPress={onOpenSearchModal}
+        accessibilityRole="button"
+        accessibilityLabel="Search for people to chat"
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
         <Plus size={24} color="#ffffff" />
       </TouchableOpacity>
@@ -369,18 +411,39 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.surface,
   },
+  offlineDot: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.border,
+    borderWidth: 2,
+    borderColor: colors.surface,
+  },
   chatInfo: {
     flex: 1,
   },
   nameRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   nameBadges: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    flex: 1,
+  },
+  nameRightCol: {
+    alignItems: 'flex-end',
+    marginLeft: 8,
+  },
+  lastSeenListText: {
+    fontSize: 10,
+    color: colors.textMuted,
+    marginTop: 2,
   },
   nameText: {
     fontSize: 15,
