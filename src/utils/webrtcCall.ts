@@ -76,19 +76,22 @@ class WebRTCCallEngine {
 
     let stream: any = null;
     try {
-      // react-native-webrtc canonical audio constraint
-      stream = await mediaDevices.getUserMedia({
-        audio: true,
-        video: video ? { facingMode: 'user' } : false,
-      });
-    } catch (err) {
-      console.warn('[WebRTC] getUserMedia audio:true fallback to explicit constraints:', err);
+      // Always request explicit audio processing: autoGainControl is what
+      // keeps the mic loud at normal speaking volume (without it, especially
+      // on speakerphone, the other side barely hears anything), while echo
+      // cancellation + noise suppression keep speakerphone usable.
       stream = await mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
+        video: video ? { facingMode: 'user' } : false,
+      });
+    } catch (err) {
+      console.warn('[WebRTC] getUserMedia explicit constraints failed, falling back to plain audio:', err);
+      stream = await mediaDevices.getUserMedia({
+        audio: true,
         video: video ? { facingMode: 'user' } : false,
       });
     }
@@ -407,6 +410,14 @@ class WebRTCCallEngine {
     try {
       InCallManager?.start({ media: video ? 'video' : 'audio', auto: false });
       InCallManager?.setKeepScreenOn(true);
+      // Unmute explicitly: a previous call's mute state can otherwise stick
+      // and leave the mic nearly/fully dead on the next call.
+      try {
+        InCallManager?.setMicrophoneMute(false);
+      } catch {}
+      this.localStream?.getAudioTracks().forEach((track: any) => {
+        track.enabled = true;
+      });
       this.setSpeakerEnabled(isSpeakerOn);
       // Native audio sessions (Android AudioManager / iOS AVAudioSession)
       // take 100-500ms to complete mode transition after start().
@@ -510,6 +521,8 @@ class WebRTCCallEngine {
     this.pendingIceCandidates = [];
     this.remoteDescriptionSet = false;
     try {
+      // Never leak a muted mic into the next call.
+      InCallManager?.setMicrophoneMute(false);
       InCallManager?.setKeepScreenOn(false);
       InCallManager?.stop();
     } catch (err) {
