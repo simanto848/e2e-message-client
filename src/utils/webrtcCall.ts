@@ -35,30 +35,7 @@ import {
 } from './webrtcAdapter';
 import { socketService } from '../services/socket';
 import { callAudio } from './callAudio';
-
-// Public STUN servers get you a direct connection when both devices are on
-// reasonably open networks. In practice, a meaningful fraction of real-world
-// connections (carrier-grade NAT, symmetric NATs, restrictive Wi-Fi) need a
-// TURN relay to connect at all. The turn: entries below are OpenRelay's free,
-// publicly-documented community credentials (no signup) — fine for personal
-// use with friends, but a best-effort service with no uptime guarantee, not
-// a production SLA. Swap in your own (self-hosted coturn or a managed
-// provider) before relying on this at any real scale.
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turns:openrelay.metered.ca:5349?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-];
-
-interface RTCIceServer {
-  urls: string;
-  username?: string;
-  credential?: string;
-}
+import { getIceServers } from '../services/config';
 
 export interface CallEngineHandlers {
   onRemoteStream: (stream: MediaStream) => void;
@@ -151,7 +128,10 @@ class WebRTCCallEngine {
     this.remoteDescriptionSet = false;
 
     // react-native-webrtc's RTCPeerConnection mirrors the browser API.
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS as any });
+    // ICE servers come from config so a working TURN relay can be supplied
+    // via EXPO_PUBLIC_TURN_* without touching this file (see config.ts —
+    // without TURN, NAT'd pairs like emulator<->phone cannot connect at all).
+    const pc = new RTCPeerConnection({ iceServers: getIceServers() as any });
 
     pc.addEventListener('icecandidate', (event: any) => {
       if (event.candidate) {
@@ -184,6 +164,9 @@ class WebRTCCallEngine {
         stream.getTracks().forEach((t: any) => {
           t.enabled = true;
         });
+        console.log(
+          `[WebRTC] Remote ${event.track?.kind || 'stream'} received (muted=${event.track?.muted}, state=${event.track?.readyState})`
+        );
         handlers.onRemoteStream(stream);
       }
     });
@@ -200,6 +183,20 @@ class WebRTCCallEngine {
 
     pc.addEventListener('connectionstatechange', () => {
       handlers.onConnectionStateChange?.((pc as any).connectionState);
+    });
+
+    // Some react-native-webrtc builds surface ICE state transitions more
+    // reliably than the aggregated connection state — forward both so the
+    // watchdog/restart logic in the hook sees every transition.
+    pc.addEventListener('iceconnectionstatechange', () => {
+      const iceState = (pc as any).iceConnectionState;
+      if (iceState === 'connected' || iceState === 'completed') {
+        handlers.onConnectionStateChange?.('connected');
+      } else if (iceState === 'disconnected') {
+        handlers.onConnectionStateChange?.('disconnected');
+      } else if (iceState === 'failed') {
+        handlers.onConnectionStateChange?.('failed');
+      }
     });
 
     if (this.localStream) {
@@ -324,6 +321,82 @@ class WebRTCCallEngine {
         console.warn('[WebRTC] Failed to add queued ICE candidate:', err);
       }
     }
+  }
+
+  /** Current aggregated connection state ('new'|'connecting'|'connected'|'disconnected'|'failed'|'closed'|'none'). */
+  getConnectionState(): string {
+    try {
+      return (this.pc as any)?.connectionState || 'none';
+    } catch {
+      return 'none';
+    }
+  }
+
+  /** One-line media health snapshot for logcat when debugging silent calls. */
+  logMediaDiagnostics(tag = '[WebRTC]'): void {
+    try {
+      const describe = (tracks: any[], label: string) =>
+        tracks.map((t: any) => `${label}:{kind=${t.kind},enabled=${t.enabled},muted=${t.muted},state=${t.readyState}}`).join(' ');
+      const local = this.localStream ? describe((this.localStream as any).getTracks(), 'local') : 'local:<none>';
+      console.log(`${tag} pc=${this.getConnectionState()} ${local}`);
+    } catch (err) {
+      console.warn(`${tag} diagnostics failed:`, err);
+    }
+  }
+
+  /**
+   * ICE restart for a live call whose path died mid-call (NAT rebinding,
+   * Wi-Fi→mobile handover). Re-negotiates with fresh candidates under the
+   * SAME callId — the peer handles 'restart-offer' as a renegotiation, not a
+   * new call, so nobody re-rings.
+   */
+  async restartIce(): Promise<void> {
+    if (!this.pc || !this.callId || !this.peerId || !this.myUserId) {
+      throw new Error('No active peer connection to restart');
+    }
+    const offer = await this.pc.createOffer({
+      iceRestart: true,
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: this.isVideo,
+    });
+    await this.pc.setLocalDescription(offer);
+    socketService.sendCallSignal({
+      callId: this.callId,
+      senderId: this.myUserId,
+      targetId: this.peerId,
+      type: this.isVideo ? 'video' : 'audio',
+      signalType: 'restart-offer',
+      sdp: offer,
+    });
+  }
+
+  /** Peer side of an ICE restart: apply, answer, keep the call up. */
+  async handleRestartOffer(sdp: any): Promise<void> {
+    if (!this.pc || !this.callId || !this.peerId || !this.myUserId) return;
+    await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    this.remoteDescriptionSet = true;
+    await this.flushPendingIceCandidates();
+    const answer = await this.pc.createAnswer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: this.isVideo,
+    });
+    await this.pc.setLocalDescription(answer);
+    socketService.sendCallSignal({
+      callId: this.callId,
+      senderId: this.myUserId,
+      targetId: this.peerId,
+      type: this.isVideo ? 'video' : 'audio',
+      signalType: 'restart-answer',
+      sdp: answer,
+    });
+  }
+
+  /** Restarting side: apply the peer's restart answer. */
+  async handleRestartAnswer(sdp: any): Promise<void> {
+    if (!this.pc) return;
+    await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    this.remoteDescriptionSet = true;
+    await this.flushPendingIceCandidates();
   }
 
   /**

@@ -60,9 +60,13 @@ export function VoiceRecorder({
   const cancelledRef = useRef(false);
   const handleSendRef = useRef<() => void>(() => {});
 
+  // Recording lifecycle — ONLY runs when this instance is the active
+  // recorder. The idle mic-button instance (isRecording=false) must never
+  // request mic permission or start a background recording on mount.
   useEffect(() => {
+    if (!isRecording) return;
     cancelledRef.current = false;
-    let interval: NodeJS.Timeout;
+    let interval: NodeJS.Timeout | undefined;
 
     // Trigger entrance haptics & animation
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
@@ -131,7 +135,7 @@ export function VoiceRecorder({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isRecording]);
 
   const handleCancel = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
@@ -148,7 +152,6 @@ export function VoiceRecorder({
     const recording = recordingRef.current;
     if (!recording || isUploading) return;
     recordingRef.current = null;
-    onStopRecord();
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     const duration = Math.max(1, seconds);
@@ -160,8 +163,9 @@ export function VoiceRecorder({
       if (!uri) throw new Error('Recording produced no file');
 
       const info = await FileSystem.getInfoAsync(uri);
-      if (info.exists && info.size > MAX_ATTACHMENT_BYTES) {
+      if (info.exists && (info.size ?? 0) > MAX_ATTACHMENT_BYTES) {
         Alert.alert('Voice note too long', 'This recording is too large to send. Try a shorter message.');
+        onStopRecord();
         return;
       }
 
@@ -174,7 +178,7 @@ export function VoiceRecorder({
       const result = await api.uploadMedia({
         name: `Voice Note (${duration}s)`,
         type: 'audio',
-        size: info.exists ? info.size : base64Data.length,
+        size: info.exists ? (info.size ?? base64Data.length) : base64Data.length,
         mimeType: 'audio/m4a',
         duration,
         waveform: [10, 25, 45, 20, 60, 35, 15, 50, 40, 20, 70, 30, 10],
@@ -187,12 +191,15 @@ export function VoiceRecorder({
       }
 
       onSendVoiceNote(result.attachment);
+      onStopRecord();
     } catch (err) {
       console.warn('[VoiceRecorder] Send failed:', err);
       Alert.alert('Could not send voice note', 'Please check your connection and try again.');
+      // Keep the recorder mounted on failure so the user can retry;
+      // only exit recording mode on explicit cancel or success.
     } finally {
       if (uri) FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
-      setIsUploading(false);
+      if (!cancelledRef.current) setIsUploading(false);
     }
   };
   handleSendRef.current = handleSend;
@@ -206,6 +213,9 @@ export function VoiceRecorder({
           onStartRecord();
         }}
         activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel="Record voice message"
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
       >
         <Mic size={20} color="#ffffff" />
       </TouchableOpacity>

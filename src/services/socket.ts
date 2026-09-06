@@ -171,7 +171,7 @@ class SocketService {
     senderId: string;
     targetId: string;
     type: 'audio' | 'video';
-    signalType: 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'reject';
+    signalType: 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'reject' | 'restart-offer' | 'restart-answer';
     senderProfile?: UserProfile;
     sdp?: unknown;
     candidate?: unknown;
@@ -222,7 +222,9 @@ class SocketService {
     return this.addEventListener('call_signal', callback);
   }
 
-  onPresenceSnapshot(callback: (userIds: string[]) => void) {
+  onPresenceSnapshot(
+    callback: (data: string[] | { online: string[]; lastSeen?: Record<string, number> }) => void
+  ) {
     return this.addEventListener('presence_snapshot', callback);
   }
 

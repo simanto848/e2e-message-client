@@ -6,6 +6,7 @@ import { callAudio } from '../utils/callAudio';
 import { webrtcCallEngine } from '../utils/webrtcCall';
 import { requestSinglePermission } from '../utils/permissions';
 import { notificationService } from '../services/notificationService';
+import { socketService } from '../services/socket';
 import type { MediaStream } from '../utils/webrtcAdapter';
 
 interface UseWebRTCCallOptions {
@@ -48,6 +49,31 @@ export function useWebRTCCall({
   const pendingIncomingCallRef = useRef<any>(null);
   const callTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Call-health supervision: without this a call whose ICE never connects
+  // sits there with a running timer and dead silence (the exact reported
+  // bug), and a mid-call path death just freezes instead of recovering.
+  const mediaWatchdogRef = useRef<NodeJS.Timeout | null>(null);
+  const restartTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const restartAttemptsRef = useRef(0);
+  const MEDIA_WATCHDOG_MS = 25000;
+  const MAX_ICE_RESTARTS = 2;
+
+  const clearCallHealthTimers = () => {
+    if (mediaWatchdogRef.current) {
+      clearTimeout(mediaWatchdogRef.current);
+      mediaWatchdogRef.current = null;
+    }
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
+  };
+
+  // Latest-hangup ref so watchdog/restart timers (which outlive renders)
+  // always invoke current logic instead of a stale closure.
+  const hangupRef = useRef(() => {});
+  const failCallRef = useRef((title: string, message: string) => {});
+
   const startCallTimer = () => {
     if (callTimerRef.current) clearInterval(callTimerRef.current);
     callTimerRef.current = setInterval(() => {
@@ -65,17 +91,86 @@ export function useWebRTCCall({
   useEffect(() => {
     return () => {
       stopCallTimer();
+      clearCallHealthTimers();
       if (callStateRef.current.active) {
         webrtcCallEngine.endCall(callStateRef.current.type);
       }
     };
   }, []);
 
+  // No-media watchdog: once the UI says "connected" (offer answered), the
+  // ICE path must actually establish. If it doesn't within the window, tell
+  // the user plainly instead of leaving a silent call with a running timer.
+  useEffect(() => {
+    if (!callState.active || callState.status !== 'connected') return;
+    if (mediaWatchdogRef.current) clearTimeout(mediaWatchdogRef.current);
+    mediaWatchdogRef.current = setTimeout(() => {
+      mediaWatchdogRef.current = null;
+      if (!callStateRef.current.active) return;
+      const pcState = webrtcCallEngine.getConnectionState();
+      webrtcCallEngine.logMediaDiagnostics('[Call] Media watchdog');
+      if (pcState !== 'connected') {
+        failCallRef.current(
+          'No Audio Path',
+          'The call connected but no voice path could be established (usually NAT/firewall blocking peer-to-peer — a working TURN relay is required). Check your connection and TURN settings, then try again.'
+        );
+      }
+    }, MEDIA_WATCHDOG_MS);
+    return () => {
+      if (mediaWatchdogRef.current) {
+        clearTimeout(mediaWatchdogRef.current);
+        mediaWatchdogRef.current = null;
+      }
+    };
+  }, [callState.active, callState.status]);
+
   const handleCallConnectionStateChange = (state: string) => {
     if (__DEV__) {
       console.log('[Call] connection state:', state);
     }
+    if (state === 'connected') {
+      // Media path is live: stand down all recovery, clear the watchdog.
+      restartAttemptsRef.current = 0;
+      if (restartTimerRef.current) {
+        clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = null;
+      }
+      if (mediaWatchdogRef.current) {
+        clearTimeout(mediaWatchdogRef.current);
+        mediaWatchdogRef.current = null;
+      }
+      webrtcCallEngine.logMediaDiagnostics('[Call] Connected');
+      setCallState(prev => ({ ...prev, isReconnecting: false }));
+      return;
+    }
+    if (state === 'disconnected') {
+      // Transient path loss (handover/NAT rebinding): try an ICE restart
+      // before giving up, instead of freezing in silence.
+      setCallState(prev => ({ ...prev, isReconnecting: true }));
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = setTimeout(async () => {
+        restartTimerRef.current = null;
+        if (!callStateRef.current.active) return;
+        if (webrtcCallEngine.getConnectionState() === 'connected') {
+          setCallState(prev => ({ ...prev, isReconnecting: false }));
+          return;
+        }
+        if (restartAttemptsRef.current >= MAX_ICE_RESTARTS || !socketService.isConnected()) {
+          // Out of retries (or no signaling to renegotiate over) — the media
+          // watchdog will end the call with an explanation if needed.
+          return;
+        }
+        restartAttemptsRef.current += 1;
+        try {
+          await webrtcCallEngine.restartIce();
+        } catch (err) {
+          console.warn('[Call] ICE restart failed:', err);
+        }
+      }, 2500);
+      return;
+    }
     if (state === 'failed') {
+      clearCallHealthTimers();
       setCallState(prev => ({ ...prev, isReconnecting: false }));
       Alert.alert('Call Disconnected', 'The connection was lost and could not be recovered.');
       handleHangupCall();
@@ -97,6 +192,14 @@ export function useWebRTCCall({
       return;
     }
 
+    // Never start a call the peer can never hear about: the offer is only
+    // sent over a live socket (offline offers are dropped, not queued), so
+    // without this the UI would ring forever in silence.
+    if (!socketService.isConnected()) {
+      Alert.alert('Not Connected', 'No live connection to deliver the call. Check your network and try again.');
+      return;
+    }
+
     const micGranted = await requestSinglePermission('microphone');
     if (!micGranted) {
       Alert.alert('Microphone Access Needed', 'JABY needs microphone access to place voice and video calls.');
@@ -115,6 +218,8 @@ export function useWebRTCCall({
     const randomNonce = Math.random().toString(36).slice(2, 9);
     const callId = `call_${callTimestamp}_${currentUser.id}_${randomNonce}`;
     activeCallIdRef.current = callId;
+    restartAttemptsRef.current = 0;
+    clearCallHealthTimers();
 
     callAudio.playRingtone();
 
@@ -186,6 +291,8 @@ export function useWebRTCCall({
     }
 
     activeCallIdRef.current = pending.callId;
+    restartAttemptsRef.current = 0;
+    clearCallHealthTimers();
     await callAudio.stopAudio();
     notificationService.cancelCallNotification().catch(() => {});
 
@@ -217,6 +324,8 @@ export function useWebRTCCall({
   const handleHangupCall = () => {
     notificationService.cancelCallNotification().catch(() => {});
     stopCallTimer();
+    clearCallHealthTimers();
+    restartAttemptsRef.current = 0;
 
     const currentCall = callStateRef.current;
     const pending = pendingIncomingCallRef.current;
@@ -261,6 +370,8 @@ export function useWebRTCCall({
   };
 
   const resetCallState = () => {
+    clearCallHealthTimers();
+    restartAttemptsRef.current = 0;
     setCallState({
       active: false,
       type: 'audio',
@@ -274,6 +385,13 @@ export function useWebRTCCall({
       sasVerificationWords: [],
       isReconnecting: false,
     });
+  };
+
+  // Keep timer callbacks pointed at the latest logic (defined above).
+  hangupRef.current = handleHangupCall;
+  failCallRef.current = (title: string, message: string) => {
+    Alert.alert(title, message);
+    handleHangupCall();
   };
 
   return {
