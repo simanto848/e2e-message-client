@@ -6,6 +6,7 @@ import { UserProfile } from '../types';
 import { colors, shadows } from '../theme';
 import { uploadAvatar } from '../utils/avatarUpload';
 import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
+import { logger } from '../utils/logger';
 import { Avatar } from './Avatar';
 
 interface Props {
@@ -51,7 +52,7 @@ export function EditProfileModal({ visible, currentUser, onSave, onClose }: Prop
         aspect: [1, 1],
       });
     } catch (err) {
-      console.warn('[EditProfile] Failed to pick photo:', err);
+      logger.warn('EditProfile', 'Failed to pick photo:', err);
       return;
     } finally {
       endExternalActivity();
@@ -65,7 +66,7 @@ export function EditProfileModal({ visible, currentUser, onSave, onClose }: Prop
       const url = await uploadAvatar(asset.uri, asset.mimeType || 'image/jpeg');
       setUploadedAvatarUrl(url);
     } catch (err) {
-      console.warn('[EditProfile] Avatar upload failed:', err);
+      logger.warn('EditProfile', 'Avatar upload failed:', err);
       const message = err instanceof Error ? err.message : 'Could not upload your photo. Please check your connection and try again.';
       Alert.alert('Upload failed', message);
       setLocalPreviewUri(null);

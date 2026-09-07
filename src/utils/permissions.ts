@@ -2,6 +2,7 @@ import { Platform, PermissionsAndroid, Alert, Linking } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Audio } from 'expo-av';
 import { beginExternalActivity, endExternalActivity } from './appLockGuard';
+import { logger } from './logger';
 
 export interface AppPermissionsStatus {
   camera: boolean;
@@ -19,7 +20,7 @@ export async function openAppSettings() {
   try {
     await Linking.openSettings();
   } catch (err) {
-    console.warn('Cannot open settings:', err);
+    logger.warn('Permissions', 'Cannot open settings:', err);
   } finally {
     endExternalActivity();
   }
@@ -86,7 +87,7 @@ export async function requestSinglePermission(
     }
     return true;
   } catch (err) {
-    console.warn(`Failed to request ${type} permission:`, err);
+    logger.warn('Permissions', `Failed to request ${type} permission:`, err);
     return false;
   } finally {
     endExternalActivity();
@@ -158,7 +159,7 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
         allGranted: cameraGranted && micGranted && photosGranted && notifGranted,
       };
     } catch (err) {
-      console.warn('Failed to request Android permissions:', err);
+      logger.warn('Permissions', 'Failed to request Android permissions:', err);
       return checkAppPermissions();
     } finally {
       endExternalActivity();
@@ -184,7 +185,7 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
         allGranted: camera && microphone && photos,
       };
     } catch (err) {
-      console.warn('Failed to request iOS permissions:', err);
+      logger.warn('Permissions', 'Failed to request iOS permissions:', err);
       return checkAppPermissions();
     } finally {
       endExternalActivity();

@@ -26,6 +26,7 @@ import {
   ExternalLink,
 } from './Icons';
 import { InAppNotification, notificationService } from '../services/notificationService';
+import { logger } from '../utils/logger';
 import { colors, shadows } from '../theme';
 
 export interface InAppNotificationBannerProps {
@@ -173,7 +174,7 @@ export function InAppNotificationBanner({
       });
       handleDismissTab(currentNotif.chatId);
     } catch (err) {
-      console.warn('[NotificationBanner] Attachment error:', err);
+      logger.warn('NotificationBanner', 'Attachment error:', err);
       Alert.alert('Attachment failed', 'Could not send attachment.');
     } finally {
       setIsSendingAttachment(false);

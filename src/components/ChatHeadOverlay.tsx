@@ -24,6 +24,7 @@ import { ChatThread, Message, UserProfile } from '../types';
 import { colors, shadows } from '../theme';
 import { formatLastSeen } from '../utils/dateUtils';
 import { startVoiceRecording, stopVoiceRecording, discardVoiceRecording } from '../utils/audioRecorder';
+import { logger } from '../utils/logger';
 import type { Audio } from 'expo-av';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -182,7 +183,7 @@ export function ChatHeadOverlay({
         });
       }, 1000);
     } catch (err) {
-      console.warn('[ChatHeadOverlay] Mic start failed:', err);
+      logger.warn('ChatHead', 'Mic start failed:', err);
       Alert.alert('Microphone unavailable', 'Could not start recording. Check microphone permissions in Settings.');
     }
   };
@@ -227,7 +228,7 @@ export function ChatHeadOverlay({
       setVoiceSeconds(0);
       setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 200);
     } catch (err) {
-      console.warn('[ChatHeadOverlay] Voice send failed:', err);
+      logger.warn('ChatHead', 'Voice send failed:', err);
       Alert.alert('Could not send voice note', 'Please check your connection and try again.');
       setIsRecordingVoice(false);
     } finally {
@@ -487,7 +488,7 @@ export function ChatHeadOverlay({
         scrollViewRef.current?.scrollToEnd({ animated: true });
       }, 200);
     } catch (err) {
-      console.warn('[ChatHeadOverlay] Attachment error:', err);
+      logger.warn('ChatHead', 'Attachment error:', err);
       Alert.alert('Attachment failed', 'Could not send file from chat head. Please try again.');
     } finally {
       setIsSendingAttachment(false);

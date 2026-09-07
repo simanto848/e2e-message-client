@@ -19,6 +19,7 @@ import { colors, shadows } from '../theme';
 import { api } from '../services/api';
 import { saveSessionToken, savePrimaryPin, saveBackupPassphrase } from '../utils/keyStore';
 import { evaluatePasswordStrength } from '../utils/passwordStrength';
+import { logger } from '../utils/logger';
 
 interface Props {
   visible: boolean;
@@ -104,7 +105,7 @@ export function ChangePasswordModal({ visible, onClose, onPasswordUpdated }: Pro
         setErrorMessage(res.error || 'Failed to update password. Please check your credentials.');
       }
     } catch (err) {
-      console.warn('[ChangePasswordModal] Error:', err);
+      logger.warn('ChangePassword', 'Error:', err);
       setErrorMessage('Network error occurred. Please check your connection.');
     } finally {
       setLoading(false);

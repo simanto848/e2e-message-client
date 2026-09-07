@@ -7,6 +7,7 @@ import { computeFingerprint, generateIdentityKeyPair, IdentityKeyPair } from '..
 import { encryptBackup, BackupPayload } from '../utils/backupCrypto';
 import { api } from '../services/api';
 import { evaluatePasswordStrength } from '../utils/passwordStrength';
+import { logger } from '../utils/logger';
 import { colors, shadows } from '../theme';
 
 interface Props {
@@ -175,7 +176,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
             res.token
           );
         } catch (backupErr) {
-          console.warn('[Register] Cloud backup auto-escrow failed:', backupErr);
+          logger.warn('Register', 'Cloud backup auto-escrow failed:', backupErr);
         }
 
         setLoadingStep('Account created! Entering enclave...');

@@ -12,6 +12,8 @@
  * lock effect can tell "we caused this background transition" apart from
  * "the user actually left the app".
  */
+import { logger } from './logger';
+
 const MAX_EXTERNAL_ACTIVITY_DURATION_MS = 60000; // 60s self-healing timeout
 
 let activeExternalActivities = 0;
@@ -34,7 +36,7 @@ export function isExternalActivityActive(): boolean {
   // Guard against runaway or leaked external activity flags
   if (lastActivityTimestamp > 0 && Date.now() - lastActivityTimestamp > MAX_EXTERNAL_ACTIVITY_DURATION_MS) {
     if (__DEV__) {
-      console.warn('[AppLockGuard] External activity guard timed out after 60s — auto-clearing');
+      logger.warn('AppLockGuard', 'External activity guard timed out after 60s — auto-clearing');
     }
     activeExternalActivities = 0;
     lastActivityTimestamp = 0;

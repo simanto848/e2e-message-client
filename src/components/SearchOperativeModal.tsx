@@ -16,6 +16,7 @@ import {
 import { Search, UserPlus, X, Clock, CheckCircle2 } from './Icons';
 import { SearchOperativeResult } from '../types';
 import { api } from '../services/api';
+import { logger } from '../utils/logger';
 import { colors, shadows } from '../theme';
 import { Avatar } from './Avatar';
 
@@ -56,7 +57,7 @@ export function SearchOperativeModal({
         }
       } catch (err) {
         if (!cancelled) {
-          console.error('Search error:', err);
+          logger.error('Search', 'Search error:', err);
         }
       } finally {
         if (!cancelled) {

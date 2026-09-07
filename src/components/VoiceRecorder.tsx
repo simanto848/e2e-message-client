@@ -11,6 +11,7 @@ import {
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
+import { logger } from '../utils/logger';
 import { Mic, Trash2, Send, Lock } from './Icons';
 import { Attachment } from '../types';
 import { colors, shadows } from '../theme';
@@ -94,7 +95,7 @@ export function VoiceRecorder({
         }, 1000);
       })
       .catch(err => {
-        console.warn('[VoiceRecorder] Failed to start recording:', err);
+        logger.warn('VoiceRecorder', 'Failed to start recording:', err);
         Alert.alert('Microphone unavailable', 'Could not start recording. Check microphone permissions in Settings.');
         onCancelRecord();
       });
@@ -193,7 +194,7 @@ export function VoiceRecorder({
       onSendVoiceNote(result.attachment);
       onStopRecord();
     } catch (err) {
-      console.warn('[VoiceRecorder] Send failed:', err);
+      logger.warn('VoiceRecorder', 'Send failed:', err);
       Alert.alert('Could not send voice note', 'Please check your connection and try again.');
       // Keep the recorder mounted on failure so the user can retry;
       // only exit recording mode on explicit cancel or success.

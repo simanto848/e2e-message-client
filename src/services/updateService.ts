@@ -1,6 +1,7 @@
 import { Linking, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { API_BASE_URL } from './config';
+import { logger } from '../utils/logger';
 
 export interface ReleaseInfo {
   version: string;
@@ -123,7 +124,7 @@ export async function checkForAppUpdates(): Promise<CheckUpdateResult> {
       }
     }
   } catch (ghErr) {
-    console.log('GitHub update check notice:', ghErr);
+    logger.info('Updates', 'GitHub update check notice:', ghErr);
   }
 
   return {

@@ -24,6 +24,7 @@
 import * as Crypto from 'expo-crypto';
 import nacl from 'tweetnacl';
 import { EncryptedPayload } from '../types';
+import { logger } from './logger';
 
 // tweetnacl requires a cryptographically secure random source and refuses to
 // run without one configured. React Native doesn't provide Web Crypto's
@@ -290,7 +291,7 @@ export function decryptMessage(
 
     return new TextDecoder().decode(openedLegacy);
   } catch (err) {
-    console.warn('Decryption error:', err);
+    logger.warn('Crypto', 'Decryption error:', err);
     return null;
   }
 }

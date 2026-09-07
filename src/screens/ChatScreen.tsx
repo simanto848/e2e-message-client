@@ -51,6 +51,7 @@ import { formatDisappearingTimer } from '../utils/timerUtils';
 import { formatLastSeen } from '../utils/dateUtils';
 import { perfMark, perfSince, perfLog } from '../utils/perf';
 import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
+import { logger } from '../utils/logger';
 
 // Matches the server's MAX_ATTACHMENT_BYTES (server/src/routes/media.routes.ts).
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -604,7 +605,7 @@ export function ChatScreen({
         allowsEditing: false,
       });
     } catch (err) {
-      console.warn('[ChatScreen] Error selecting image:', err);
+      logger.warn('ChatScreen', 'Error selecting image:', err);
       return;
     } finally {
       endExternalActivity();
@@ -670,7 +671,7 @@ export function ChatScreen({
 
       onSendMessage('📷 Encrypted Image', uploadResult.attachment);
     } catch (err) {
-      console.warn('[ChatScreen] Image send failed:', err);
+      logger.warn('ChatScreen', 'Image send failed:', err);
       Alert.alert('Could not send image', 'Please check your connection and try again.');
     } finally {
       if (mountedRef.current) setIsSendingImage(false);
@@ -724,7 +725,7 @@ export function ChatScreen({
             const mimeType = attachment.mimeType || 'image/jpeg';
             return { id: attachment.id, value: { status: 'ready', dataUri: `data:${mimeType};base64,${plaintext}` } as ImageResolution };
           } catch (err) {
-            if (!isCancelled) console.warn('[ChatScreen] Image decrypt failed:', err);
+            if (!isCancelled) logger.warn('ChatScreen', 'Image decrypt failed:', err);
             return { id: attachment.id, value: { status: 'error' } as ImageResolution };
           } finally {
             imageLoadingRef.current.delete(attachment.id);
@@ -857,7 +858,7 @@ export function ChatScreen({
 
       soundRef.current = sound;
     } catch (err) {
-      console.warn('[ChatScreen] Failed to play voice note:', err);
+      logger.warn('ChatScreen', 'Failed to play voice note:', err);
       if (mountedRef.current) Alert.alert('Playback Failed', 'Could not decrypt or play this voice message.');
       if (mountedRef.current) setPlayingAudioMsgId(null);
       if (soundRef.current) {

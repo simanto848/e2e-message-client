@@ -13,6 +13,7 @@ import { Message, ContactRequestWithUser, UserProfile } from '../types';
 
 import { SOCKET_SERVER_URL } from './config';
 import { getSessionToken } from '../utils/keyStore';
+import { logger } from '../utils/logger';
 
 export { SOCKET_SERVER_URL };
 
@@ -56,7 +57,7 @@ class SocketService {
     const token = await getSessionToken();
     if (!token) {
       if (__DEV__) {
-        console.warn('[Mobile Socket] No session token available — not connecting');
+        logger.warn('Socket', 'No session token available — not connecting');
       }
       return;
     }
@@ -80,20 +81,20 @@ class SocketService {
 
     this.socket.on('connect', () => {
       if (__DEV__) {
-        console.log('[Mobile Socket] Connected & authenticated to JABY Gateway');
+        logger.info('Socket', 'Connected & authenticated to JABY Gateway');
       }
       this.flushOutgoingQueue();
     });
 
     this.socket.on('connect_error', err => {
       if (__DEV__) {
-        console.warn('[Mobile Socket] Connection/auth error:', err.message);
+        logger.warn('Socket', 'Connection/auth error:', err.message);
       }
     });
 
     this.socket.on('disconnect', reason => {
       if (__DEV__) {
-        console.log('[Mobile Socket] Disconnected from JABY Gateway:', reason);
+        logger.info('Socket', 'Disconnected from JABY Gateway:', reason);
       }
     });
   }
@@ -188,7 +189,7 @@ class SocketService {
       this.emitOrQueue('call_signal', payload);
     } else {
       if (__DEV__) {
-        console.warn('[Mobile Socket] Call signal dropped while disconnected:', signal.signalType);
+        logger.warn('Socket', 'Call signal dropped while disconnected:', signal.signalType);
       }
     }
   }
