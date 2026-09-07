@@ -36,6 +36,7 @@ import {
 import { socketService } from '../services/socket';
 import { callAudio } from './callAudio';
 import { getIceServers } from '../services/config';
+import { logger } from './logger';
 
 export interface CallEngineHandlers {
   onRemoteStream: (stream: MediaStream) => void;
@@ -58,6 +59,14 @@ class WebRTCCallEngine {
   private pendingIceCandidates: any[] = [];
   private remoteDescriptionSet = false;
   private isVideo = false;
+  /**
+   * Every route change bumps routingGen; delayed re-applies only run when
+   * their generation is still current, so a user's manual speaker toggle is
+   * never overridden by a stale retry scheduled at call start.
+   */
+  private routingGen = 0;
+  /** Last explicitly requested mute state — re-applied after route changes. */
+  private callMuted = false;
 
   /** Check if native WebRTC module is linked and ready */
   isSupported(): boolean {
@@ -89,7 +98,7 @@ class WebRTCCallEngine {
         video: video ? { facingMode: 'user' } : false,
       });
     } catch (err) {
-      console.warn('[WebRTC] getUserMedia explicit constraints failed, falling back to plain audio:', err);
+      logger.warn('WebRTC', 'getUserMedia explicit constraints failed, falling back to plain audio:', err);
       stream = await mediaDevices.getUserMedia({
         audio: true,
         video: video ? { facingMode: 'user' } : false,
@@ -120,7 +129,7 @@ class WebRTCCallEngine {
       try {
         this.pc.close();
       } catch (err) {
-        console.warn('[WebRTC] Failed to close stale peer connection:', err);
+        logger.warn('WebRTC', 'Failed to close stale peer connection:', err);
       }
       this.pc = null;
     }
@@ -156,7 +165,7 @@ class WebRTCCallEngine {
         try {
           stream = new RNMediaStream([event.track]);
         } catch (err) {
-          console.warn('[WebRTC] Failed to create stream from track fallback:', err);
+          logger.warn('WebRTC', 'Failed to create stream from track fallback:', err);
         }
       }
       if (stream) {
@@ -167,9 +176,7 @@ class WebRTCCallEngine {
         stream.getTracks().forEach((t: any) => {
           t.enabled = true;
         });
-        console.log(
-          `[WebRTC] Remote ${event.track?.kind || 'stream'} received (muted=${event.track?.muted}, state=${event.track?.readyState})`
-        );
+        logger.info('WebRTC', `Remote ${event.track?.kind || 'stream'} received (muted=${event.track?.muted}, state=${event.track?.readyState})`);
         handlers.onRemoteStream(stream);
       }
     });
@@ -309,7 +316,7 @@ class WebRTCCallEngine {
     try {
       await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (err) {
-      console.warn('[WebRTC] Failed to add ICE candidate:', err);
+      logger.warn('WebRTC', 'Failed to add ICE candidate:', err);
     }
   }
 
@@ -321,7 +328,7 @@ class WebRTCCallEngine {
       try {
         await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (err) {
-        console.warn('[WebRTC] Failed to add queued ICE candidate:', err);
+        logger.warn('WebRTC', 'Failed to add queued ICE candidate:', err);
       }
     }
   }
@@ -336,14 +343,14 @@ class WebRTCCallEngine {
   }
 
   /** One-line media health snapshot for logcat when debugging silent calls. */
-  logMediaDiagnostics(tag = '[WebRTC]'): void {
+  logMediaDiagnostics(tag = 'WebRTC'): void {
     try {
       const describe = (tracks: any[], label: string) =>
         tracks.map((t: any) => `${label}:{kind=${t.kind},enabled=${t.enabled},muted=${t.muted},state=${t.readyState}}`).join(' ');
       const local = this.localStream ? describe((this.localStream as any).getTracks(), 'local') : 'local:<none>';
-      console.log(`${tag} pc=${this.getConnectionState()} ${local}`);
+      logger.info(tag, `pc=${this.getConnectionState()} ${local}`);
     } catch (err) {
-      console.warn(`${tag} diagnostics failed:`, err);
+      logger.warn(tag, 'diagnostics failed:', err);
     }
   }
 
@@ -404,9 +411,15 @@ class WebRTCCallEngine {
 
   /**
    * Puts the OS audio session into "in call" mode so react-native-webrtc's
-   * remote audio track actually routes somewhere audible.
+   * remote audio track actually routes somewhere audible. From here on the
+   * engine owns the session: expo-av mode switches are suspended (see
+   * callAudio.setInCallMode) until cleanup, so nothing can knock the device
+   * out of MODE_IN_COMMUNICATION mid-call.
    */
   private startAudioRouting(video: boolean, isSpeakerOn = true): void {
+    // Take session ownership BEFORE touching anything audio.
+    callAudio.setInCallMode(true);
+    this.callMuted = false;
     try {
       InCallManager?.start({ media: video ? 'video' : 'audio', auto: false });
       InCallManager?.setKeepScreenOn(true);
@@ -418,40 +431,78 @@ class WebRTCCallEngine {
       this.localStream?.getAudioTracks().forEach((track: any) => {
         track.enabled = true;
       });
-      this.setSpeakerEnabled(isSpeakerOn);
+      this.applySpeakerRoute(isSpeakerOn);
       // Native audio sessions (Android AudioManager / iOS AVAudioSession)
       // take 100-500ms to complete mode transition after start().
       // Staggered retries ensure speaker state sticks and doesn't get silenced.
-      setTimeout(() => this.setSpeakerEnabled(isSpeakerOn), 250);
-      setTimeout(() => this.setSpeakerEnabled(isSpeakerOn), 800);
-      setTimeout(() => this.setSpeakerEnabled(isSpeakerOn), 1500);
+      const gen = this.routingGen;
+      [250, 800, 1500].forEach(delay =>
+        setTimeout(() => {
+          if (gen === this.routingGen) this.applySpeakerRoute(isSpeakerOn);
+        }, delay)
+      );
     } catch (err) {
-      console.warn('[WebRTC] InCallManager.start failed:', err);
+      logger.warn('WebRTC', 'InCallManager.start failed:', err);
+    }
+  }
+
+  /**
+   * Single place that touches the output route. Re-asserts the stored mute
+   * state afterwards: on several OEMs a route change (especially to
+   * EARPIECE) resets the input, leaving a quiet/dead mic until the mode is
+   * re-driven. Never forces unmute — intentional mute is preserved.
+   */
+  private applySpeakerRoute(isSpeakerOn: boolean): void {
+    try {
+      InCallManager?.setSpeakerphoneOn(isSpeakerOn);
+      InCallManager?.setForceSpeakerphoneOn(isSpeakerOn);
+      if (typeof InCallManager?.chooseAudioRoute === 'function') {
+        InCallManager.chooseAudioRoute(isSpeakerOn ? 'SPEAKER_PHONE' : 'EARPIECE');
+      }
+      this.applyStoredMute();
+    } catch (err) {
+      logger.warn('WebRTC', 'InCallManager speaker toggle failed:', err);
+    }
+  }
+
+  /** Re-drive the last explicitly requested mute state + track flags. */
+  private applyStoredMute(): void {
+    try {
+      InCallManager?.setMicrophoneMute(this.callMuted);
+    } catch {}
+    this.localStream?.getAudioTracks().forEach((track: any) => {
+      track.enabled = !this.callMuted;
+    });
+  }
+
+  /** One-line mic health for logcat when debugging quiet-mic reports. */
+  getLocalAudioHealth(): string {
+    try {
+      const tracks = this.localStream?.getAudioTracks() || [];
+      const desc = tracks
+        .map((t: any) => `{enabled=${t.enabled},muted=${t.muted},state=${t.readyState}}`)
+        .join(' ');
+      return `muted=${this.callMuted} gen=${this.routingGen} tracks=[${desc || 'none'}]`;
+    } catch {
+      return 'muted=? tracks=?';
     }
   }
 
   setSpeakerEnabled(enabled: boolean): void {
-    try {
-      // setSpeakerphoneOn sets android AudioManager.MODE_IN_COMMUNICATION and speakerphone
-      InCallManager?.setSpeakerphoneOn(enabled);
-      InCallManager?.setForceSpeakerphoneOn(enabled);
-      if (typeof InCallManager?.chooseAudioRoute === 'function') {
-        InCallManager.chooseAudioRoute(enabled ? 'SPEAKER_PHONE' : 'EARPIECE');
-      }
-    } catch (err) {
-      console.warn('[WebRTC] InCallManager speaker toggle failed:', err);
-    }
+    // Newest request wins — invalidates pending start-up retries.
+    this.routingGen += 1;
+    const gen = this.routingGen;
+    this.applySpeakerRoute(enabled);
+    logger.info('WebRTC', `speaker ${enabled ? 'ON' : 'OFF'} — mic ${this.getLocalAudioHealth()}`);
+    // Some devices settle the route late; re-apply once if unchallenged.
+    setTimeout(() => {
+      if (gen === this.routingGen) this.applySpeakerRoute(enabled);
+    }, 300);
   }
 
   setMuted(muted: boolean): void {
-    this.localStream?.getAudioTracks().forEach((track: any) => {
-      track.enabled = !muted;
-    });
-    try {
-      InCallManager?.setMicrophoneMute(muted);
-    } catch (err) {
-      console.warn('[WebRTC] InCallManager.setMicrophoneMute failed:', err);
-    }
+    this.callMuted = muted;
+    this.applyStoredMute();
   }
 
   setVideoEnabled(enabled: boolean): void {
@@ -466,7 +517,7 @@ class WebRTCCallEngine {
       try {
         videoTrack._switchCamera();
       } catch (err) {
-        console.warn('[WebRTC] switchCamera failed:', err);
+        logger.warn('WebRTC', 'switchCamera failed:', err);
       }
     }
   }
@@ -520,13 +571,18 @@ class WebRTCCallEngine {
     this.callId = null;
     this.pendingIceCandidates = [];
     this.remoteDescriptionSet = false;
+    // Release session ownership so ringtones/chimes can use expo-av again,
+    // and invalidate any in-flight routing retries from this call.
+    this.routingGen += 1;
+    this.callMuted = false;
+    callAudio.setInCallMode(false);
     try {
       // Never leak a muted mic into the next call.
       InCallManager?.setMicrophoneMute(false);
       InCallManager?.setKeepScreenOn(false);
       InCallManager?.stop();
     } catch (err) {
-      console.warn('[WebRTC] InCallManager.stop failed:', err);
+      logger.warn('WebRTC', 'InCallManager.stop failed:', err);
     }
     callAudio.restoreDefaultAudioMode().catch(() => {});
   }

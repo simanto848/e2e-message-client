@@ -1,5 +1,6 @@
 import { Audio } from 'expo-av';
 import { API_BASE_URL } from '../services/api';
+import { logger } from './logger';
 
 const LOCAL_SOUNDS = {
   ringtone: require('../../assets/sounds/ringtone.wav'),
@@ -11,18 +12,32 @@ const LOCAL_SOUNDS = {
 class CallAudioManager {
   private currentSound: Audio.Sound | null = null;
   private isPlaying = false;
+  /**
+   * While a WebRTC call is active the engine (InCallManager) owns the OS
+   * audio session. expo-av must not touch AudioManager mode mid-call or it
+   * knocks the session out of MODE_IN_COMMUNICATION — the classic "quiet
+   * mic in earpiece, fine on speaker" failure. Sound stop/unload still runs;
+   * only the mode switch is skipped.
+   */
+  private inCallMode = false;
+
+  setInCallMode(inCall: boolean): void {
+    this.inCallMode = inCall;
+  }
 
   async setupAudioForRingtone() {
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
+      if (!this.inCallMode) {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
+      }
     } catch (err) {
-      console.warn('[CallAudio] Ringtone audio mode setup failed:', err);
+      logger.warn('CallAudio', 'Ringtone audio mode setup failed:', err);
     }
   }
 
@@ -41,7 +56,7 @@ class CallAudioManager {
         this.currentSound = sound;
         return;
       } catch (localErr) {
-        console.warn('[CallAudio] Local ringtone asset failed, falling back to network:', localErr);
+        logger.warn('CallAudio', 'Local ringtone asset failed, falling back to network:', localErr);
       }
 
       // Network fallback
@@ -52,7 +67,7 @@ class CallAudioManager {
       );
       this.currentSound = sound;
     } catch (err) {
-      console.warn('[CallAudio] Ringtone playback error:', err);
+      logger.warn('CallAudio', 'Ringtone playback error:', err);
     }
   }
 
@@ -77,7 +92,7 @@ class CallAudioManager {
         // Soft fallback
       }
     } catch (err) {
-      console.warn('[CallAudio] Connect tone error:', err);
+      logger.warn('CallAudio', 'Connect tone error:', err);
     }
   }
 
@@ -110,7 +125,7 @@ class CallAudioManager {
         this.currentSound = sound;
       }
     } catch (err) {
-      console.warn('[CallAudio] Hangup tone error:', err);
+      logger.warn('CallAudio', 'Hangup tone error:', err);
     }
   }
 
@@ -154,16 +169,19 @@ class CallAudioManager {
     }
 
     // CRITICAL: Unblock microphone for iOS and Android WebRTC VoIP streams!
+    // Skipped mid-call — the engine owns the session (see inCallMode).
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
-      });
+      if (!this.inCallMode) {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+          shouldDuckAndroid: false,
+          playThroughEarpieceAndroid: false,
+        });
+      }
     } catch (err) {
-      console.warn('[CallAudio] Failed to unblock VoIP audio mode:', err);
+      logger.warn('CallAudio', 'Failed to unblock VoIP audio mode:', err);
     }
   }
 
@@ -181,15 +199,17 @@ class CallAudioManager {
     }
 
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
+      if (!this.inCallMode) {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
+      }
     } catch (err) {
-      console.warn('[CallAudio] Failed to restore default audio mode:', err);
+      logger.warn('CallAudio', 'Failed to restore default audio mode:', err);
     }
   }
 }
