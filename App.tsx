@@ -94,6 +94,9 @@ import {
   setChatHeadsEnabled,
 } from './src/services/backgroundSync';
 import { chatHeadNative } from './src/services/chatHeadNative';
+import { perfMark, perfSince, perfLog } from './src/utils/perf';
+
+perfMark('app_start');
 
 type ScreenType = 'auth' | 'chat_list' | 'chat_detail' | 'settings';
 
@@ -1117,6 +1120,7 @@ export default function App() {
     // Switch screen immediately so user enters chat list with zero delay
     setCurrentUser(user);
     setCurrentScreen('chat_list');
+    perfLog('login → chat list', perfSince('app_start'));
 
     // Connect realtime socket and load dynamic contacts without blocking
     socketService.connect().catch(() => {});
@@ -1176,6 +1180,7 @@ export default function App() {
   ) => {
     const secret = override?.secret ?? mySecretKeyRef.current;
     const user = override?.user ?? currentUserRef.current;
+    const reloadStart = Date.now();
     try {
       const [contactList, reqs, userInvites, devices] = await Promise.all([
         api.getContacts(userId),
@@ -1260,6 +1265,7 @@ export default function App() {
       console.log('Dynamic data fetch notice:', err);
     } finally {
       setIsInitialChatsLoading(false);
+      perfLog('contacts reload', Date.now() - reloadStart);
     }
   };
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Animated, PanResponder } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 import { Flame, Check, CheckCheck, Play, Pause, Trash2, ImageIcon, Phone, PhoneOff, Video, Clock } from './Icons';
 import { Message } from '../types';
 import { colors, shadows } from '../theme';
@@ -108,7 +109,49 @@ export function ChatBubble({
 }: Props) {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [showReactions, setShowReactions] = useState(false);
+  const [showFullTime, setShowFullTime] = useState(false);
+  const [copiedTick, setCopiedTick] = useState(false);
+  const lastTapRef = useRef(0);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const QUICK_EMOJIS = ['👍', '❤️', '🔥', '🔒', '😂', '👀'];
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  const copyText = async () => {
+    if (!message.text) return;
+    try {
+      await Clipboard.setStringAsync(message.text);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      setCopiedTick(true);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopiedTick(false), 1400);
+    } catch {
+      // Clipboard unavailable — stay silent.
+    }
+  };
+
+  const handleBubblePress = () => {
+    // Pending (offline-queued) messages: tap retries the send.
+    if (message.status === 'sending' && onRetrySend) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      onRetrySend(message.id);
+      return;
+    }
+    const now = Date.now();
+    // Double-tap sends a quick ❤️ (single tap still toggles the timestamp).
+    if (now - lastTapRef.current < 300 && onReact) {
+      lastTapRef.current = 0;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+      onReact(message.id, '❤️');
+      return;
+    }
+    lastTapRef.current = now;
+    setShowFullTime(prev => !prev);
+  };
 
   // Swipe-to-reply (Messenger-style): horizontal drag past the threshold
   // sets this message as the reply quote. Pure PanResponder — no extra deps.
@@ -221,6 +264,19 @@ export function ChatBubble({
               <Text style={styles.reactionEmoji}>{emoji}</Text>
             </TouchableOpacity>
           ))}
+          {message.text && !message.isDeletedForEveryone && (
+            <TouchableOpacity
+              style={styles.reactionBtn}
+              onPress={() => {
+                copyText();
+                setShowReactions(false);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Copy message text"
+            >
+              <Text style={styles.reactionEmoji}>{copiedTick ? '✅' : '📋'}</Text>
+            </TouchableOpacity>
+          )}
           {onReply && (
             <TouchableOpacity
               style={styles.reactionBtn}
@@ -275,20 +331,14 @@ export function ChatBubble({
         activeOpacity={0.95}
         onLongPress={() => setShowReactions(prev => !prev)}
         delayLongPress={250}
-        onPress={() => {
-          // Pending (offline-queued) messages: tap retries the send.
-          if (message.status === 'sending' && onRetrySend) {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-            onRetrySend(message.id);
-          }
-        }}
+        onPress={handleBubblePress}
         accessibilityRole="button"
         accessibilityLabel={
           message.status === 'sending'
             ? 'Message waiting to send. Activate to retry now.'
             : isMe
-              ? 'Your message. Long press for options, swipe to reply.'
-              : 'Message. Long press for options, swipe to reply.'
+              ? 'Your message. Tap for full time, double-tap to send a heart, long press for options, swipe to reply.'
+              : 'Message. Tap for full time, double-tap to send a heart, long press for options, swipe to reply.'
         }
         style={[
           styles.bubble,
@@ -447,11 +497,18 @@ export function ChatBubble({
           renderSearchHighlightedText(message.text, searchQuery, [styles.messageText, isMe ? styles.myText : styles.theirText])
         )}
 
-        {/* Bubble Footer */}
+        {/* Bubble Footer — tap toggles the full date for precision */}
         <View style={styles.bubbleFooter}>
           <View style={styles.timeStatusRow}>
             <Text style={[styles.timeText, isMe && styles.myTimeText]}>
-              {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {showFullTime
+                ? new Date(message.timestamp).toLocaleString([], {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                : new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </Text>
 
             {isMe && (

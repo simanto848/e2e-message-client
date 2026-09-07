@@ -11,6 +11,7 @@ import {
   Alert,
   ActivityIndicator,
   BackHandler,
+  Animated,
   NativeSyntheticEvent,
   TextInputKeyPressEventData,
 } from 'react-native';
@@ -48,6 +49,7 @@ import { encryptMessage, decryptMessage, IdentityKeyPair } from '../utils/crypto
 import { api } from '../services/api';
 import { formatDisappearingTimer } from '../utils/timerUtils';
 import { formatLastSeen } from '../utils/dateUtils';
+import { perfMark, perfSince, perfLog } from '../utils/perf';
 import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
 
 // Matches the server's MAX_ATTACHMENT_BYTES (server/src/routes/media.routes.ts).
@@ -118,6 +120,28 @@ function MessageListSkeleton() {
   );
 }
 
+/** One bouncing dot of the header typing indicator (staggered by delay). */
+function TypingDot({ color, delay }: { color: string; delay: number }) {
+  const v = useRef(new Animated.Value(0.25)).current;
+  useEffect(() => {
+    let loop: Animated.CompositeAnimation | null = null;
+    const t = setTimeout(() => {
+      loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(v, { toValue: 1, duration: 350, useNativeDriver: true }),
+          Animated.timing(v, { toValue: 0.25, duration: 350, useNativeDriver: true }),
+        ])
+      );
+      loop.start();
+    }, delay);
+    return () => {
+      clearTimeout(t);
+      loop?.stop();
+    };
+  }, [v, delay]);
+  return <Animated.View style={[styles.typingDot, { backgroundColor: color, opacity: v }]} />;
+}
+
 export function ChatScreen({
   chat,
   currentUser,
@@ -153,6 +177,29 @@ export function ChatScreen({
   const [showDisappearingModal, setShowDisappearingModal] = useState(false);
   const [resolvedImages, setResolvedImages] = useState<Record<string, ImageResolution>>({});
   const [viewingImageId, setViewingImageId] = useState<string | null>(null);
+
+  // Decrypted-image cache is base64 data URIs (MBs per image) — cap it with
+  // oldest-first eviction so long image threads can't grow state without
+  // bound. The open viewer image is always spared; evicted entries simply
+  // re-decrypt on demand via the effect below.
+  const IMAGE_CACHE_CAP = 25;
+  const viewingImageIdRef = useRef<string | null>(null);
+  viewingImageIdRef.current = viewingImageId;
+  const mergeImageCache = useCallback(
+    (prev: Record<string, ImageResolution>, patch: Record<string, ImageResolution>) => {
+      const next = { ...prev, ...patch };
+      const keys = Object.keys(next);
+      if (keys.length <= IMAGE_CACHE_CAP) return next;
+      const spare = viewingImageIdRef.current;
+      const droppable = keys.filter(k => k !== spare && next[k].status !== 'loading');
+      const overflow = keys.length - IMAGE_CACHE_CAP;
+      for (let i = 0; i < overflow && i < droppable.length; i++) {
+        delete next[droppable[i]];
+      }
+      return next;
+    },
+    []
+  );
   const [playingAudioMsgId, setPlayingAudioMsgId] = useState<string | null>(null);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [localReactions, setLocalReactions] = useState<Record<string, string>>({});
@@ -315,6 +362,17 @@ export function ChatScreen({
     flatListRef.current?.scrollToEnd({ animated: true });
   }, []);
 
+  // First-paint timing: open → first messages visible (dev only).
+  const firstPaintLoggedRef = useRef(false);
+  useEffect(() => {
+    firstPaintLoggedRef.current = false;
+  }, [chat?.id]);
+  useEffect(() => {
+    if (!firstPaintLoggedRef.current && safeMessages.length > 0) {
+      firstPaintLoggedRef.current = true;
+      perfLog('chat open → messages', perfSince(`chat_open_${chat?.id}`));
+    }
+  }, [safeMessages.length, chat?.id]);
   // Count newly arrived messages while scrolled up (drives the ↓ pill).
   useEffect(() => {
     if (safeMessages.length > prevMsgCountRef.current) {
@@ -329,6 +387,7 @@ export function ChatScreen({
   // Reset per-chat transient state when switching conversations so drafts,
   // replies, reactions and audio never leak into the wrong thread.
   useEffect(() => {
+    perfMark(`chat_open_${chat?.id}`);
     setInputText('');
     setReplyingTo(null);
     setIsRecording(false);
@@ -412,6 +471,7 @@ export function ChatScreen({
 
   const handleSend = () => {
     if (!inputText.trim()) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     onSendMessage(inputText.trim(), undefined, replyingTo?.id);
     setInputText('');
     setReplyingTo(null);
@@ -498,10 +558,11 @@ export function ChatScreen({
       // We already have the plaintext locally — seed the resolved-image
       // cache immediately so the bubble we're about to send renders instantly
       // instead of round-tripping back through the server to decrypt its own upload.
-      setResolvedImages(prev => ({
-        ...prev,
-        [attachmentId]: { status: 'ready', dataUri: `data:${mimeType};base64,${base64Data}` },
-      }));
+      setResolvedImages(prev =>
+        mergeImageCache(prev, {
+          [attachmentId]: { status: 'ready', dataUri: `data:${mimeType};base64,${base64Data}` },
+        })
+      );
 
       onSendMessage('📷 Encrypted Image', uploadResult.attachment);
     } catch (err) {
@@ -533,7 +594,7 @@ export function ChatScreen({
         loadingPatch[id] = { status: 'loading' };
       }
     }
-    setResolvedImages(prev => ({ ...prev, ...loadingPatch }));
+    setResolvedImages(prev => mergeImageCache(prev, loadingPatch));
 
     const theirKeyFor = (msg: Message) =>
       msg.senderId === currentUser.id ? participant.publicKey : undefined;
@@ -572,7 +633,7 @@ export function ChatScreen({
         if (r) patch[r.id] = r.value;
       }
       if (Object.keys(patch).length > 0) {
-        setResolvedImages(prev => ({ ...prev, ...patch }));
+        setResolvedImages(prev => mergeImageCache(prev, patch));
       }
     })();
 
@@ -734,6 +795,70 @@ export function ChatScreen({
     }
   };
 
+  // Memoized row renderer: a stable reference across keystrokes so typing in
+  // the input doesn't re-render every visible bubble (the classic chat-input
+  // jank). It only refreshes when message data or bubble-relevant UI state
+  // actually changes — inputText is deliberately not a dependency.
+  const renderThreadItem = useCallback(
+    ({ item }: { item: ThreadItem }) => {
+      if (item.kind === 'date') {
+        return (
+          <View style={styles.datePillWrap}>
+            <Text style={styles.datePill}>{item.label}</Text>
+          </View>
+        );
+      }
+      const msg = item.message;
+      const imageAttachment = msg.attachment?.type === 'image' ? msg.attachment : undefined;
+      const displayMessage = localReactions[msg.id] ? { ...msg, reaction: localReactions[msg.id] } : msg;
+      const replyMsg = msg.replyToId ? replyLookup.get(msg.replyToId) : undefined;
+      return (
+        <ChatBubble
+          message={displayMessage}
+          isMe={msg.senderId === currentUser.id}
+          onInspectCiphertext={onInspectCiphertext}
+          onDeleteForEveryone={onDeleteForEveryone}
+          onPlayAudio={handlePlayAudio}
+          isPlayingAudio={playingAudioMsgId === msg.id}
+          playbackSpeed={playbackSpeed}
+          onToggleSpeed={handleToggleSpeed}
+          onReact={handleReact}
+          replyMessage={replyMsg}
+          replySenderName={
+            replyMsg ? (replyMsg.senderId === currentUser.id ? 'You' : participant?.name || 'Contact') : undefined
+          }
+          onJumpToReply={jumpToOriginalMessage}
+          onRetrySend={onRetrySend}
+          onPressImage={setViewingImageId}
+          onReply={setReplyingTo}
+          imageResolution={imageAttachment ? resolvedImages[imageAttachment.id] : undefined}
+          highlight={msg.id === currentMatchId || msg.id === jumpHighlightId}
+          searchQuery={searchVisible ? searchQuery : undefined}
+        />
+      );
+    },
+    [
+      localReactions,
+      currentUser.id,
+      onInspectCiphertext,
+      onDeleteForEveryone,
+      handlePlayAudio,
+      playingAudioMsgId,
+      playbackSpeed,
+      handleToggleSpeed,
+      handleReact,
+      replyLookup,
+      participant?.name,
+      jumpToOriginalMessage,
+      onRetrySend,
+      resolvedImages,
+      currentMatchId,
+      jumpHighlightId,
+      searchVisible,
+      searchQuery,
+    ]
+  );
+
   // Missing participant guard — never crash the whole screen on stale chat data.
   if (!chat || !participant) {
     return (
@@ -816,9 +941,22 @@ export function ChatScreen({
             </View>
             <View style={styles.statusRow}>
               <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-              <Text style={[styles.peerStatus, { color: statusColor }]} numberOfLines={1} ellipsizeMode="tail">
-                {statusText}
-              </Text>
+              {chat.isTyping ? (
+                <View
+                  style={styles.typingRow}
+                  accessibilityRole="text"
+                  accessibilityLabel={`${participant.name} is typing`}
+                >
+                  <Text style={[styles.peerStatus, { color: statusColor }]}>typing</Text>
+                  <TypingDot color={statusColor} delay={0} />
+                  <TypingDot color={statusColor} delay={150} />
+                  <TypingDot color={statusColor} delay={300} />
+                </View>
+              ) : (
+                <Text style={[styles.peerStatus, { color: statusColor }]} numberOfLines={1} ellipsizeMode="tail">
+                  {statusText}
+                </Text>
+              )}
             </View>
           </View>
         </TouchableOpacity>
@@ -1069,49 +1207,7 @@ export function ChatScreen({
               </View>
             )
           }
-          renderItem={({ item }) => {
-            if (item.kind === 'date') {
-              return (
-                <View style={styles.datePillWrap}>
-                  <Text style={styles.datePill}>{item.label}</Text>
-                </View>
-              );
-            }
-            const msg = item.message;
-            const imageAttachment = msg.attachment?.type === 'image' ? msg.attachment : undefined;
-            const displayMessage = localReactions[msg.id]
-              ? { ...msg, reaction: localReactions[msg.id] }
-              : msg;
-            const replyMsg = msg.replyToId ? replyLookup.get(msg.replyToId) : undefined;
-            return (
-              <ChatBubble
-                message={displayMessage}
-                isMe={msg.senderId === currentUser.id}
-                onInspectCiphertext={onInspectCiphertext}
-                onDeleteForEveryone={onDeleteForEveryone}
-                onPlayAudio={handlePlayAudio}
-                isPlayingAudio={playingAudioMsgId === msg.id}
-                playbackSpeed={playbackSpeed}
-                onToggleSpeed={handleToggleSpeed}
-                onReact={handleReact}
-                replyMessage={replyMsg}
-                replySenderName={
-                  replyMsg
-                    ? replyMsg.senderId === currentUser.id
-                      ? 'You'
-                      : participant?.name || 'Contact'
-                    : undefined
-                }
-                onJumpToReply={jumpToOriginalMessage}
-                onRetrySend={onRetrySend}
-                onPressImage={setViewingImageId}
-                onReply={setReplyingTo}
-                imageResolution={imageAttachment ? resolvedImages[imageAttachment.id] : undefined}
-                highlight={msg.id === currentMatchId || msg.id === jumpHighlightId}
-                searchQuery={searchVisible ? searchQuery : undefined}
-              />
-            );
-          }}
+          renderItem={renderThreadItem}
         />
 
         {/* Jump-to-latest pill (appears when scrolled up) */}
@@ -1413,6 +1509,18 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     flexShrink: 0,
+  },
+  typingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+  },
+  typingDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    marginLeft: 2,
   },
   peerStatus: {
     fontSize: 12,
