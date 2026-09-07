@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Message } from '../types';
+import { openForUser, sealForUser } from './cacheCrypto';
+import { logger } from './logger';
 
 /**
  * Durable offline outbox (per user id, so nothing leaks across accounts).
@@ -29,8 +31,10 @@ function isValidEntry(e: any): e is OutboxEntry {
 export async function loadOutbox(userId: string): Promise<OutboxEntry[]> {
   try {
     const raw = await AsyncStorage.getItem(keyFor(userId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    // Sealed envelope (or legacy plaintext passthrough) — see cacheCrypto.
+    const text = await openForUser(userId, raw);
+    if (!text) return [];
+    const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isValidEntry).slice(0, MAX_ENTRIES);
   } catch {
@@ -40,9 +44,9 @@ export async function loadOutbox(userId: string): Promise<OutboxEntry[]> {
 
 export async function saveOutbox(userId: string, entries: OutboxEntry[]): Promise<void> {
   try {
-    await AsyncStorage.setItem(keyFor(userId), JSON.stringify(entries.slice(0, MAX_ENTRIES)));
+    await AsyncStorage.setItem(keyFor(userId), await sealForUser(userId, JSON.stringify(entries.slice(0, MAX_ENTRIES))));
   } catch (err) {
-    console.warn('[Outbox] Persist notice:', err);
+    logger.warn('Outbox', 'Persist notice:', err);
   }
 }
 
