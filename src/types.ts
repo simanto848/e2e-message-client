@@ -13,7 +13,9 @@ export interface UserProfile {
   memberSince: string;
   twoFactorEnabled: boolean;
   passkeyRegistered: boolean;
-  pinCode?: string;
+  // NOTE: PIN/password material must never live on the profile object —
+  // it travels only as discrete auth params (see api.login/register) so it
+  // can't be cached, logged, or persisted with the user record.
   fingerprintHash: string;
   connectionStatus?: 'none' | 'connected' | 'pending_sent' | 'pending_received' | 'pending';
   blockScreenshots?: boolean;
