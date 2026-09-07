@@ -70,6 +70,7 @@ interface Props {
   onLoadOlder?: () => void;
   hasMoreMessages?: boolean;
   loadingMore?: boolean;
+  onForwardMessage?: (msg: Message) => void;
   onBack: () => void;
   onSendMessage: (text: string, attachment?: Attachment, replyToId?: string) => void;
   onDeleteForEveryone: (messageId: string) => void;
@@ -157,6 +158,7 @@ export function ChatScreen({
   onLoadOlder,
   hasMoreMessages = false,
   loadingMore = false,
+  onForwardMessage,
   onBack,
   onSendMessage,
   onDeleteForEveryone,
@@ -830,6 +832,7 @@ export function ChatScreen({
           onJumpToReply={jumpToOriginalMessage}
           onRetrySend={onRetrySend}
           onPressImage={setViewingImageId}
+          onForward={onForwardMessage}
           onReply={setReplyingTo}
           imageResolution={imageAttachment ? resolvedImages[imageAttachment.id] : undefined}
           highlight={msg.id === currentMatchId || msg.id === jumpHighlightId}
@@ -851,6 +854,7 @@ export function ChatScreen({
       participant?.name,
       jumpToOriginalMessage,
       onRetrySend,
+      onForwardMessage,
       resolvedImages,
       currentMatchId,
       jumpHighlightId,

@@ -68,6 +68,7 @@ export interface Message {
   deletedAt?: number;
   attachment?: Attachment;
   replyToId?: string;
+  forwarded?: boolean;
   reactions?: { [emoji: string]: string[] };
   reaction?: string;
   keyMismatch?: boolean;

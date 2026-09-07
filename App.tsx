@@ -83,6 +83,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useAppSecurity } from './src/hooks/useAppSecurity';
 import { useWebRTCCall } from './src/hooks/useWebRTCCall';
 import { ChatHeadOverlay, ChatHeadAttachmentData } from './src/components/ChatHeadOverlay';
+import { ForwardPickerModal } from './src/components/ForwardPickerModal';
 import { RestoreSessionModal } from './src/components/RestoreSessionModal';
 import { InAppNotificationBanner } from './src/components/InAppNotificationBanner';
 import { notificationService } from './src/services/notificationService';
@@ -1893,7 +1894,13 @@ export default function App() {
   }, []);
 
   // Handler: Send Message to Any Chat (used by both Full Chat & ChatHeadOverlay)
-  const sendMessageToChat = async (targetChatId: string, text: string, attachment?: Attachment, replyToId?: string) => {
+  const sendMessageToChat = async (
+    targetChatId: string,
+    text: string,
+    attachment?: Attachment,
+    replyToId?: string,
+    opts?: { forwarded?: boolean }
+  ) => {
     if (isDecoyMode) {
       const newDecoyMsg: Message = {
         id: `decoy_msg_${Date.now()}`,
@@ -1954,6 +1961,7 @@ export default function App() {
       expiresAt: disappearingSecs > 0 ? Date.now() + disappearingSecs * 1000 : undefined,
       attachment,
       replyToId,
+      forwarded: opts?.forwarded || undefined,
     };
 
     if (targetChatId === activeChatId) {
@@ -2045,6 +2053,97 @@ export default function App() {
       }
     },
     []
+  );
+
+  // Forward picker state + engine. Forwarding RE-ENCRYPTS content for each
+  // recipient (text directly; media via fetch → decrypt with the original
+  // thread's key → re-encrypt) — ciphertext is never copied across chats,
+  // since it's keyed to the wrong recipient. Cap 5 targets per forward.
+  const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
+  const [isForwarding, setIsForwarding] = useState(false);
+
+  const handleForwardMessage = useCallback(
+    async (targetChatIds: string[]) => {
+      const msg = forwardingMessage;
+      if (!msg || !currentUser || !mySecretKey || targetChatIds.length === 0) return;
+      if (msg.attachment?.type === 'call') {
+        Alert.alert('Cannot Forward', 'Call history entries cannot be forwarded.');
+        return;
+      }
+      if (!msg.text && !msg.attachment) return;
+      setIsForwarding(true);
+      let ok = 0;
+      let failed = 0;
+      try {
+        for (const targetId of targetChatIds.slice(0, 5)) {
+          try {
+            const targetChat = chatsRef.current.find(c => c.id === targetId);
+            if (!targetChat) {
+              failed++;
+              continue;
+            }
+            const kind = msg.attachment?.type;
+            if ((kind === 'image' || kind === 'audio') && msg.attachment?.id) {
+              const mediaRes = await api.getMedia(msg.attachment.id);
+              if (!mediaRes.success || !mediaRes.attachment) throw new Error('Media fetch failed');
+              const peerId = msg.senderId === currentUser.id ? msg.receiverId : msg.senderId;
+              const peerKey = chatsRef.current.find(
+                c => c.participant.id === peerId || c.id === peerId
+              )?.participant.publicKey;
+              const { text: base64, keyMismatch } = decryptWithKeys(
+                mySecretKeyRef.current,
+                currentUserRef.current,
+                mediaRes.attachment.encryptedPayload,
+                peerKey
+              );
+              if (!base64 || keyMismatch) throw new Error('Original media unavailable');
+              const isAudio = kind === 'audio';
+              const encryptedPayload = encryptMessage(
+                base64,
+                mySecretKey,
+                targetChat.participant.publicKey,
+                currentUser.publicKey
+              );
+              const up = await api.uploadMedia({
+                name: msg.attachment.name || (isAudio ? 'Voice Note' : 'photo.jpg'),
+                type: isAudio ? 'audio' : 'image',
+                size: Math.floor(base64.length * 0.75),
+                mimeType: msg.attachment.mimeType || (isAudio ? 'audio/m4a' : 'image/jpeg'),
+                ...(isAudio
+                  ? { duration: msg.attachment.duration, waveform: msg.attachment.waveform }
+                  : {}),
+                receiverId: targetChat.participant.id,
+                encryptedPayload,
+              });
+              if (!up.success || !up.attachment) throw new Error(up.error || 'Upload failed');
+              await sendMessageToChat(
+                targetId,
+                isAudio ? '🎤 Encrypted Voice Message' : '📷 Encrypted Image',
+                up.attachment,
+                undefined,
+                { forwarded: true }
+              );
+            } else if (!msg.attachment && msg.text) {
+              await sendMessageToChat(targetId, msg.text, undefined, undefined, { forwarded: true });
+            } else {
+              // Document/video/call attachments can't be faithfully re-encrypted here.
+              throw new Error('Unsupported attachment kind for forward');
+            }
+            ok++;
+          } catch (e) {
+            console.warn('[Forward] failed for', targetId, e);
+            failed++;
+          }
+        }
+      } finally {
+        setIsForwarding(false);
+        setForwardingMessage(null);
+        if (failed > 0) {
+          Alert.alert('Forward Partial', `${ok} sent, ${failed} failed.`);
+        }
+      }
+    },
+    [forwardingMessage, currentUser, mySecretKey]
   );
 
   const handleSendMessage = async (text: string, attachment?: Attachment, replyToId?: string) => {
@@ -2468,6 +2567,7 @@ export default function App() {
                 onLoadOlder={loadOlderMessages}
                 hasMoreMessages={hasMoreMessages}
                 loadingMore={isLoadingMore}
+                onForwardMessage={setForwardingMessage}
                 isOnline={onlineUserIds.has(activeChat.participant.id)}
                 lastActiveAt={lastSeenMap[activeChat.participant.id] ?? activeChat.participant.lastActiveAt}
                 onBack={() => {
@@ -2590,6 +2690,23 @@ export default function App() {
           visible={!isDecoyMode && !!inspectingMessage}
           message={inspectingMessage}
           onClose={() => setInspectingMessage(null)}
+        />
+
+        {/* Forward Message Picker */}
+        <ForwardPickerModal
+          visible={!isDecoyMode && !!forwardingMessage}
+          threads={displayedChats.map(c => ({
+            id: c.id,
+            name: c.participant.name,
+            handle: c.participant.handle,
+            avatar: c.participant.avatar,
+          }))}
+          excludeChatId={activeChatId}
+          sending={isForwarding}
+          onClose={() => {
+            if (!isForwarding) setForwardingMessage(null);
+          }}
+          onForward={handleForwardMessage}
         />
 
         {/* Safety Number Verification Modal */}

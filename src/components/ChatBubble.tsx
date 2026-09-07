@@ -25,6 +25,7 @@ interface Props {
   onJumpToReply?: (messageId: string) => void;
   onRetrySend?: (messageId: string) => void;
   onPressImage?: (attachmentId: string) => void;
+  onForward?: (message: Message) => void;
   imageResolution?: ImageResolution;
   highlight?: boolean;
   searchQuery?: string;
@@ -103,6 +104,7 @@ export function ChatBubble({
   onJumpToReply,
   onRetrySend,
   onPressImage,
+  onForward,
   imageResolution,
   highlight = false,
   searchQuery,
@@ -288,6 +290,19 @@ export function ChatBubble({
               <Text style={styles.reactionEmoji}>↩️</Text>
             </TouchableOpacity>
           )}
+          {onForward && !message.isDeletedForEveryone && (
+            <TouchableOpacity
+              style={styles.reactionBtn}
+              onPress={() => {
+                onForward(message);
+                setShowReactions(false);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Forward message"
+            >
+              <Text style={styles.reactionEmoji}>➡️</Text>
+            </TouchableOpacity>
+          )}
           {onInspectCiphertext && (
             <TouchableOpacity
               style={styles.reactionBtn}
@@ -349,6 +364,12 @@ export function ChatBubble({
           highlight && styles.highlightedBubble,
         ]}
       >
+        {/* Forwarded attribution tag */}
+        {message.forwarded && (
+          <Text style={[styles.forwardedTag, isMe ? styles.myForwardedTag : styles.theirForwardedTag]}>
+            ↗ Forwarded
+          </Text>
+        )}
         {/* Reply Quote Block — always visible for replies, even when the
             original message is no longer loaded, so a reply is never
             mistaken for a plain message. Tap jumps to the original. */}
@@ -813,6 +834,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -38,
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    maxWidth: '92%',
     backgroundColor: colors.surface,
     borderRadius: 20,
     paddingHorizontal: 8,
@@ -905,6 +928,18 @@ const styles = StyleSheet.create({
   replyQuoteText: {
     fontSize: 12.5,
     lineHeight: 17,
+  },
+  forwardedTag: {
+    fontSize: 10.5,
+    fontStyle: 'italic',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  myForwardedTag: {
+    color: 'rgba(255,255,255,0.8)',
+  },
+  theirForwardedTag: {
+    color: colors.textMuted,
   },
   replyQuoteMissing: {
     fontStyle: 'italic',
