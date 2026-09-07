@@ -18,7 +18,8 @@
         "NSFaceIDUsageDescription": "JABY uses Face ID to unlock your encrypted enclave.",
         "NSCameraUsageDescription": "JABY needs camera access for video calls and QR safety-number verification.",
         "NSMicrophoneUsageDescription": "JABY needs microphone access for voice notes and calls.",
-        "NSPhotoLibraryUsageDescription": "JABY needs photo library access to send encrypted images to your contacts."
+        "NSPhotoLibraryUsageDescription": "JABY needs photo library access to send encrypted images to your contacts.",
+        "UIBackgroundModes": ["audio", "voip"]
       },
       "runtimeVersion": {
         "policy": "appVersion"
@@ -50,7 +51,10 @@
         "android.permission.WAKE_LOCK",
         "android.permission.BLUETOOTH",
         "android.permission.POST_NOTIFICATIONS",
-        "android.permission.FOREGROUND_SERVICE"
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+        "android.permission.READ_PHONE_STATE",
+        "android.permission.MANAGE_OWN_CALLS"
       ],
       "runtimeVersion": {
         "policy": "appVersion"

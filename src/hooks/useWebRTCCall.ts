@@ -8,6 +8,8 @@ import { requestSinglePermission } from '../utils/permissions';
 import { notificationService } from '../services/notificationService';
 import { socketService } from '../services/socket';
 import type { MediaStream } from '../utils/webrtcAdapter';
+import { logger } from '../utils/logger';
+import { reportAllCallsEnded } from '../services/callKeepService';
 
 interface UseWebRTCCallOptions {
   currentUser: UserProfile | null;
@@ -108,7 +110,7 @@ export function useWebRTCCall({
       mediaWatchdogRef.current = null;
       if (!callStateRef.current.active) return;
       const pcState = webrtcCallEngine.getConnectionState();
-      webrtcCallEngine.logMediaDiagnostics('[Call] Media watchdog');
+      webrtcCallEngine.logMediaDiagnostics('Call');
       if (pcState !== 'connected') {
         failCallRef.current(
           'No Audio Path',
@@ -126,7 +128,7 @@ export function useWebRTCCall({
 
   const handleCallConnectionStateChange = (state: string) => {
     if (__DEV__) {
-      console.log('[Call] connection state:', state);
+      logger.info('Call', 'connection state:', state);
     }
     if (state === 'connected') {
       // Media path is live: stand down all recovery, clear the watchdog.
@@ -139,7 +141,7 @@ export function useWebRTCCall({
         clearTimeout(mediaWatchdogRef.current);
         mediaWatchdogRef.current = null;
       }
-      webrtcCallEngine.logMediaDiagnostics('[Call] Connected');
+      webrtcCallEngine.logMediaDiagnostics('Call');
       setCallState(prev => ({ ...prev, isReconnecting: false, iceState: state }));
       return;
     }
@@ -164,7 +166,7 @@ export function useWebRTCCall({
         try {
           await webrtcCallEngine.restartIce();
         } catch (err) {
-          console.warn('[Call] ICE restart failed:', err);
+          logger.warn('Call', 'ICE restart failed:', err);
         }
       }, 2500);
       return;
@@ -253,7 +255,7 @@ export function useWebRTCCall({
       );
       setLocalStream(webrtcCallEngine.getLocalStream());
     } catch (err) {
-      console.error('[Call] Failed to start call:', err);
+      logger.error('Call', 'Failed to start call:', err);
       Alert.alert('Call Failed', 'Could not access the microphone/camera, or the connection failed to establish.');
       handleHangupCall();
     }
@@ -311,10 +313,12 @@ export function useWebRTCCall({
         callState.isSpeakerOn
       );
       setCallState(prev => ({ ...prev, status: 'connected' }));
+      // Dismiss the system incoming-call UI (dev builds); in-app UI takes over.
+      reportAllCallsEnded();
       startCallTimer();
       setLocalStream(webrtcCallEngine.getLocalStream());
     } catch (err) {
-      console.error('[Call] Failed to accept call:', err);
+      logger.error('Call', 'Failed to accept call:', err);
       Alert.alert('Call Failed', 'Could not access the microphone/camera.');
       handleHangupCall();
     } finally {
@@ -324,6 +328,7 @@ export function useWebRTCCall({
 
   const handleHangupCall = () => {
     notificationService.cancelCallNotification().catch(() => {});
+    reportAllCallsEnded();
     stopCallTimer();
     clearCallHealthTimers();
     restartAttemptsRef.current = 0;

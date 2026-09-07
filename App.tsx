@@ -93,6 +93,13 @@ import {
   registerPushToken,
 } from './src/services/pushNotifications';
 import {
+  setupCallKeep,
+  displayIncomingCall,
+  reportAllCallsEnded,
+  newCallUUID,
+  addCallKeepListeners,
+} from './src/services/callKeepService';
+import {
   startBackgroundSync,
   stopBackgroundSync,
   getBackgroundSyncSettings,
@@ -423,6 +430,8 @@ export default function App() {
   useEffect(() => {
     configureForegroundHandler();
     ensureAndroidChannels().catch(() => {});
+    // System call UI (CallKit / ConnectionService). No-op in Expo Go.
+    setupCallKeep().catch(() => {});
   }, []);
 
   // Auto check for updates on launch
@@ -1668,6 +1677,14 @@ export default function App() {
           onDecline: () => handleHangupCall(),
         }).catch(() => {});
 
+        // System incoming-call UI (dev builds only; no-op in Expo Go).
+        // In-app CallModal stays the fallback/answer surface.
+        displayIncomingCall({
+          callUUID: newCallUUID(),
+          handle: callerProfile.handle || callerProfile.id,
+          callerName: callerProfile.name,
+          hasVideo: (signal.type || 'audio') === 'video',
+        });
 
         api.ackPendingCall().catch(() => {});
       } else if (signal.signalType === 'answer') {
@@ -1702,6 +1719,7 @@ export default function App() {
         await webrtcCallEngine.handleRemoteIceCandidate(signal.candidate);
       } else if (signal.signalType === 'hangup' || signal.signalType === 'reject') {
         notificationService.cancelCallNotification().catch(() => {});
+        reportAllCallsEnded();
         if (activeCallIdRef.current && signal.callId && signal.callId !== activeCallIdRef.current && pendingIncomingCallRef.current?.callId !== signal.callId) {
           return;
         }
@@ -1719,6 +1737,12 @@ export default function App() {
 
     const unsubCall = socketService.onCallSignal(handleIncomingCallSignal);
 
+    // System call-UI answer/decline (dev builds only) → same handlers as
+    // the in-app CallModal buttons.
+    const unsubCallKeep = addCallKeepListeners({
+      onAnswerCall: () => handleAcceptIncomingCall(),
+      onEndCall: () => handleHangupCall(),
+    });
 
     // Start background sync / polling for calls and messages when outside app
     if (backgroundSyncEnabled) {
@@ -1769,6 +1793,7 @@ export default function App() {
 
     return () => {
       stopBackgroundSync();
+      unsubCallKeep();
       unsubReqReceived();
       unsubReqAccepted();
       unsubMsg();
