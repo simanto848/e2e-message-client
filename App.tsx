@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { StyleSheet, View, StatusBar, Alert, AppState, BackHandler, ToastAndroid, Platform, InteractionManager, DeviceEventEmitter } from 'react-native';
+import { StyleSheet, View, StatusBar, Alert, AppState, BackHandler, InteractionManager, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ScreenCapture from 'expo-screen-capture';
 import * as Updates from 'expo-updates';
@@ -119,8 +119,11 @@ import {
   INITIAL_DECOY_MESSAGES,
 } from './src/data/decoy';
 import { formatCallDuration } from './src/utils/format';
+import { logger } from './src/utils/logger';
 import { useAppNavigation } from './src/hooks/useAppNavigation';
 import { useAppModals } from './src/hooks/useAppModals';
+import { useHardwareBack } from './src/hooks/useHardwareBack';
+import type { ModalKey } from './src/hooks/useHardwareBack';
 
 perfMark('app_start');
 
@@ -136,8 +139,7 @@ export default function App() {
     enterApp,
   } = useAppNavigation();
 
-  // Duress & Decoy State
-  const [showDuressModal, setShowDuressModal] = useState(false);
+  // Duress & Decoy State (modal visibility lives in useAppModals)
   const [decoyChats, setDecoyChats] = useState<ChatThread[]>(INITIAL_DECOY_CHATS);
   const [decoyMessages, setDecoyMessages] = useState<Record<string, Message[]>>(INITIAL_DECOY_MESSAGES);
 
@@ -228,7 +230,7 @@ export default function App() {
     try {
       encryptedPayload = encryptMessage(text, secret, peer.publicKey, user.publicKey);
     } catch (err) {
-      console.warn('[CallLog] Encryption notice:', err);
+      logger.warn('CallLog', 'Encryption notice:', err);
       return;
     }
     const callAttachment: Attachment = {
@@ -260,7 +262,7 @@ export default function App() {
 
     if (!isIncoming) {
       const wireMsg: Message = { ...newMsg, text: '' };
-      api.sendMessage(wireMsg).catch(err => console.warn('Call log REST send err:', err));
+      api.sendMessage(wireMsg).catch(err => logger.warn('CallLog', 'REST send err:', err));
       socketService.sendMessage(wireMsg);
     }
   };
@@ -325,7 +327,7 @@ export default function App() {
         await ScreenCapture.allowScreenCaptureAsync();
       }
     } catch (err) {
-      console.warn('[AntiScreenshot] Screen-capture toggle notice:', err);
+      logger.warn('AntiScreenshot', 'Screen-capture toggle notice:', err);
     }
     api.updatePrivacySettings({ blockScreenshots: val }).catch(() => {});
   };
@@ -342,7 +344,7 @@ export default function App() {
           await ScreenCapture.allowScreenCaptureAsync();
         }
       } catch (err) {
-        console.warn('[AntiScreenshot] Enforce notice:', err);
+        logger.warn('AntiScreenshot', 'Enforce notice:', err);
       }
     };
     enforce();
@@ -368,7 +370,7 @@ export default function App() {
         }).catch(() => {});
       });
     } catch (err) {
-      console.warn('[AntiScreenshot] Listener notice:', err);
+      logger.warn('AntiScreenshot', 'Listener notice:', err);
     }
     return () => {
       try {
@@ -410,6 +412,8 @@ export default function App() {
     setShowPermissionsModal,
     showUpdateModal,
     setShowUpdateModal,
+    showDuressModal,
+    setShowDuressModal,
   } = useAppModals();
   const [availableRelease, setAvailableRelease] = useState<ReleaseInfo | null>(null);
 
@@ -431,7 +435,7 @@ export default function App() {
           setShowUpdateModal(true);
         }
       } catch (err) {
-        console.log('Update check notice:', err);
+        logger.info('Updates', 'Update check notice:', err);
       }
     };
     checkUpdates();
@@ -488,164 +492,59 @@ export default function App() {
     BackHandler.exitApp();
   };
 
-  // Android Hardware / Swipe Back Navigation Handler
-  const lastBackPressTimeRef = useRef<number>(0);
-
-  const backHandlerStateRef = useRef({
-    isAppLocked,
-    callActive: Boolean(callState.active || callState.isIncoming),
-    inspectingMessage,
-    safetyModalChat,
-    showUpdateModal,
-    showPermissionsModal,
-    showChangePasswordModal,
-    showEditProfileModal,
-    showDuressModal,
-    showCloudBackupModal,
-    showLinkedDevicesModal,
-    showInvitesModal,
-    showSearchModal,
-    showRequestsModal,
-    hasRestorePrompt: false,
-    currentScreen,
-    isOpenedFromChatHead: false,
-    isChatHeadExpanded: false,
-  });
-
-  backHandlerStateRef.current = {
-    isAppLocked,
-    callActive: Boolean(callState.active || callState.isIncoming),
-    inspectingMessage,
-    safetyModalChat,
-    showUpdateModal,
-    showPermissionsModal,
-    showChangePasswordModal,
-    showEditProfileModal,
-    showDuressModal,
-    showCloudBackupModal,
-    showLinkedDevicesModal,
-    showInvitesModal,
-    showSearchModal,
-    showRequestsModal,
-    hasRestorePrompt: Boolean(restoreSessionPrompt),
-    currentScreen,
-    isOpenedFromChatHead,
-    isChatHeadExpanded,
+  // Android Hardware / Swipe Back Navigation Handler. The priority chain
+  // lives in useHardwareBack (pure + unit-tested); here we only bind state.
+  const closeBackModal = (modal: ModalKey) => {
+    switch (modal) {
+      case 'update': setShowUpdateModal(false); break;
+      case 'permissions': setShowPermissionsModal(false); break;
+      case 'changePassword': setShowChangePasswordModal(false); break;
+      case 'editProfile': setShowEditProfileModal(false); break;
+      case 'duress': setShowDuressModal(false); break;
+      case 'cloudBackup': setShowCloudBackupModal(false); break;
+      case 'linkedDevices': setShowLinkedDevicesModal(false); break;
+      case 'invites': setShowInvitesModal(false); break;
+      case 'search': setShowSearchModal(false); break;
+      case 'requests': setShowRequestsModal(false); break;
+    }
   };
 
-  useEffect(() => {
-    const onHardwareBack = () => {
-      const state = backHandlerStateRef.current;
-
-      // 0. If floating quick-chat from chat head is open, close floating window and return to external app/home screen!
-      if (state.isOpenedFromChatHead && state.isChatHeadExpanded) {
-        handleCloseFloatingWindow();
-        return true;
-      }
-
-      if (state.isChatHeadExpanded) {
-        setIsChatHeadExpanded(false);
-        return true;
-      }
-
-      // 1. If screen is locked by Privacy Shield PIN, prevent bypassing
-      if (state.isAppLocked) {
-        return true;
-      }
-
-      // 2. If restore session modal is prompting, prevent bypass
-      if (state.hasRestorePrompt) {
-        return true;
-      }
-
-      // 3. If call is active or ringing, prevent accidental exit
-      if (state.callActive) {
-        return true;
-      }
-
-      // 3. Fallback close for open App-level modals
-      if (state.inspectingMessage) {
-        setInspectingMessage(null);
-        return true;
-      }
-      if (state.safetyModalChat) {
-        setSafetyModalChat(null);
-        return true;
-      }
-      if (state.showUpdateModal) {
-        setShowUpdateModal(false);
-        return true;
-      }
-      if (state.showPermissionsModal) {
-        setShowPermissionsModal(false);
-        return true;
-      }
-      if (state.showChangePasswordModal) {
-        setShowChangePasswordModal(false);
-        return true;
-      }
-      if (state.showEditProfileModal) {
-        setShowEditProfileModal(false);
-        return true;
-      }
-      if (state.showDuressModal) {
-        setShowDuressModal(false);
-        return true;
-      }
-      if (state.showCloudBackupModal) {
-        setShowCloudBackupModal(false);
-        return true;
-      }
-      if (state.showLinkedDevicesModal) {
-        setShowLinkedDevicesModal(false);
-        return true;
-      }
-      if (state.showInvitesModal) {
-        setShowInvitesModal(false);
-        return true;
-      }
-      if (state.showSearchModal) {
-        setShowSearchModal(false);
-        return true;
-      }
-      if (state.showRequestsModal) {
-        setShowRequestsModal(false);
-        return true;
-      }
-
-      // 4. Primary Screen Back Navigation
-      if (state.currentScreen === 'chat_detail') {
+  useHardwareBack(
+    () => ({
+      isOpenedFromChatHead,
+      isChatHeadExpanded,
+      isAppLocked,
+      hasRestorePrompt: Boolean(restoreSessionPrompt),
+      callActive: Boolean(callState.active || callState.isIncoming),
+      hasInspectingMessage: Boolean(inspectingMessage),
+      hasSafetyModalChat: Boolean(safetyModalChat),
+      openModals: [
+        showUpdateModal ? ('update' as const) : null,
+        showPermissionsModal ? ('permissions' as const) : null,
+        showChangePasswordModal ? ('changePassword' as const) : null,
+        showEditProfileModal ? ('editProfile' as const) : null,
+        showDuressModal ? ('duress' as const) : null,
+        showCloudBackupModal ? ('cloudBackup' as const) : null,
+        showLinkedDevicesModal ? ('linkedDevices' as const) : null,
+        showInvitesModal ? ('invites' as const) : null,
+        showSearchModal ? ('search' as const) : null,
+        showRequestsModal ? ('requests' as const) : null,
+      ].filter((m): m is ModalKey => m !== null),
+      currentScreen,
+    }),
+    {
+      closeFloatingWindow: handleCloseFloatingWindow,
+      collapseChatHead: () => setIsChatHeadExpanded(false),
+      clearInspectingMessage: () => setInspectingMessage(null),
+      clearSafetyModalChat: () => setSafetyModalChat(null),
+      closeModal: closeBackModal,
+      backFromChatDetail: () => {
         setActiveChatId(null);
         setCurrentScreen('chat_list');
-        return true;
-      }
-
-      if (state.currentScreen === 'settings') {
-        setCurrentScreen('chat_list');
-        return true;
-      }
-
-      // 5. On root chat list: confirm double-tap before exiting to prevent accidental close
-      if (state.currentScreen === 'chat_list') {
-        const now = Date.now();
-        if (now - lastBackPressTimeRef.current < 2000) {
-          BackHandler.exitApp();
-          return true;
-        }
-        lastBackPressTimeRef.current = now;
-        if (Platform.OS === 'android') {
-          ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
-        }
-        return true;
-      }
-
-      // 6. On auth screen, allow system to exit
-      return false;
-    };
-
-    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
-    return () => sub.remove();
-  }, []);
+      },
+      backFromSettings: () => setCurrentScreen('chat_list'),
+    }
+  );
 
   // Hardware Permissions (Camera, Mic, Photos)
   const [permissionsStatus, setPermissionsStatus] = useState<AppPermissionsStatus>({
@@ -690,7 +589,7 @@ export default function App() {
       setCurrentScreen('auth');
       Alert.alert('Enclave Zeroized', 'All keys, sessions, and cached data have been completely wiped.');
     } catch (err) {
-      console.warn('[EmergencyWipe] Error:', err);
+      logger.warn('EmergencyWipe', 'Error:', err);
     }
   };
 
@@ -705,7 +604,7 @@ export default function App() {
     if (!currentUser) return;
     const sub = AppState.addEventListener('change', nextState => {
       if (nextState === 'active') {
-        socketService.reconnectIfNeeded().catch(err => console.warn('[Socket] Reconnect notice:', err));
+        socketService.reconnectIfNeeded().catch(err => logger.warn('Socket', 'Reconnect notice:', err));
         // Internet may have returned while we were away — flush queued mail
         // even if the socket hasn't finished reconnecting (REST needs no socket).
         flushOutbox().catch(() => {});
@@ -722,7 +621,7 @@ export default function App() {
         const status = await checkAppPermissions();
         setPermissionsStatus(status);
       } catch (err) {
-        console.warn('Initial permissions check notice:', err);
+        logger.warn('App', 'Initial permissions check notice:', err);
       }
     };
     initPermissions();
@@ -768,10 +667,10 @@ export default function App() {
           // enter the app in offline mode (cached chats, outbox sends). Auth
           // failures above still clear the session — only network errors land
           // here, never a rejected login.
-          console.log('[Cache] Offline launch, using cached profile');
+          logger.info('Cache', 'Offline launch, using cached profile');
           profile = await loadCachedProfile(userId);
           if (!profile) {
-            console.warn('Session restore notice: offline with no cached profile');
+            logger.warn('Session', 'Restore notice: offline with no cached profile');
             return;
           }
         }
@@ -804,7 +703,7 @@ export default function App() {
         restoreOutbox(profile.id).catch(() => {});
         performAutoBackupIfNeeded(profile, keyPair.secretKey, savedFreq);
       } catch (err) {
-        console.warn('Session restore notice:', err);
+        logger.warn('Session', 'Restore notice:', err);
       }
     };
     restoreSession();
@@ -899,10 +798,10 @@ export default function App() {
           totalChatsCount: chatsRef.current.length,
           backupFrequency: freq,
         }));
-        console.log(`[AutoBackup] Completed ${freq} backup successfully at ${new Date(now).toISOString()}`);
+        logger.info('AutoBackup', `Completed ${freq} backup successfully at ${new Date(now).toISOString()}`);
       }
     } catch (err) {
-      console.log('[AutoBackup] Notice during auto-backup:', err);
+      logger.info('AutoBackup', 'Notice during auto-backup:', err);
     } finally {
       backupRunningRef.current = false;
     }
@@ -937,7 +836,7 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.log('[Updates] OTA check notice:', err);
+        logger.info('Updates', 'OTA check notice:', err);
       }
     };
     applyUpdateIfAvailable();
@@ -1012,7 +911,7 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.warn('Backup auto-restore check notice:', err);
+        logger.warn('Backup', 'Auto-restore check notice:', err);
       }
 
       if (!keyPair) {
@@ -1119,7 +1018,7 @@ export default function App() {
       });
       setChats(withDecrypted);
     } catch (err) {
-      console.warn('[Cache] Load notice:', err);
+      logger.warn('Cache', 'Load notice:', err);
     } finally {
       setIsInitialChatsLoading(false);
     }
@@ -1146,7 +1045,7 @@ export default function App() {
       if (!contactsRes.success) {
         // Offline / failed fetch: never wipe visible chats or the cache.
         // Fall back to the ciphertext cache so history stays readable.
-        console.log('[Cache] Contacts fetch failed, serving cache:', contactsRes.error || '');
+        logger.info('Cache', 'Contacts fetch failed, serving cache:', contactsRes.error || '');
         await loadCachedDataIntoState(userId, secret, user);
         return;
       }
@@ -1228,7 +1127,7 @@ export default function App() {
         // Vault check notice (e.g. fresh account with no prior backup)
       }
     } catch (err) {
-      console.log('Dynamic data fetch notice:', err);
+      logger.info('App', 'Dynamic data fetch notice:', err);
     } finally {
       setIsInitialChatsLoading(false);
       perfLog('contacts reload', Date.now() - reloadStart);
@@ -1337,7 +1236,7 @@ export default function App() {
         hasMoreRef.current = more;
         setHasMoreMessages(more);
       } catch (err) {
-        if (!cancelled) console.warn('Failed to load messages for chat:', targetChatId, err);
+        if (!cancelled) logger.warn('Chat', 'Failed to load messages for chat:', targetChatId, err);
       } finally {
         if (!cancelled && activeChatIdRef.current === targetChatId) setIsMessagesLoading(false);
       }
@@ -1414,7 +1313,7 @@ export default function App() {
         setHasMoreMessages(false);
       }
     } catch (err) {
-      console.warn('[History] Older-page fetch notice:', err);
+      logger.warn('History', 'Older-page fetch notice:', err);
     } finally {
       loadingMoreRef.current = false;
       setIsLoadingMore(false);
@@ -1731,7 +1630,7 @@ export default function App() {
             if (!callTimestamp) callTimestamp = Date.now();
             sas = await generateCallSasWords(mySecretKeyRef.current, callerProfile.publicKey, callTimestamp);
           } catch (sasErr) {
-            console.warn('[Call] SAS calculation failed:', sasErr);
+            logger.warn('Call', 'SAS calculation failed:', sasErr);
             sas = [];
           }
         }
@@ -1769,6 +1668,7 @@ export default function App() {
           onDecline: () => handleHangupCall(),
         }).catch(() => {});
 
+
         api.ackPendingCall().catch(() => {});
       } else if (signal.signalType === 'answer') {
         notificationService.cancelCallNotification().catch(() => {});
@@ -1793,7 +1693,7 @@ export default function App() {
             await webrtcCallEngine.handleRestartAnswer(signal.sdp);
           }
         } catch (err) {
-          console.warn('[Call] ICE restart signaling failed:', err);
+          logger.warn('Call', 'ICE restart signaling failed:', err);
         }
       } else if (signal.signalType === 'ice-candidate') {
         if (activeCallIdRef.current && signal.callId && signal.callId !== activeCallIdRef.current) {
@@ -1818,6 +1718,7 @@ export default function App() {
     };
 
     const unsubCall = socketService.onCallSignal(handleIncomingCallSignal);
+
 
     // Start background sync / polling for calls and messages when outside app
     if (backgroundSyncEnabled) {
@@ -1950,7 +1851,7 @@ export default function App() {
         currentUser.publicKey
       );
     } catch (encErr) {
-      console.warn('Encryption failed:', encErr);
+      logger.warn('Chat', 'Encryption failed:', encErr);
       Alert.alert('Encryption Error', 'Failed to encrypt message with recipient public key.');
       return;
     }
@@ -1995,7 +1896,7 @@ export default function App() {
       const res = await api.sendMessage(wireMsg);
       if (!res?.success) throw new Error(res?.error || 'Persist failed');
     } catch (err) {
-      console.warn('[Outbox] REST persist failed, queued:', (err as Error)?.message || err);
+      logger.warn('Outbox', 'REST persist failed, queued:', (err as Error)?.message || err);
       outboxRef.current.set(messageId, { wire: wireMsg, display: newMsg });
       setOutboxCount(outboxRef.current.size);
       persistOutbox();
@@ -2046,7 +1947,7 @@ export default function App() {
         socketService.sendMessage(wireMsg);
         markOutboxSent(id);
       } catch (err) {
-        console.warn('[Outbox] Flush retry failed for', id);
+        logger.warn('Outbox', 'Flush retry failed for', id);
         // Keep going with the rest — one poisoned entry (e.g. a removed
         // contact that 403s forever) must not head-of-line-block the queue.
       }
@@ -2197,7 +2098,7 @@ export default function App() {
             }
             ok++;
           } catch (e) {
-            console.warn('[Forward] failed for', targetId, e);
+            logger.warn('Forward', 'failed for', targetId, e);
             failed++;
           }
         }
@@ -2275,8 +2176,8 @@ export default function App() {
     try {
       await api.declineContactRequest(requestId);
       setIncomingRequests(prev => prev.filter(r => r.id !== requestId));
-    } catch {
-      console.error('Error declining request');
+    } catch (err) {
+      logger.error('Contacts', 'Error declining request:', err);
     }
   };
 
@@ -2453,7 +2354,7 @@ export default function App() {
         );
       }
     } catch (err) {
-      console.warn('[App] Failed to send attachment from chat head:', err);
+      logger.warn('App', 'Failed to send attachment from chat head:', err);
     }
   };
 
@@ -2488,7 +2389,7 @@ export default function App() {
           handleChatHeadIntent(pending);
         }
       } catch (err) {
-        console.warn('[ChatHead] Pending intent notice:', err);
+        logger.warn('ChatHead', 'Pending intent notice:', err);
       }
     };
 
@@ -2805,7 +2706,7 @@ export default function App() {
               setSafetyModalChat(prev => (prev ? { ...prev, ...patch } : null));
               return true;
             } catch (err: any) {
-              console.warn('[SafetyNumber] Verify failed:', err);
+              logger.warn('SafetyNumber', 'Verify failed:', err);
               Alert.alert(
                 'Verification Failed',
                 err?.message || 'Could not update verification. The safety number may have changed — re-check in person.'

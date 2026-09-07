@@ -18,6 +18,7 @@ export function useAppModals() {
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [showDuressModal, setShowDuressModal] = useState(false);
 
   const closeAllModals = useCallback(() => {
     setShowInvitesModal(false);
@@ -29,6 +30,7 @@ export function useAppModals() {
     setShowSearchModal(false);
     setShowPermissionsModal(false);
     setShowUpdateModal(false);
+    setShowDuressModal(false);
   }, []);
 
   return {
@@ -50,6 +52,8 @@ export function useAppModals() {
     setShowPermissionsModal,
     showUpdateModal,
     setShowUpdateModal,
+    showDuressModal,
+    setShowDuressModal,
     closeAllModals,
   };
 }
