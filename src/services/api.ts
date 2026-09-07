@@ -181,14 +181,19 @@ export const api = {
     }
   },
 
-  // Contacts: Fetch Approved Contacts / Threads
-  async getContacts(userId: string): Promise<ChatThread[]> {
+  // Contacts: Fetch Approved Contacts / Threads. Returns success:false on
+  // network failure so callers can tell "offline" apart from "no contacts"
+  // (critical: never wipe the offline cache on a failed fetch).
+  async getContacts(userId: string): Promise<{ success: boolean; contacts: ChatThread[]; error?: string }> {
     try {
       const res = await fetch(`${API_BASE_URL}/contacts/${userId}`, { headers: await authHeaders() });
-      const data = await safeParseResponse(res, { contacts: [] });
-      return data.contacts || [];
-    } catch {
-      return [];
+      const data: any = await safeParseResponse(res, { contacts: [] });
+      if (data && data.success === false && !('contacts' in data)) {
+        return { success: false, contacts: [], error: data.error || 'Fetch failed' };
+      }
+      return { success: true, contacts: data.contacts || [] };
+    } catch (err: any) {
+      return { success: false, contacts: [], error: err?.message || 'Network error' };
     }
   },
 

@@ -97,6 +97,16 @@ import {
 import { chatHeadNative } from './src/services/chatHeadNative';
 import { perfMark, perfSince, perfLog } from './src/utils/perf';
 import { loadOutbox, saveOutbox, clearOutbox } from './src/utils/outboxStore';
+import {
+  saveCachedProfile,
+  loadCachedProfile,
+  clearCachedProfile,
+  clearUserCache,
+  saveCachedChats,
+  loadCachedChats,
+  mergeCachedMessages,
+  loadCachedMessageList,
+} from './src/utils/messageCache';
 
 perfMark('app_start');
 
@@ -789,7 +799,10 @@ export default function App() {
       setMessages([]);
       outboxRef.current.clear();
       setOutboxCount(0);
-      if (currentUser?.id) clearOutbox(currentUser.id).catch(() => {});
+      if (currentUser?.id) {
+        clearOutbox(currentUser.id).catch(() => {});
+        clearUserCache(currentUser.id, chatsRef.current.map(c => c.id)).catch(() => {});
+      }
       setActiveChatId(null);
       setHistoricalKeys([]);
       setInvites([]);
@@ -858,23 +871,44 @@ export default function App() {
           return;
         }
 
-        const res = await fetch(`${API_BASE_URL}/auth/users/${userId}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const data = await res.json();
-        if (!data.success || !data.user) {
+        let profile: UserProfile | null = null;
+        try {
+          const res = await fetch(`${API_BASE_URL}/auth/users/${userId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const data = await res.json();
+          if (!data.success || !data.user) {
+            await clearSession();
+            return;
+          }
+          profile = data.user;
+          // Refresh the offline profile snapshot on every online launch.
+          saveCachedProfile(userId, data.user).catch(() => {});
+        } catch (netErr) {
+          // No internet: fall back to the cached profile + on-device keys and
+          // enter the app in offline mode (cached chats, outbox sends). Auth
+          // failures above still clear the session — only network errors land
+          // here, never a rejected login.
+          console.log('[Cache] Offline launch, using cached profile');
+          profile = await loadCachedProfile(userId);
+          if (!profile) {
+            console.warn('Session restore notice: offline with no cached profile');
+            return;
+          }
+        }
+        if (!profile) {
           await clearSession();
           return;
         }
 
         // Synchronize privacy preferences from database
         applyPrivacySettings({
-          blockScreenshots: data.user.blockScreenshots,
-          callVerification: data.user.callVerification,
-          autoLockDelay: data.user.autoLockDelay,
+          blockScreenshots: profile.blockScreenshots,
+          callVerification: profile.callVerification,
+          autoLockDelay: profile.autoLockDelay,
         });
 
-        const userFreq = data.user.backupFrequency as BackupFrequency | undefined;
+        const userFreq = profile.backupFrequency as BackupFrequency | undefined;
         const savedFreq = userFreq || (await getBackupFrequency());
         if (userFreq) {
           await saveBackupFrequency(userFreq);
@@ -883,12 +917,12 @@ export default function App() {
         setCloudBackupMetadata(prev => ({ ...prev, backupFrequency: savedFreq }));
 
         setMySecretKey(keyPair.secretKey);
-        setCurrentUser(data.user);
+        setCurrentUser(profile);
         setCurrentScreen('chat_list');
         await socketService.connect();
-        await reloadDynamicData(data.user.id, { secret: keyPair.secretKey, user: data.user });
-        restoreOutbox(data.user.id).catch(() => {});
-        performAutoBackupIfNeeded(data.user, keyPair.secretKey, savedFreq);
+        await reloadDynamicData(profile.id, { secret: keyPair.secretKey, user: profile });
+        restoreOutbox(profile.id).catch(() => {});
+        performAutoBackupIfNeeded(profile, keyPair.secretKey, savedFreq);
       } catch (err) {
         console.warn('Session restore notice:', err);
       }
@@ -1134,6 +1168,7 @@ export default function App() {
     // Switch screen immediately so user enters chat list with zero delay
     setCurrentUser(user);
     setCurrentScreen('chat_list');
+    saveCachedProfile(user.id, user).catch(() => {});
     perfLog('login → chat list', perfSince('app_start'));
 
     // Connect realtime socket and load dynamic contacts without blocking
@@ -1186,6 +1221,29 @@ export default function App() {
     setIsRefreshing(false);
   };
 
+  // Offline fallback: decrypt the ciphertext cache into state (same rules as
+  // live data — no alerts here, just visibility).
+  const loadCachedDataIntoState = async (
+    userId: string,
+    secret: string | null,
+    user: UserProfile | null
+  ) => {
+    try {
+      const cached = await loadCachedChats(userId);
+      if (cached.length === 0) return;
+      const withDecrypted = cached.map(c => {
+        if (!c.lastMessage || (c.lastMessage as any).isDeletedForEveryone) return c;
+        const { text } = decryptWithKeys(secret, user, c.lastMessage.encryptedPayload, c.participant.publicKey);
+        return { ...c, lastMessage: { ...c.lastMessage, text } };
+      });
+      setChats(withDecrypted);
+    } catch (err) {
+      console.warn('[Cache] Load notice:', err);
+    } finally {
+      setIsInitialChatsLoading(false);
+    }
+  };
+
   // 2. Reload contacts & requests from the server. Pass explicit keys on the
   // post-login path — state/refs haven't re-rendered yet at that point, so
   // the closure would otherwise decrypt every preview as "Locked".
@@ -1197,12 +1255,24 @@ export default function App() {
     const user = override?.user ?? currentUserRef.current;
     const reloadStart = Date.now();
     try {
-      const [contactList, reqs, userInvites, devices] = await Promise.all([
+      const [contactsRes, reqs, userInvites, devices] = await Promise.all([
         api.getContacts(userId),
         api.getContactRequests(userId),
         api.getUserInvites(userId),
         api.getLinkedDevices(userId),
       ]);
+
+      if (!contactsRes.success) {
+        // Offline / failed fetch: never wipe visible chats or the cache.
+        // Fall back to the ciphertext cache so history stays readable.
+        console.log('[Cache] Contacts fetch failed, serving cache:', contactsRes.error || '');
+        await loadCachedDataIntoState(userId, secret, user);
+        return;
+      }
+      const contactList = contactsRes.contacts;
+
+      // Persist the RAW server threads (ciphertext previews) for offline use.
+      saveCachedChats(userId, contactList).catch(() => {});
 
       // The server never sees plaintext (it only stores ciphertext), so each
       // contact's "last message" preview comes back encrypted — decrypt it
@@ -1353,6 +1423,7 @@ export default function App() {
     if (!currentUser || !activeChatId || !mySecretKey) return;
 
     const targetChatId = activeChatId;
+    const uid = currentUser.id;
     let cancelled = false;
     hasMoreRef.current = false;
     setHasMoreMessages(false);
@@ -1365,7 +1436,16 @@ export default function App() {
         if (cancelled || activeChatIdRef.current !== targetChatId) return;
         const knownPublicKey = chatsRef.current.find(c => c.id === targetChatId)?.participant.publicKey;
 
-        const decryptedList = rawMessages.map(m => {
+        // Empty response with a warm cache = offline (or failed page): serve
+        // the cache instead of blanking the thread. A genuinely empty chat
+        // has an empty cache too, so this is a no-op there.
+        const source = rawMessages.length > 0 ? rawMessages : await loadCachedMessageList(uid, targetChatId);
+        if (cancelled || activeChatIdRef.current !== targetChatId) return;
+        if (rawMessages.length > 0) {
+          mergeCachedMessages(uid, targetChatId, rawMessages).catch(() => {});
+        }
+
+        const decryptedList = source.map(m => {
           if (m.isDeletedForEveryone) return { ...m, text: '' };
           const { text, keyMismatch } = decryptVerified(m.encryptedPayload, knownPublicKey);
           return { ...m, text, keyMismatch: m.keyMismatch ?? keyMismatch };
@@ -1403,10 +1483,34 @@ export default function App() {
       const raw = await api.getMessages(chatId, user.id, { limit: MESSAGE_PAGE_SIZE, before: oldest });
       if (activeChatIdRef.current !== chatId) return;
       if (raw.length === 0) {
+        // Offline (or true beginning): prepend any cached history older than
+        // what's on screen, then stop — no spinner loop with no network.
+        const cached = await loadCachedMessageList(user.id, chatId);
+        const seenIds = new Set(messagesRef.current.map(m => m.id));
+        const older = cached.filter(m => !seenIds.has(m.id) && m.timestamp < oldest);
+        if (older.length > 0) {
+          const knownPublicKey = chatsRef.current.find(c => c.id === chatId)?.participant.publicKey;
+          const decryptedOlder = older.map(m => {
+            if (m.isDeletedForEveryone) return { ...m, text: '' };
+            const { text, keyMismatch } = decryptWithKeys(
+              mySecretKeyRef.current,
+              currentUserRef.current,
+              m.encryptedPayload,
+              knownPublicKey
+            );
+            return { ...m, text, keyMismatch: m.keyMismatch ?? keyMismatch };
+          });
+          setMessages(prev => {
+            if (activeChatIdRef.current !== chatId) return prev;
+            const seen = new Set(prev.map(mm => mm.id));
+            return [...decryptedOlder.filter(m => !seen.has(m.id)), ...prev];
+          });
+        }
         hasMoreRef.current = false;
         setHasMoreMessages(false);
         return;
       }
+      mergeCachedMessages(user.id, chatId, raw).catch(() => {});
       const knownPublicKey = chatsRef.current.find(c => c.id === chatId)?.participant.publicKey;
       const decrypted = raw.map(m => {
         if (m.isDeletedForEveryone) return { ...m, text: '' };
@@ -1466,6 +1570,9 @@ export default function App() {
             for (const m of decrypted) byId.set(m.id, { ...byId.get(m.id), ...m });
             return Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp);
           });
+          if (raw.length > 0 && activeChatIdRef.current) {
+            mergeCachedMessages(currentUser.id, activeChatIdRef.current, raw).catch(() => {});
+          }
         } catch {}
       }
     };
@@ -1529,6 +1636,12 @@ export default function App() {
         }
 
         const isCurrentlyOpen = activeChatIdRef.current === msg.senderId && currentScreenRef.current === 'chat_detail';
+
+        // Cache the ciphertext immediately so it survives offline.
+        if (currentUser && !isDecoyModeRef.current) {
+          const cacheChatId = msg.chatId || msg.senderId;
+          mergeCachedMessages(currentUser.id, cacheChatId, [{ ...incoming, text: '' }]).catch(() => {});
+        }
 
         // Append to messages only if belonging to the currently open chat, and deduplicate
         if (activeChatIdRef.current === msg.senderId || activeChatIdRef.current === msg.chatId) {
@@ -1993,6 +2106,10 @@ export default function App() {
     // Awaited (not fire-and-forget): on failure the message drops into the
     // offline outbox with a pending clock instead of vanishing silently.
     const wireMsg: Message = { ...newMsg, text: '' };
+    // Cache our own wire copy (ciphertext) so sent mail stays visible offline.
+    if (!isDecoyModeRef.current) {
+      mergeCachedMessages(currentUser.id, targetChatId, [wireMsg]).catch(() => {});
+    }
     try {
       const res = await api.sendMessage(wireMsg);
       if (!res?.success) throw new Error(res?.error || 'Persist failed');
@@ -2333,7 +2450,10 @@ export default function App() {
     setMessages([]);
     outboxRef.current.clear();
     setOutboxCount(0);
-    if (currentUser?.id) clearOutbox(currentUser.id).catch(() => {});
+    if (currentUser?.id) {
+      clearOutbox(currentUser.id).catch(() => {});
+      clearUserCache(currentUser.id, chatsRef.current.map(c => c.id)).catch(() => {});
+    }
   };
 
   const displayedUser = isDecoyMode ? DECOY_USER : currentUser;
@@ -2590,6 +2710,7 @@ export default function App() {
                 onlineUserIds={onlineUserIds}
                 lastSeenMap={lastSeenMap}
                 refreshing={isRefreshing}
+                isOffline={!isDecoyMode && !!currentUser && !isSocketConnected}
                 onRefresh={handleRefresh}
                 onSelectChat={chatId => {
                   setActiveChatId(chatId);

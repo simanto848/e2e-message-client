@@ -16,6 +16,7 @@ interface Props {
   onlineUserIds: Set<string>;
   lastSeenMap?: Record<string, number>;
   refreshing?: boolean;
+  isOffline?: boolean;
   onRefresh?: () => void;
   onSelectChat: (chatId: string) => void;
   onOpenRequestsModal: () => void;
@@ -42,6 +43,7 @@ export function ChatListScreen({
   onlineUserIds,
   lastSeenMap,
   refreshing = false,
+  isOffline = false,
   onRefresh,
   onSelectChat,
   onOpenRequestsModal,
@@ -118,6 +120,18 @@ export function ChatListScreen({
         <ShieldCheck size={12} color={colors.primaryDark} />
         <Text style={styles.ribbonText}>END-TO-END ENCRYPTED & SECURE</Text>
       </View>
+
+      {/* Offline ribbon — cached content */}
+      {isOffline && (
+        <View
+          style={styles.offlineRibbon}
+          accessibilityRole="alert"
+          accessibilityLabel="You are offline. Showing cached chats."
+        >
+          <View style={styles.offlineBannerDot} />
+          <Text style={styles.offlineBannerText}>Offline — showing cached chats</Text>
+        </View>
+      )}
 
       {/* Chat List */}
       <FlatList
@@ -355,6 +369,27 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '800',
     letterSpacing: 1,
+  },
+  offlineRibbon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#fef3c7',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#fde68a',
+  },
+  offlineBannerDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#d97706',
+  },
+  offlineBannerText: {
+    color: '#92400e',
+    fontSize: 11,
+    fontWeight: '700',
   },
   listContent: {
     paddingHorizontal: 16,
