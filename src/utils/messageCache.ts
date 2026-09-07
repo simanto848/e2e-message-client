@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ChatThread, Message, UserProfile } from '../types';
+import { clearCacheKey, openForUser, sealForUser } from './cacheCrypto';
+import { logger } from './logger';
 
 /**
  * Offline message cache — ciphertext ONLY, never plaintext.
@@ -33,15 +35,16 @@ export async function saveCachedProfile(uid: string, profile: UserProfile): Prom
   try {
     const { ...rest } = profile as any;
     delete rest.pinCode;
-    await AsyncStorage.setItem(profileKey(uid), JSON.stringify(rest));
+    await AsyncStorage.setItem(profileKey(uid), await sealForUser(uid, JSON.stringify(rest)));
   } catch {}
 }
 
 export async function loadCachedProfile(uid: string): Promise<UserProfile | null> {
   try {
     const raw = await AsyncStorage.getItem(profileKey(uid));
-    if (!raw) return null;
-    const p = JSON.parse(raw);
+    const text = await openForUser(uid, raw);
+    if (!text) return null;
+    const p = JSON.parse(text);
     return p && typeof p.id === 'string' ? (p as UserProfile) : null;
   } catch {
     return null;
@@ -60,21 +63,24 @@ export async function clearUserCache(uid: string, chatIds: string[]): Promise<vo
     const keys = [profileKey(uid), chatsKey(uid), ...chatIds.map(id => msgsKey(uid, id))];
     await AsyncStorage.multiRemove(keys);
   } catch {}
+  // Drop the device cache key too so a later account can't open stale blobs.
+  await clearCacheKey(uid);
 }
 
 export async function saveCachedChats(uid: string, threads: ChatThread[]): Promise<void> {
   try {
-    await AsyncStorage.setItem(chatsKey(uid), JSON.stringify(threads.filter(validThread)));
+    await AsyncStorage.setItem(chatsKey(uid), await sealForUser(uid, JSON.stringify(threads.filter(validThread))));
   } catch (err) {
-    console.warn('[Cache] Save chats notice:', err);
+    logger.warn('Cache', 'Save chats notice:', err);
   }
 }
 
 export async function loadCachedChats(uid: string): Promise<ChatThread[]> {
   try {
     const raw = await AsyncStorage.getItem(chatsKey(uid));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    const text = await openForUser(uid, raw);
+    if (!text) return [];
+    const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? parsed.filter(validThread) : [];
   } catch {
     return [];
@@ -92,17 +98,18 @@ export async function mergeCachedMessages(uid: string, chatId: string, incoming:
     const merged = Array.from(byId.values())
       .sort((a, b) => a.timestamp - b.timestamp)
       .slice(-MAX_MSGS_PER_CHAT);
-    await AsyncStorage.setItem(msgsKey(uid, chatId), JSON.stringify(merged));
+    await AsyncStorage.setItem(msgsKey(uid, chatId), await sealForUser(uid, JSON.stringify(merged)));
   } catch (err) {
-    console.warn('[Cache] Merge messages notice:', err);
+    logger.warn('Cache', 'Merge messages notice:', err);
   }
 }
 
 export async function loadCachedMessageList(uid: string, chatId: string): Promise<Message[]> {
   try {
     const raw = await AsyncStorage.getItem(msgsKey(uid, chatId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    const text = await openForUser(uid, raw);
+    if (!text) return [];
+    const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? parsed.filter(validMessage) : [];
   } catch {
     return [];

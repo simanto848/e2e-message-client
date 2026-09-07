@@ -8,8 +8,38 @@
  * 4. Plausible deniability in Decoy Mode (suppresses genuine identity information).
  */
 import { NativeModules, Platform } from 'react-native';
+import * as Notifications from 'expo-notifications';
+import { logger } from '../utils/logger';
 
 const { NotificationModule } = NativeModules;
+
+// Expo-managed fallback channels (see pushNotifications.ensureAndroidChannels).
+// Used only when the custom native NotificationModule is unavailable
+// (Expo Go, iOS) so notifications still surface instead of going missing.
+const EXPO_CHANNELS = {
+  messages: 'jaby_expo_messages',
+  calls: 'jaby_expo_calls',
+  security: 'jaby_expo_security',
+} as const;
+
+async function postExpoFallback(params: {
+  channel: (typeof EXPO_CHANNELS)[keyof typeof EXPO_CHANNELS];
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: params.title,
+        body: params.body,
+        data: params.data ?? {},
+        ...(Platform.OS === 'android' ? { channelId: params.channel } : null),
+      },
+      trigger: null,
+    });
+  } catch {}
+}
 
 export interface InAppNotification {
   id: string;
@@ -77,7 +107,7 @@ export const notificationService = {
 
     const notifId = Math.abs((params.chatId.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) + Date.now()) % 100000);
 
-    // 1. Trigger Native System Notification
+    // 1. Trigger Native System Notification (Expo fallback when absent)
     if (Platform.OS === 'android' && NotificationModule?.postNotification) {
       try {
         await NotificationModule.postNotification({
@@ -89,8 +119,21 @@ export const notificationService = {
           peerId: params.senderId,
         });
       } catch (err) {
-        console.warn('[NotificationService] Failed to post native message notification:', err);
+        logger.warn('Notifications', 'Failed to post native message notification:', err);
+        await postExpoFallback({
+          channel: EXPO_CHANNELS.messages,
+          title,
+          body,
+          data: { chatId: params.chatId, senderId: params.senderId },
+        });
       }
+    } else {
+      await postExpoFallback({
+        channel: EXPO_CHANNELS.messages,
+        title,
+        body,
+        data: { chatId: params.chatId, senderId: params.senderId },
+      });
     }
 
     // 2. Dispatch In-App Banner Event
@@ -139,8 +182,21 @@ export const notificationService = {
           isCall: true,
         });
       } catch (err) {
-        console.warn('[NotificationService] Failed to post native call notification:', err);
+        logger.warn('Notifications', 'Failed to post native call notification:', err);
+        await postExpoFallback({
+          channel: EXPO_CHANNELS.calls,
+          title,
+          body,
+          data: { callId: params.callId, senderId: params.callerId },
+        });
       }
+    } else {
+      await postExpoFallback({
+        channel: EXPO_CHANNELS.calls,
+        title,
+        body,
+        data: { callId: params.callId, senderId: params.callerId },
+      });
     }
 
     const inAppItem: InAppNotification = {
@@ -192,8 +248,11 @@ export const notificationService = {
           isSecurity: true,
         });
       } catch (err) {
-        console.warn('[NotificationService] Failed to post security notification:', err);
+        logger.warn('Notifications', 'Failed to post security notification:', err);
+        await postExpoFallback({ channel: EXPO_CHANNELS.security, title: `🛡️ ${params.title}`, body: params.message });
       }
+    } else {
+      await postExpoFallback({ channel: EXPO_CHANNELS.security, title: `🛡️ ${params.title}`, body: params.message });
     }
 
     const inAppItem: InAppNotification = {
@@ -216,5 +275,8 @@ export const notificationService = {
         await NotificationModule.cancelAllNotifications();
       } catch {}
     }
+    try {
+      await Notifications.dismissAllNotificationsAsync();
+    } catch {}
   },
 };

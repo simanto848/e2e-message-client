@@ -88,6 +88,11 @@ import { RestoreSessionModal } from './src/components/RestoreSessionModal';
 import { InAppNotificationBanner } from './src/components/InAppNotificationBanner';
 import { notificationService } from './src/services/notificationService';
 import {
+  ensureAndroidChannels,
+  configureForegroundHandler,
+  registerPushToken,
+} from './src/services/pushNotifications';
+import {
   startBackgroundSync,
   stopBackgroundSync,
   getBackgroundSyncSettings,
@@ -114,19 +119,22 @@ import {
   INITIAL_DECOY_MESSAGES,
 } from './src/data/decoy';
 import { formatCallDuration } from './src/utils/format';
+import { useAppNavigation } from './src/hooks/useAppNavigation';
+import { useAppModals } from './src/hooks/useAppModals';
 
 perfMark('app_start');
-
-type ScreenType = 'auth' | 'chat_list' | 'chat_detail' | 'settings';
-
-// Benign decoy profile & threads displayed when unlocked via Duress PIN
-// (moved to src/data/decoy.ts to keep the root component focused).
 
 export default function App() {
   // App & User State
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
-  const [currentScreen, setCurrentScreen] = useState<ScreenType>('auth');
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const {
+    currentScreen,
+    setCurrentScreen,
+    activeChatId,
+    setActiveChatId,
+    resetToAuth,
+    enterApp,
+  } = useAppNavigation();
 
   // Duress & Decoy State
   const [showDuressModal, setShowDuressModal] = useState(false);
@@ -381,17 +389,37 @@ export default function App() {
     api.updatePrivacySettings({ autoLockDelay: val }).catch(() => {});
   };
 
-  // Modals
-  const [showInvitesModal, setShowInvitesModal] = useState(false);
-  const [showLinkedDevicesModal, setShowLinkedDevicesModal] = useState(false);
-  const [showCloudBackupModal, setShowCloudBackupModal] = useState(false);
-  const [showEditProfileModal, setShowEditProfileModal] = useState(false);
-  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
-  const [showRequestsModal, setShowRequestsModal] = useState(false);
-  const [showSearchModal, setShowSearchModal] = useState(false);
-  const [showPermissionsModal, setShowPermissionsModal] = useState(false);
-  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  // Modals (visibility state lives in useAppModals; release payload stays
+  // here next to the update-check effect that produces it).
+  const {
+    showInvitesModal,
+    setShowInvitesModal,
+    showLinkedDevicesModal,
+    setShowLinkedDevicesModal,
+    showCloudBackupModal,
+    setShowCloudBackupModal,
+    showEditProfileModal,
+    setShowEditProfileModal,
+    showChangePasswordModal,
+    setShowChangePasswordModal,
+    showRequestsModal,
+    setShowRequestsModal,
+    showSearchModal,
+    setShowSearchModal,
+    showPermissionsModal,
+    setShowPermissionsModal,
+    showUpdateModal,
+    setShowUpdateModal,
+  } = useAppModals();
   const [availableRelease, setAvailableRelease] = useState<ReleaseInfo | null>(null);
+
+  // Expo notification channels + foreground handler (once, launch).
+  // Registration itself happens post-auth (registerPushToken) so the token
+  // can be attributed to a user once the server endpoint lands.
+  useEffect(() => {
+    configureForegroundHandler();
+    ensureAndroidChannels().catch(() => {});
+  }, []);
 
   // Auto check for updates on launch
   useEffect(() => {
@@ -769,8 +797,9 @@ export default function App() {
 
         setMySecretKey(keyPair.secretKey);
         setCurrentUser(profile);
-        setCurrentScreen('chat_list');
+        enterApp();
         await socketService.connect();
+        registerPushToken().catch(() => {});
         await reloadDynamicData(profile.id, { secret: keyPair.secretKey, user: profile });
         restoreOutbox(profile.id).catch(() => {});
         performAutoBackupIfNeeded(profile, keyPair.secretKey, savedFreq);
@@ -1018,12 +1047,13 @@ export default function App() {
 
     // Switch screen immediately so user enters chat list with zero delay
     setCurrentUser(user);
-    setCurrentScreen('chat_list');
+    enterApp();
     saveCachedProfile(user.id, user).catch(() => {});
     perfLog('login → chat list', perfSince('app_start'));
 
     // Connect realtime socket and load dynamic contacts without blocking
     socketService.connect().catch(() => {});
+    registerPushToken().catch(() => {});
     reloadDynamicData(user.id, { secret: keyPair.secretKey, user }).catch(() => {});
     restoreOutbox(user.id).catch(() => {});
 
@@ -2295,8 +2325,7 @@ export default function App() {
     socketService.disconnect({ clearListeners: true });
     setCurrentUser(null);
     setMySecretKey(null);
-    setCurrentScreen('auth');
-    setActiveChatId(null);
+    resetToAuth();
     setChats([]);
     setMessages([]);
     outboxRef.current.clear();

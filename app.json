@@ -67,6 +67,13 @@
         }
       ],
       [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#10b981"
+        }
+      ],
+      [
         "@config-plugins/react-native-webrtc",
         {
           "cameraPermission": "JABY needs camera access for video calls.",
