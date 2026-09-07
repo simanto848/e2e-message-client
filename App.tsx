@@ -814,6 +814,9 @@ export default function App() {
     const sub = AppState.addEventListener('change', nextState => {
       if (nextState === 'active') {
         socketService.reconnectIfNeeded().catch(err => console.warn('[Socket] Reconnect notice:', err));
+        // Internet may have returned while we were away — flush queued mail
+        // even if the socket hasn't finished reconnecting (REST needs no socket).
+        flushOutbox().catch(() => {});
         performAutoBackupIfNeeded();
       }
     });
@@ -2046,8 +2049,8 @@ export default function App() {
         markOutboxSent(id);
       } catch (err) {
         console.warn('[Outbox] Flush retry failed for', id);
-        // Leave the rest queued; next reconnect/refresh retries again.
-        break;
+        // Keep going with the rest — one poisoned entry (e.g. a removed
+        // contact that 403s forever) must not head-of-line-block the queue.
       }
     }
   }, []);
@@ -2069,6 +2072,20 @@ export default function App() {
     },
     []
   );
+
+  // Active internet-return watchdog: while anything is queued, retry every
+  // 15s regardless of socket state. Socket reconnect covers the common case;
+  // this covers the rest (socket stuck, HTTP-only recovery, flaky toggles).
+  // No new dependencies — plain REST reachability is the probe.
+  const hasQueuedMail = outboxCount > 0;
+  useEffect(() => {
+    if (!hasQueuedMail || !currentUser || isDecoyMode) return;
+    flushOutbox().catch(() => {});
+    const t = setInterval(() => {
+      flushOutbox().catch(() => {});
+    }, 15000);
+    return () => clearInterval(t);
+  }, [hasQueuedMail, currentUser, isDecoyMode, flushOutbox]);
 
   // Merge durable outbox displays into a freshly loaded page so queued mail
   // stays visible (history loads would otherwise wipe it).
