@@ -106,18 +106,120 @@ function formatDayLabel(timestamp: number): string {
 }
 
 function MessageListSkeleton() {
-  const rows = [false, true, false, true];
+  const pulseAnim = useRef(new Animated.Value(0.4)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 0.95,
+          duration: 850,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0.4,
+          duration: 850,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulseAnim]);
+
   return (
-    <View style={styles.skeletonList}>
-      {rows.map((me, i) => (
-        <View key={i} style={[styles.skeletonRow, me ? styles.skeletonMeRow : styles.skeletonTheirRow]}>
-          <View style={[styles.skeletonBubble, me ? styles.skeletonMeBubble : styles.skeletonTheirBubble]}>
-            <View style={styles.skeletonLine} />
-            <View style={[styles.skeletonLine, styles.skeletonShortLine]} />
+    <Animated.View style={[styles.skeletonList, { opacity: pulseAnim }]}>
+      {/* Date separator pill */}
+      <View style={styles.skeletonDateWrap}>
+        <View style={styles.skeletonDatePill} />
+      </View>
+
+      {/* 1. Received: 2 lines */}
+      <View style={[styles.skeletonRow, styles.skeletonTheirRow]}>
+        <View style={[styles.skeletonBubble, styles.skeletonTheirBubble, { width: '62%' }]}>
+          <View style={styles.skeletonLine} />
+          <View style={[styles.skeletonLine, { width: '55%' }]} />
+          <View style={[styles.skeletonTime, styles.skeletonTimeLeft]} />
+        </View>
+      </View>
+
+      {/* 2. Sent: 1 line short */}
+      <View style={[styles.skeletonRow, styles.skeletonMeRow]}>
+        <View style={[styles.skeletonBubble, styles.skeletonMeBubble, { width: '42%' }]}>
+          <View style={[styles.skeletonLine, styles.skeletonLineMe, { width: '75%' }]} />
+          <View style={[styles.skeletonTime, styles.skeletonTimeRight]} />
+        </View>
+      </View>
+
+      {/* 3. Received: 3 lines */}
+      <View style={[styles.skeletonRow, styles.skeletonTheirRow]}>
+        <View style={[styles.skeletonBubble, styles.skeletonTheirBubble, { width: '74%' }]}>
+          <View style={styles.skeletonLine} />
+          <View style={[styles.skeletonLine, { width: '85%' }]} />
+          <View style={[styles.skeletonLine, { width: '45%' }]} />
+          <View style={[styles.skeletonTime, styles.skeletonTimeLeft]} />
+        </View>
+      </View>
+
+      {/* 4. Sent: Image attachment card */}
+      <View style={[styles.skeletonRow, styles.skeletonMeRow]}>
+        <View style={[styles.skeletonBubble, styles.skeletonMeBubble, { width: '64%' }]}>
+          <View style={styles.skeletonMediaBox} />
+          <View style={[styles.skeletonLine, styles.skeletonLineMe, { width: '50%', marginTop: 8 }]} />
+          <View style={[styles.skeletonTime, styles.skeletonTimeRight]} />
+        </View>
+      </View>
+
+      {/* 5. Received: Audio voice note */}
+      <View style={[styles.skeletonRow, styles.skeletonTheirRow]}>
+        <View style={[styles.skeletonBubble, styles.skeletonTheirBubble, { width: '68%' }]}>
+          <View style={styles.skeletonAudioRow}>
+            <View style={styles.skeletonPlayCircle} />
+            <View style={styles.skeletonWaveforms}>
+              {[14, 22, 10, 26, 18, 12, 24, 16, 20, 10, 18, 14].map((h, idx) => (
+                <View key={idx} style={[styles.skeletonWaveBar, { height: h }]} />
+              ))}
+            </View>
+            <View style={styles.skeletonAudioDuration} />
           </View>
         </View>
-      ))}
-    </View>
+      </View>
+
+      {/* 6. Sent: 2 lines */}
+      <View style={[styles.skeletonRow, styles.skeletonMeRow]}>
+        <View style={[styles.skeletonBubble, styles.skeletonMeBubble, { width: '56%' }]}>
+          <View style={[styles.skeletonLine, styles.skeletonLineMe]} />
+          <View style={[styles.skeletonLine, styles.skeletonLineMe, { width: '60%' }]} />
+          <View style={[styles.skeletonTime, styles.skeletonTimeRight]} />
+        </View>
+      </View>
+
+      {/* 7. Received: 1 line */}
+      <View style={[styles.skeletonRow, styles.skeletonTheirRow]}>
+        <View style={[styles.skeletonBubble, styles.skeletonTheirBubble, { width: '46%' }]}>
+          <View style={[styles.skeletonLine, { width: '70%' }]} />
+          <View style={[styles.skeletonTime, styles.skeletonTimeLeft]} />
+        </View>
+      </View>
+
+      {/* 8. Sent: 2 lines */}
+      <View style={[styles.skeletonRow, styles.skeletonMeRow]}>
+        <View style={[styles.skeletonBubble, styles.skeletonMeBubble, { width: '66%' }]}>
+          <View style={[styles.skeletonLine, styles.skeletonLineMe]} />
+          <View style={[styles.skeletonLine, styles.skeletonLineMe, { width: '50%' }]} />
+          <View style={[styles.skeletonTime, styles.skeletonTimeRight]} />
+        </View>
+      </View>
+
+      {/* 9. Received: 2 lines */}
+      <View style={[styles.skeletonRow, styles.skeletonTheirRow]}>
+        <View style={[styles.skeletonBubble, styles.skeletonTheirBubble, { width: '52%' }]}>
+          <View style={styles.skeletonLine} />
+          <View style={[styles.skeletonLine, { width: '60%' }]} />
+          <View style={[styles.skeletonTime, styles.skeletonTimeLeft]} />
+        </View>
+      </View>
+    </Animated.View>
   );
 }
 
@@ -1700,8 +1802,21 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   skeletonList: {
-    paddingVertical: 8,
-    gap: 10,
+    paddingVertical: 12,
+    gap: 12,
+    flexGrow: 1,
+  },
+  skeletonDateWrap: {
+    alignItems: 'center',
+    marginVertical: 4,
+  },
+  skeletonDatePill: {
+    width: 84,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   skeletonRow: {
     flexDirection: 'row',
@@ -1714,25 +1829,81 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   skeletonBubble: {
-    width: '62%',
     borderRadius: 16,
     padding: 12,
-    gap: 8,
-    backgroundColor: colors.surfaceElevated,
-    borderWidth: 1,
-    borderColor: colors.border,
+    gap: 7,
+    ...shadows.sm,
   },
   skeletonMeBubble: {
-    opacity: 0.75,
+    backgroundColor: 'rgba(16, 185, 129, 0.14)',
+    borderColor: 'rgba(16, 185, 129, 0.28)',
+    borderWidth: 1,
+    borderBottomRightRadius: 4,
   },
-  skeletonTheirBubble: {},
+  skeletonTheirBubble: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderBottomLeftRadius: 4,
+  },
   skeletonLine: {
     height: 10,
     borderRadius: 5,
     backgroundColor: colors.surfaceHighlight,
+    width: '100%',
   },
-  skeletonShortLine: {
-    width: '55%',
+  skeletonLineMe: {
+    backgroundColor: 'rgba(16, 185, 129, 0.28)',
+  },
+  skeletonTime: {
+    height: 8,
+    width: 32,
+    borderRadius: 4,
+    alignSelf: 'flex-end',
+    marginTop: 2,
+  },
+  skeletonTimeLeft: {
+    backgroundColor: colors.surfaceElevated,
+  },
+  skeletonTimeRight: {
+    backgroundColor: 'rgba(16, 185, 129, 0.35)',
+  },
+  skeletonMediaBox: {
+    height: 116,
+    borderRadius: 10,
+    backgroundColor: 'rgba(16, 185, 129, 0.22)',
+    width: '100%',
+  },
+  skeletonAudioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 2,
+  },
+  skeletonPlayCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceHighlight,
+  },
+  skeletonWaveforms: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: 28,
+    paddingHorizontal: 4,
+  },
+  skeletonWaveBar: {
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: colors.surfaceHighlight,
+  },
+  skeletonAudioDuration: {
+    width: 22,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.surfaceHighlight,
   },
   emptyThread: {
     flex: 1,
