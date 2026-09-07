@@ -103,7 +103,6 @@ export function ChatMenuModal({
           <View style={styles.peerCard}>
             <Text style={styles.peerName}>{participant.name}</Text>
             <Text style={styles.peerHandle}>{participant.handle}</Text>
-            <Text style={styles.peerFingerprint}>Safety Number: {participant.fingerprintHash}</Text>
           </View>
 
           {/* Menu Items */}
@@ -243,12 +242,6 @@ const styles = StyleSheet.create({
     color: colors.primaryDark,
     marginTop: 1,
     fontWeight: '600',
-  },
-  peerFingerprint: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    fontFamily: 'monospace',
-    marginTop: 4,
   },
   menuContainer: {
     backgroundColor: colors.surface,

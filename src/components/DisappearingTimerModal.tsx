@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Modal,
   View,
@@ -9,8 +9,6 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  TouchableWithoutFeedback,
-  Keyboard,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Flame, X, Clock, Check, Plus, Shield } from './Icons';
@@ -44,9 +42,21 @@ export function DisappearingTimerModal({
   const [minutes, setMinutes] = useState<string>(initialMinutes > 0 ? String(initialMinutes) : '0');
   const [activeTab, setActiveTab] = useState<'presets' | 'custom'>('presets');
 
-  // Reset local state whenever modal opens
+  // Raw digits while typing — never rewrite/clamp mid-keystroke (rewriting
+  // the controlled value under the finger is what made the fields flicker).
+  // Normalization happens on blur and when applying.
+  const toNum = (s: string) => {
+    const n = parseInt(s || '0', 10);
+    return isNaN(n) ? 0 : Math.max(0, n);
+  };
+  const normalizeHours = () => setHours(prev => String(toNum(prev)));
+  const normalizeMinutes = () => setMinutes(prev => String(Math.min(59, toNum(prev))));
+
+  // Reset local state only on the closed→open transition. Resetting on every
+  // currentTimer change would clobber the fields while the user is typing.
+  const wasVisible = useRef(false);
   useEffect(() => {
-    if (visible) {
+    if (visible && !wasVisible.current) {
       const h = Math.floor(currentTimer / 3600);
       const m = Math.floor((currentTimer % 3600) / 60);
       setHours(String(h));
@@ -59,9 +69,10 @@ export function DisappearingTimerModal({
         setActiveTab('presets');
       }
     }
+    wasVisible.current = visible;
   }, [visible, currentTimer]);
 
-  const customTotalSeconds = (parseInt(hours || '0', 10) * 3600) + (parseInt(minutes || '0', 10) * 60);
+  const customTotalSeconds = (toNum(hours) * 3600) + (Math.min(59, toNum(minutes)) * 60);
 
   const handleSelectPreset = (value: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
@@ -77,22 +88,20 @@ export function DisappearingTimerModal({
 
   const adjustHours = (delta: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    const currentH = parseInt(hours || '0', 10);
-    const nextH = Math.max(0, currentH + delta);
+    const nextH = Math.max(0, toNum(hours) + delta);
     setHours(String(nextH));
   };
 
   const adjustMinutes = (delta: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    const currentM = parseInt(minutes || '0', 10);
-    const nextM = Math.max(0, Math.min(59, currentM + delta));
+    const nextM = Math.max(0, Math.min(59, toNum(minutes) + delta));
     setMinutes(String(nextM));
   };
 
   const addQuickDuration = (addedHours: number, addedMinutes: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    const currentH = parseInt(hours || '0', 10);
-    const currentM = parseInt(minutes || '0', 10);
+    const currentH = toNum(hours);
+    const currentM = Math.min(59, toNum(minutes));
     const totalM = currentM + addedMinutes;
     const extraH = Math.floor(totalM / 60);
     const finalM = totalM % 60;
@@ -112,7 +121,6 @@ export function DisappearingTimerModal({
         style={styles.modalOverlay}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={styles.sheetContainer}>
             {/* Top Drag Indicator */}
             <View style={styles.dragIndicator} />
@@ -129,6 +137,7 @@ export function DisappearingTimerModal({
             <ScrollView
               contentContainerStyle={styles.scrollContent}
               keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
               showsVerticalScrollIndicator={false}
             >
               {/* Header Badge & Title */}
@@ -251,6 +260,7 @@ export function DisappearingTimerModal({
                           maxLength={3}
                           value={hours}
                           onChangeText={text => setHours(text.replace(/[^0-9]/g, ''))}
+                          onBlur={normalizeHours}
                           selectTextOnFocus
                         />
 
@@ -282,13 +292,10 @@ export function DisappearingTimerModal({
                         <TextInput
                           style={styles.timeInput}
                           keyboardType="number-pad"
-                          maxLength={2}
+                          maxLength={3}
                           value={minutes}
-                          onChangeText={text => {
-                            const clean = text.replace(/[^0-9]/g, '');
-                            const num = parseInt(clean || '0', 10);
-                            setMinutes(String(Math.min(59, num)));
-                          }}
+                          onChangeText={text => setMinutes(text.replace(/[^0-9]/g, ''))}
+                          onBlur={normalizeMinutes}
                           selectTextOnFocus
                         />
 
@@ -372,7 +379,6 @@ export function DisappearingTimerModal({
               )}
             </ScrollView>
           </View>
-        </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
     </Modal>
   );

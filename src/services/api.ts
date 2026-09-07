@@ -311,6 +311,27 @@ export const api = {
     }
   },
 
+  // Contacts: Mark Safety Number Verified / Unverify. The server only accepts
+  // verification when the submitted number matches the number derived from
+  // both parties' current keys (stale numbers after key rotation are
+  // rejected), and persists it so it survives reloads and other devices.
+  async verifySafetyNumber(
+    peerId: string,
+    safetyNumber: string,
+    verified: boolean
+  ): Promise<{ success: boolean; error?: string; safetyNumber?: string; isVerified?: boolean; verifiedSafetyNumber?: string | null }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/contacts/verify`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify({ peerId, safetyNumber, verified }),
+      });
+      return await safeParseResponse(res, { success: false });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to update verification' };
+    }
+  },
+
   // Contacts: Clear Chat History
   async clearChatHistory(peerId: string) {
     try {

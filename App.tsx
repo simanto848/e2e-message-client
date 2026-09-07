@@ -1157,6 +1157,28 @@ export default function App() {
       }
 
       setChats(withDecryptedPreviews);
+      // Safety-number key-change detection: the server revokes verification
+      // when either party rotates keys. If a contact we had verified flips to
+      // unverified with a different number, warn loudly (possible MITM or
+      // legitimate reinstall — either way the user must re-check in person).
+      try {
+        const prevById = new Map(chatsRef.current.map(c => [c.id, c]));
+        for (const c of withDecryptedPreviews) {
+          const prev = prevById.get(c.id);
+          if (!prev || isDecoyMode) continue;
+          const wasVerified = prev.isVerifiedSafetyNumber === true;
+          const nowUnverified = c.isVerifiedSafetyNumber !== true;
+          const numberChanged = Boolean(prev.safetyNumber && c.safetyNumber && prev.safetyNumber !== c.safetyNumber);
+          if (wasVerified && nowUnverified && numberChanged) {
+            notificationService.showSecurityNotification({
+              title: 'Safety Number Changed',
+              message: `${c.participant.name}'s safety number changed. Verify again in person before trusting this chat.`,
+              type: 'key_change',
+              onPress: () => setSafetyModalChat(c),
+            }).catch(() => {});
+          }
+        }
+      } catch {}
       setIncomingRequests(reqs.incoming || []);
       setOutgoingRequests(reqs.outgoing || []);
       setInvites(userInvites || []);
@@ -1448,6 +1470,33 @@ export default function App() {
       );
     });
 
+    // Safety-number verification changed on another of this user's sessions:
+    // patch every matching thread (+ the open modal) so devices agree.
+    const unsubSafety = socketService.onSafetyNumberUpdated(data => {
+      setChats(prev =>
+        prev.map(c =>
+          c.participant?.id === data.peerId || c.id === data.peerId
+            ? {
+                ...c,
+                isVerifiedSafetyNumber: Boolean(data.isVerified),
+                safetyNumber: data.safetyNumber || c.safetyNumber,
+                verifiedSafetyNumber: data.verifiedSafetyNumber ?? null,
+              }
+            : c
+        )
+      );
+      setSafetyModalChat(prev =>
+        prev && (prev.participant?.id === data.peerId || prev.id === data.peerId)
+          ? {
+              ...prev,
+              isVerifiedSafetyNumber: Boolean(data.isVerified),
+              safetyNumber: data.safetyNumber || prev.safetyNumber,
+              verifiedSafetyNumber: data.verifiedSafetyNumber ?? null,
+            }
+          : prev
+      );
+    });
+
     // Call Signal (Incoming Call & Signaling with SAS verification).
     // WebRTC's own connection handshake (offer/answer/ice-candidate) drives
     // real-time audio/video now — this handler wires those signals into
@@ -1641,6 +1690,7 @@ export default function App() {
       unsubStatus();
       unsubTyping();
       unsubDelete();
+      unsubSafety();
       unsubCall();
       unsubPresenceSnapshot();
       unsubPresenceUpdate();
@@ -2291,16 +2341,33 @@ export default function App() {
           participant={safetyModalChat?.participant || null}
           safetyNumber={safetyModalChat?.safetyNumber}
           isVerified={safetyModalChat?.isVerifiedSafetyNumber ?? false}
-          onToggleVerify={() => {
-            if (!safetyModalChat) return;
-            setChats(prev =>
-              prev.map(c =>
-                c.id === safetyModalChat.id
-                  ? { ...c, isVerifiedSafetyNumber: !c.isVerifiedSafetyNumber }
-                  : c
-              )
-            );
-            setSafetyModalChat(prev => (prev ? { ...prev, isVerifiedSafetyNumber: !prev.isVerifiedSafetyNumber } : null));
+          verifiedSafetyNumber={safetyModalChat?.verifiedSafetyNumber ?? null}
+          onToggleVerify={async (safetyNumber, nextVerified) => {
+            if (!safetyModalChat || !currentUser || !safetyNumber) return false;
+            const peerId = safetyModalChat.participant.id;
+            try {
+              const res = await api.verifySafetyNumber(peerId, safetyNumber, nextVerified);
+              if (!res?.success) {
+                throw new Error(res?.error || 'Verification rejected');
+              }
+              const patch = {
+                isVerifiedSafetyNumber: Boolean(res.isVerified),
+                safetyNumber: res.safetyNumber || safetyNumber,
+                verifiedSafetyNumber: res.verifiedSafetyNumber ?? null,
+              };
+              setChats(prev => prev.map(c => (c.id === safetyModalChat.id ? { ...c, ...patch } : c)));
+              setSafetyModalChat(prev => (prev ? { ...prev, ...patch } : null));
+              return true;
+            } catch (err: any) {
+              console.warn('[SafetyNumber] Verify failed:', err);
+              Alert.alert(
+                'Verification Failed',
+                err?.message || 'Could not update verification. The safety number may have changed — re-check in person.'
+              );
+              // Resync from server so a stale local state can't linger.
+              if (currentUser) reloadDynamicData(currentUser.id).catch(() => {});
+              return false;
+            }
           }}
           onClose={() => setSafetyModalChat(null)}
         />

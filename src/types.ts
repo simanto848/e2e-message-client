@@ -90,6 +90,9 @@ export interface ChatThread {
   disappearingTimer: DisappearingTimer;
   safetyNumber: string;
   isVerifiedSafetyNumber: boolean;
+  // The exact safety number last marked verified (null = never verified).
+  // When set but different from safetyNumber, keys rotated since verification.
+  verifiedSafetyNumber?: string | null;
   theme?: ChatCustomTheme;
   notificationSettings: {
     muted: boolean;

@@ -28,11 +28,13 @@ import {
   Send,
   Paperclip,
   CheckCircle2,
+  ShieldAlert,
   Lock,
   MoreVertical,
   X,
 } from '../components/Icons';
 import { ChatThread, Message, UserProfile, Attachment, DisappearingTimer } from '../types';
+import { isSafetyNumberChanged } from '../utils/verification';
 import { ChatBubble } from '../components/ChatBubble';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 import { ChatMenuModal } from '../components/ChatMenuModal';
@@ -604,11 +606,15 @@ export function ChatScreen({
               <Avatar uri={participant.avatar} name={participant.name} size={40} />
             </View>
             <View style={[styles.presenceDot, isOnline ? styles.presenceOnline : styles.presenceOffline]} />
-            {chat.isVerifiedSafetyNumber && (
+            {chat.isVerifiedSafetyNumber ? (
               <View style={styles.verifiedBadge}>
                 <CheckCircle2 size={13} color="#ffffff" />
               </View>
-            )}
+            ) : isSafetyNumberChanged(chat) ? (
+              <View style={[styles.verifiedBadge, styles.changedBadge]}>
+                <ShieldAlert size={13} color="#ffffff" />
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.peerTextContainer}>
@@ -992,6 +998,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1.5,
     borderColor: colors.surface,
+  },
+  changedBadge: {
+    backgroundColor: '#d97706',
   },
   peerTextContainer: {
     flex: 1,

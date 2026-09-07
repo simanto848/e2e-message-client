@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput, RefreshControl, BackHandler } from 'react-native';
 import { Avatar } from '../components/Avatar';
-import { Search, Pin, ShieldCheck, Flame, Plus, CheckCircle2, UserPlus, X, UserCheck, Check, CheckCheck } from '../components/Icons';
+import { Search, Pin, ShieldCheck, ShieldAlert, Flame, Plus, CheckCircle2, UserPlus, X, UserCheck, Check, CheckCheck } from '../components/Icons';
 import { ChatThread } from '../types';
+import { isSafetyNumberChanged } from '../utils/verification';
 import { colors, shadows } from '../theme';
 import { formatDisappearingTimer } from '../utils/timerUtils';
 import { formatLastSeen } from '../utils/dateUtils';
@@ -187,9 +188,11 @@ export function ChatListScreen({
                 <View style={styles.nameRow}>
                   <View style={styles.nameBadges}>
                     <Text style={styles.nameText} numberOfLines={1} ellipsizeMode="tail">{participant.name}</Text>
-                    {item.isVerifiedSafetyNumber && (
+                    {item.isVerifiedSafetyNumber ? (
                       <CheckCircle2 size={13} color={colors.primary} />
-                    )}
+                    ) : isSafetyNumberChanged(item) ? (
+                      <ShieldAlert size={13} color="#d97706" />
+                    ) : null}
                   </View>
 
                   <View style={styles.nameRightCol}>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Modal, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
-import { ShieldCheck, X, CheckCircle, QrCode, Copy } from './Icons';
-import * as Clipboard from 'expo-clipboard';
+import { View, Text, Modal, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import QRCode from 'react-native-qrcode-svg';
+import { ShieldCheck, ShieldAlert, X, CheckCircle } from './Icons';
 import { ChatThread, UserProfile } from '../types';
 import { generateSafetyNumbers } from '../utils/crypto';
 import { colors, shadows } from '../theme';
@@ -13,7 +13,10 @@ interface Props {
   participant?: UserProfile | null;
   safetyNumber?: string;
   isVerified?: boolean;
-  onToggleVerify?: () => void;
+  verifiedSafetyNumber?: string | null;
+  // Persists the change server-side; resolves true only when the server
+  // accepted it (stale numbers after key rotation are rejected).
+  onToggleVerify?: (safetyNumber: string | null, nextVerified: boolean) => Promise<boolean>;
   onClose: () => void;
 }
 
@@ -24,17 +27,21 @@ export function SafetyNumberModal({
   participant: directParticipant,
   safetyNumber: initialSafetyNumber,
   isVerified: initialIsVerified = false,
+  verifiedSafetyNumber: initialVerifiedNumber = null,
   onToggleVerify,
   onClose,
 }: Props) {
   const participant = chat?.participant || directParticipant;
   const [computedSafetyNumber, setComputedSafetyNumber] = useState<string | null>(initialSafetyNumber || null);
   const [isVerified, setIsVerified] = useState(initialIsVerified);
+  const [verifiedNumber, setVerifiedNumber] = useState<string | null>(initialVerifiedNumber);
   const [isComputing, setIsComputing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     setIsVerified(initialIsVerified);
-  }, [initialIsVerified, participant?.id]);
+    setVerifiedNumber(initialVerifiedNumber);
+  }, [initialIsVerified, initialVerifiedNumber, participant?.id]);
 
   useEffect(() => {
     let active = true;
@@ -63,13 +70,58 @@ export function SafetyNumberModal({
   if (!participant) return null;
 
   const displaySafetyNumber = computedSafetyNumber || (isComputing ? 'Computing safety number…' : 'Awaiting keys');
-  const copySafetyNumber = async () => {
-    if (computedSafetyNumber) {
-      await Clipboard.setStringAsync(computedSafetyNumber);
-    }
-  };
+  // Encoded payload both sides derive identically from the same key pair,
+  // so scanning each other's code verifies without exposing digits on screen.
+  const qrValue = computedSafetyNumber
+    ? `JABY-SAFETY-V1:${computedSafetyNumber.replace(/\s/g, '')}`
+    : 'JABY-SAFETY-V1:PENDING';
 
-  const chunks = computedSafetyNumber ? computedSafetyNumber.split(' ') : [];
+  // Keys rotated since the last verification: the old approval is revoked
+  // and the user must compare again in person.
+  const numberChanged =
+    !!verifiedNumber && !!computedSafetyNumber && verifiedNumber.replace(/\s/g, '') !== computedSafetyNumber.replace(/\s/g, '');
+  const showVerified = isVerified && !numberChanged;
+
+  const handleVerifyPress = () => {
+    if (isSaving || !onToggleVerify) return;
+    if (showVerified) {
+      Alert.alert(
+        'Remove Verification',
+        `Stop trusting ${participant.name}'s identity? You'll need to compare safety numbers again.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: async () => {
+              setIsSaving(true);
+              try {
+                const ok = await onToggleVerify(computedSafetyNumber, false);
+                if (ok) {
+                  setIsVerified(false);
+                }
+              } finally {
+                setIsSaving(false);
+              }
+            },
+          },
+        ]
+      );
+      return;
+    }
+    (async () => {
+      setIsSaving(true);
+      try {
+        const ok = await onToggleVerify(computedSafetyNumber, true);
+        if (ok) {
+          setIsVerified(true);
+          setVerifiedNumber(computedSafetyNumber);
+        }
+      } finally {
+        setIsSaving(false);
+      }
+    })();
+  };
 
   return (
     <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
@@ -87,43 +139,71 @@ export function SafetyNumberModal({
 
           <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
             <Text style={styles.subtitle}>
-              Compare this number with <Text style={styles.bold}>{participant.name}</Text> to confirm your chat is private.
+              Scan this code with <Text style={styles.bold}>{participant.name}'s</Text> phone to confirm your chat is private.
             </Text>
 
-            {/* QR Simulation Box */}
+            {/* Real scannable QR — the only way to verify (no copy, no visible digits) */}
             <View style={styles.qrContainer}>
-              <View style={styles.qrBox}>
-                <QrCode size={110} color={colors.primaryDark} />
+              <View style={styles.qrCard}>
+                {computedSafetyNumber ? (
+                  <QRCode
+                    value={qrValue}
+                    size={190}
+                    color="#111827"
+                    backgroundColor="#ffffff"
+                  />
+                ) : (
+                  <View style={styles.qrPlaceholder}>
+                    <ActivityIndicator size="large" color={colors.primary} />
+                    <Text style={styles.qrPlaceholderText}>{displaySafetyNumber}</Text>
+                  </View>
+                )}
               </View>
-              <Text style={styles.qrLabel}>Scan QR code on your friend's phone</Text>
+              <Text style={styles.qrName}>{participant.name}</Text>
+              <Text style={styles.qrLabel}>Scan this code with {participant.name}'s phone to verify</Text>
             </View>
 
-            {/* 60-Digit Numbers in 12 blocks of 5 */}
-            <View style={styles.numbersGrid}>
-              {chunks.map((chunk, idx) => (
-                <View key={idx} style={styles.chunkItem}>
-                  <Text style={styles.chunkIndex}>{idx + 1}</Text>
-                  <Text style={styles.chunkText}>{chunk}</Text>
-                </View>
-              ))}
-            </View>
-
-            <TouchableOpacity style={styles.copyButton} onPress={copySafetyNumber}>
-              <Copy size={16} color={colors.primaryDark} />
-              <Text style={styles.copyButtonText}>Copy Safety Number</Text>
-            </TouchableOpacity>
+            {/* Key-change warning: previously verified, but the number moved */}
+            {numberChanged && (
+              <View style={styles.changedBanner}>
+                <ShieldAlert size={16} color="#b45309" />
+                <Text style={styles.changedText}>
+                  Safety number changed since you verified — {participant.name}'s keys may have rotated (new install) or someone may be intercepting. Compare again in person before trusting this chat.
+                </Text>
+              </View>
+            )}
 
             {/* Verification Action */}
             <TouchableOpacity
-              style={[styles.verifyButton, isVerified ? styles.verifiedBtn : styles.unverifiedBtn]}
-              onPress={() => {
-                setIsVerified(!isVerified);
-                if (onToggleVerify) onToggleVerify();
-              }}
+              style={[
+                styles.verifyButton,
+                showVerified ? styles.verifiedBtn : numberChanged ? styles.changedBtn : styles.unverifiedBtn,
+                (isSaving || !computedSafetyNumber) && styles.verifyButtonDisabled,
+              ]}
+              onPress={handleVerifyPress}
+              disabled={isSaving || !computedSafetyNumber}
+              accessibilityRole="button"
+              accessibilityLabel={
+                showVerified
+                  ? `Verified contact. Remove verification for ${participant.name}`
+                  : numberChanged
+                    ? `Verify new safety number for ${participant.name}`
+                    : `Mark ${participant.name} as verified`
+              }
             >
-              <CheckCircle size={18} color="#ffffff" />
+              {isSaving ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <CheckCircle size={18} color="#ffffff" />
+              )}
               <Text style={styles.verifyButtonText}>
-                {isVerified ? 'Verified Contact' : 'Mark as Verified'}
+                {isSaving
+                  ? 'Saving…'
+                  : showVerified
+                    ? 'Verified Contact'
+                    : numberChanged
+                      ? 'Verify New Number'
+                      : 'Mark as Verified'}
               </Text>
             </TouchableOpacity>
           </ScrollView>
@@ -189,65 +269,40 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20,
   },
-  qrBox: {
-    padding: 16,
-    backgroundColor: colors.primaryLight,
+  qrCard: {
+    width: 230,
+    height: 230,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#a7f3d0',
-    marginBottom: 8,
+    borderColor: colors.border,
+    marginBottom: 12,
+    ...shadows.lg,
   },
-  qrLabel: {
-    fontSize: 11,
+  qrPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  qrPlaceholderText: {
+    fontSize: 12,
     color: colors.textSecondary,
     fontWeight: '600',
   },
-  numbersGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  chunkItem: {
-    width: '31%',
-    backgroundColor: colors.surfaceElevated,
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  chunkIndex: {
-    fontSize: 9,
-    color: colors.textMuted,
+  qrName: {
+    fontSize: 15,
     fontWeight: '800',
-    marginBottom: 2,
+    color: colors.textPrimary,
+    marginBottom: 4,
   },
-  chunkText: {
-    fontSize: 13,
-    fontWeight: '800',
-    fontFamily: 'monospace',
-    color: colors.primaryDark,
-    letterSpacing: 1,
-  },
-  copyButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: colors.primaryLight,
-    paddingVertical: 12,
-    borderRadius: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#a7f3d0',
-  },
-  copyButtonText: {
-    color: colors.primaryDark,
-    fontSize: 13,
-    fontWeight: '700',
+  qrLabel: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontWeight: '600',
+    textAlign: 'center',
+    paddingHorizontal: 24,
   },
   verifyButton: {
     flexDirection: 'row',
@@ -256,6 +311,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 14,
     borderRadius: 12,
+    marginTop: 4,
     ...shadows.sm,
   },
   verifiedBtn: {
@@ -263,6 +319,29 @@ const styles = StyleSheet.create({
   },
   unverifiedBtn: {
     backgroundColor: colors.accentBlue,
+  },
+  changedBtn: {
+    backgroundColor: '#d97706',
+  },
+  verifyButtonDisabled: {
+    opacity: 0.6,
+  },
+  changedBanner: {
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  changedText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#92400e',
+    fontWeight: '600',
   },
   verifyButtonText: {
     color: '#ffffff',

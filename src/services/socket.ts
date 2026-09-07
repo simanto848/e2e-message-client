@@ -218,6 +218,14 @@ class SocketService {
     return this.addEventListener('message_deleted_everyone', callback);
   }
 
+  // Safety-number verification changed on one of this user's other sessions:
+  // patch the matching thread so every device agrees.
+  onSafetyNumberUpdated(
+    callback: (data: { peerId: string; safetyNumber: string; isVerified: boolean; verifiedSafetyNumber: string | null }) => void
+  ) {
+    return this.addEventListener('safety_number_updated', callback);
+  }
+
   onCallSignal(callback: (signal: any) => void) {
     return this.addEventListener('call_signal', callback);
   }
