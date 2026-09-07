@@ -7,6 +7,7 @@ import {
   UserX,
   X,
   ChevronRight,
+  Search,
 } from './Icons';
 import { ChatThread, DisappearingTimer } from '../types';
 import { colors, shadows } from '../theme';
@@ -19,6 +20,7 @@ interface Props {
   onUpdateDisappearingTimer: (timer: DisappearingTimer) => void;
   onClearHistory: () => void;
   onDisconnectContact: () => void;
+  onSearchMessages: () => void;
   onClose: () => void;
 }
 
@@ -40,6 +42,7 @@ export function ChatMenuModal({
   onUpdateDisappearingTimer,
   onClearHistory,
   onDisconnectContact,
+  onSearchMessages,
   onClose,
 }: Props) {
   const participant = chat.participant;
@@ -157,6 +160,23 @@ export function ChatMenuModal({
                 ))}
               </View>
             </View>
+
+            {/* Search in Conversation */}
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                onClose();
+                onSearchMessages();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Search messages in this conversation"
+            >
+              <View style={styles.rowAlign}>
+                <Search size={18} color={colors.textSecondary} />
+                <Text style={styles.menuText}>Search in Conversation</Text>
+              </View>
+              <ChevronRight size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
 
             {/* Clear History */}
             <TouchableOpacity

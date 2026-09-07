@@ -257,7 +257,7 @@ export const api = {
   },
 
   // Messages: Send Message via REST for guaranteed DB persistence
-  async sendMessage(msg: Message) {
+  async sendMessage(msg: Message): Promise<{ success: boolean; error?: string; messageId?: string }> {
     try {
       const res = await fetch(`${API_BASE_URL}/contacts/messages/send`, {
         method: 'POST',
@@ -265,9 +265,9 @@ export const api = {
         body: JSON.stringify(msg),
       });
       return await safeParseResponse(res, { success: false });
-    } catch (err) {
+    } catch (err: any) {
       console.warn('REST sendMessage failed, fallback to socket:', err);
-      return { success: false };
+      return { success: false, error: err?.message || 'Network error' };
     }
   },
 
@@ -287,9 +287,16 @@ export const api = {
   },
 
   // Messages: Fetch History for Contact
-  async getMessages(chatId: string, userId: string): Promise<Message[]> {
+  async getMessages(chatId: string, userId: string, opts?: { limit?: number; before?: number }): Promise<Message[]> {
     try {
-      const res = await fetch(`${API_BASE_URL}/contacts/messages/${chatId}/${userId}`, { headers: await authHeaders() });
+      const params = new URLSearchParams();
+      if (opts?.limit) params.set('limit', String(opts.limit));
+      if (opts?.before) params.set('before', String(opts.before));
+      const qs = params.toString();
+      const res = await fetch(
+        `${API_BASE_URL}/contacts/messages/${chatId}/${userId}${qs ? `?${qs}` : ''}`,
+        { headers: await authHeaders() }
+      );
       const data = await safeParseResponse(res, { messages: [] });
       return data.messages || [];
     } catch {

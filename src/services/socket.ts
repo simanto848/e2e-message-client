@@ -218,6 +218,31 @@ class SocketService {
     return this.addEventListener('message_deleted_everyone', callback);
   }
 
+  // Connection lifecycle for offline/online UI + outbox flushing. These ride
+  // the same rebind-safe registry as every other listener, so they survive
+  // reconnects and resubscribes.
+  onConnect(callback: () => void) {
+    return this.addEventListener('connect', callback);
+  }
+
+  onDisconnect(callback: (reason: string) => void) {
+    return this.addEventListener('disconnect', callback);
+  }
+
+  // Screenshot capture notice (Signal-style): tell the peer their chat
+  // screen may have been captured. Server verifies contacts + identity.
+  sendScreenshotNotice(peerId: string, chatId: string) {
+    if (this.socket?.connected) {
+      this.socket.emit('screenshot_notice', { peerId, chatId });
+    }
+  }
+
+  onScreenshotNotice(
+    callback: (data: { senderId: string; senderName: string; chatId: string; timestamp: number }) => void
+  ) {
+    return this.addEventListener('screenshot_notice', callback);
+  }
+
   // Safety-number verification changed on one of this user's other sessions:
   // patch the matching thread so every device agrees.
   onSafetyNumberUpdated(

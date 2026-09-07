@@ -31,6 +31,9 @@ import {
   ShieldAlert,
   Lock,
   MoreVertical,
+  Search,
+  ChevronUp,
+  ChevronDown,
   X,
 } from '../components/Icons';
 import { ChatThread, Message, UserProfile, Attachment, DisappearingTimer } from '../types';
@@ -39,6 +42,7 @@ import { ChatBubble } from '../components/ChatBubble';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 import { ChatMenuModal } from '../components/ChatMenuModal';
 import { DisappearingTimerModal } from '../components/DisappearingTimerModal';
+import { ImageViewerModal } from '../components/ImageViewerModal';
 import { colors, shadows } from '../theme';
 import { encryptMessage, decryptMessage, IdentityKeyPair } from '../utils/crypto';
 import { api } from '../services/api';
@@ -55,8 +59,15 @@ interface Props {
   mySecretKey: string;
   historicalKeys?: IdentityKeyPair[];
   messages: Message[];
+  messagesLoading?: boolean;
   isOnline: boolean;
   lastActiveAt?: number;
+  isOffline?: boolean;
+  pendingCount?: number;
+  onRetrySend?: (messageId: string) => void;
+  onLoadOlder?: () => void;
+  hasMoreMessages?: boolean;
+  loadingMore?: boolean;
   onBack: () => void;
   onSendMessage: (text: string, attachment?: Attachment, replyToId?: string) => void;
   onDeleteForEveryone: (messageId: string) => void;
@@ -74,14 +85,54 @@ type ImageResolution = { status: 'loading' } | { status: 'ready'; dataUri: strin
 const PLAYBACK_SPEEDS = [1.0, 1.5, 2.0];
 const HIT_SLOP = { top: 10, bottom: 10, left: 10, right: 10 };
 
+type ThreadItem =
+  | { kind: 'date'; id: string; label: string }
+  | { kind: 'msg'; id: string; message: Message };
+
+function formatDayLabel(timestamp: number): string {
+  const ts = typeof timestamp === 'number' && timestamp > 0 ? timestamp : Date.now();
+  const d = new Date(ts);
+  const now = new Date();
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  if (diffDays <= 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return d.toLocaleDateString([], { weekday: 'long' });
+  const datePart = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  return d.getFullYear() !== now.getFullYear() ? `${datePart}, ${d.getFullYear()}` : datePart;
+}
+
+function MessageListSkeleton() {
+  const rows = [false, true, false, true];
+  return (
+    <View style={styles.skeletonList}>
+      {rows.map((me, i) => (
+        <View key={i} style={[styles.skeletonRow, me ? styles.skeletonMeRow : styles.skeletonTheirRow]}>
+          <View style={[styles.skeletonBubble, me ? styles.skeletonMeBubble : styles.skeletonTheirBubble]}>
+            <View style={styles.skeletonLine} />
+            <View style={[styles.skeletonLine, styles.skeletonShortLine]} />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export function ChatScreen({
   chat,
   currentUser,
   mySecretKey,
   historicalKeys,
   messages,
+  messagesLoading = false,
   isOnline,
   lastActiveAt,
+  isOffline = false,
+  pendingCount = 0,
+  onRetrySend,
+  onLoadOlder,
+  hasMoreMessages = false,
+  loadingMore = false,
   onBack,
   onSendMessage,
   onDeleteForEveryone,
@@ -101,13 +152,25 @@ export function ChatScreen({
   const [showMenuModal, setShowMenuModal] = useState(false);
   const [showDisappearingModal, setShowDisappearingModal] = useState(false);
   const [resolvedImages, setResolvedImages] = useState<Record<string, ImageResolution>>({});
+  const [viewingImageId, setViewingImageId] = useState<string | null>(null);
   const [playingAudioMsgId, setPlayingAudioMsgId] = useState<string | null>(null);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [localReactions, setLocalReactions] = useState<Record<string, string>>({});
   const soundRef = useRef<Audio.Sound | null>(null);
-  const flatListRef = useRef<FlatList<Message>>(null);
+  const flatListRef = useRef<FlatList<ThreadItem>>(null);
   const inputRef = useRef<TextInput>(null);
+  const searchInputRef = useRef<TextInput>(null);
   const isNearBottomRef = useRef(true);
+  const [showScrollDown, setShowScrollDown] = useState(false);
+  const [newArrivedCount, setNewArrivedCount] = useState(0);
+  const prevMsgCountRef = useRef(0);
+  // In-conversation search
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatchIdx, setSearchMatchIdx] = useState(0);
+  // Brief highlight when jumping to a quoted original message.
+  const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
+  const jumpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadingAudioRef = useRef(false);
   const imageLoadingRef = useRef<Set<string>>(new Set());
   const mountedRef = useRef(true);
@@ -154,6 +217,115 @@ export function ChatScreen({
     [safeMessages]
   );
 
+  // Flat thread model with day separators (date pills).
+  const threadItems = useMemo<ThreadItem[]>(() => {
+    const items: ThreadItem[] = [];
+    let lastDay = '';
+    for (const m of safeMessages) {
+      const ts = typeof m.timestamp === 'number' && m.timestamp > 0 ? m.timestamp : Date.now();
+      const dayKey = new Date(ts).toDateString();
+      if (dayKey !== lastDay) {
+        lastDay = dayKey;
+        items.push({ kind: 'date', id: `date-${dayKey}`, label: formatDayLabel(ts) });
+      }
+      items.push({ kind: 'msg', id: m.id, message: m });
+    }
+    return items;
+  }, [safeMessages]);
+
+  // In-conversation search matches (message ids, chronological).
+  const searchMatches = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!searchVisible || !q) return [] as string[];
+    return safeMessages
+      .filter(
+        m =>
+          !m.isDeletedForEveryone &&
+          ((typeof m.text === 'string' && m.text.toLowerCase().includes(q)) ||
+            (m.attachment?.name && m.attachment.name.toLowerCase().includes(q)))
+      )
+      .map(m => m.id);
+  }, [searchVisible, searchQuery, safeMessages]);
+
+  const currentMatchId =
+    searchMatches.length > 0 ? searchMatches[((searchMatchIdx % searchMatches.length) + searchMatches.length) % searchMatches.length] : null;
+
+  const jumpToMatch = useCallback(
+    (idx: number) => {
+      if (searchMatches.length === 0) return;
+      const clamped = ((idx % searchMatches.length) + searchMatches.length) % searchMatches.length;
+      setSearchMatchIdx(clamped);
+      const flatIdx = threadItems.findIndex(it => it.id === searchMatches[clamped]);
+      if (flatIdx >= 0) {
+        try {
+          flatListRef.current?.scrollToIndex({ index: flatIdx, viewPosition: 0.5, animated: true });
+        } catch {
+          // Variable-height rows: best effort, fallback below handles it.
+        }
+      }
+    },
+    [searchMatches, threadItems]
+  );
+
+  // Auto-jump to the first match shortly after the query changes.
+  useEffect(() => {
+    if (!searchVisible || !searchQuery.trim() || searchMatches.length === 0) return;
+    const t = setTimeout(() => jumpToMatch(0), 180);
+    return () => clearTimeout(t);
+  }, [searchQuery, searchVisible, searchMatches.length, jumpToMatch]);
+
+  useEffect(() => {
+    setSearchMatchIdx(0);
+  }, [searchQuery]);
+
+  const openSearch = useCallback(() => {
+    setSearchVisible(true);
+    setSearchQuery('');
+    setSearchMatchIdx(0);
+    setTimeout(() => searchInputRef.current?.focus(), 120);
+  }, []);
+
+  // Jump to the original message a reply quotes (tap the quote block).
+  const jumpToOriginalMessage = useCallback(
+    (msgId: string) => {
+      const flatIdx = threadItems.findIndex(it => it.id === msgId);
+      if (flatIdx < 0) return;
+      try {
+        flatListRef.current?.scrollToIndex({ index: flatIdx, viewPosition: 0.4, animated: true });
+      } catch {
+        // Variable-height rows: best effort.
+      }
+      setJumpHighlightId(msgId);
+      if (jumpTimerRef.current) clearTimeout(jumpTimerRef.current);
+      jumpTimerRef.current = setTimeout(() => setJumpHighlightId(null), 1800);
+    },
+    [threadItems]
+  );
+
+  const closeSearch = useCallback(() => {
+    setSearchVisible(false);
+    setSearchQuery('');
+    setSearchMatchIdx(0);
+  }, []);
+
+  const handleScrollToBottom = useCallback(() => {
+    isNearBottomRef.current = true;
+    setShowScrollDown(false);
+    setNewArrivedCount(0);
+    flatListRef.current?.scrollToEnd({ animated: true });
+  }, []);
+
+  // Count newly arrived messages while scrolled up (drives the ↓ pill).
+  useEffect(() => {
+    if (safeMessages.length > prevMsgCountRef.current) {
+      if (!isNearBottomRef.current) {
+        setNewArrivedCount(c => c + (safeMessages.length - prevMsgCountRef.current));
+        setShowScrollDown(true);
+      }
+    }
+    prevMsgCountRef.current = safeMessages.length;
+  }, [safeMessages.length]);
+
   // Reset per-chat transient state when switching conversations so drafts,
   // replies, reactions and audio never leak into the wrong thread.
   useEffect(() => {
@@ -163,6 +335,15 @@ export function ChatScreen({
     setPlayingAudioMsgId(null);
     setLocalReactions({});
     setResolvedImages({});
+    setSearchVisible(false);
+    setSearchQuery('');
+    setSearchMatchIdx(0);
+    setJumpHighlightId(null);
+    if (jumpTimerRef.current) clearTimeout(jumpTimerRef.current);
+    setViewingImageId(null);
+    setShowScrollDown(false);
+    setNewArrivedCount(0);
+    prevMsgCountRef.current = safeMessages.length;
     imageLoadingRef.current.clear();
     if (soundRef.current) {
       soundRef.current.unloadAsync().catch(() => {});
@@ -172,6 +353,7 @@ export function ChatScreen({
     requestAnimationFrame(() => {
       flatListRef.current?.scrollToEnd({ animated: false });
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat?.id]);
 
   const stopActiveAudio = useCallback(async () => {
@@ -186,12 +368,20 @@ export function ChatScreen({
 
   // Unified back behavior: close topmost layer first, stop audio, then leave.
   const handleBack = useCallback(() => {
+    if (viewingImageId) {
+      setViewingImageId(null);
+      return;
+    }
     if (showDisappearingModal) {
       setShowDisappearingModal(false);
       return;
     }
     if (showMenuModal) {
       setShowMenuModal(false);
+      return;
+    }
+    if (searchVisible) {
+      closeSearch();
       return;
     }
     if (replyingTo) {
@@ -207,7 +397,7 @@ export function ChatScreen({
       return;
     }
     onBack();
-  }, [showDisappearingModal, showMenuModal, replyingTo, isRecording, playingAudioMsgId, stopActiveAudio, onBack]);
+  }, [viewingImageId, showDisappearingModal, showMenuModal, searchVisible, closeSearch, replyingTo, isRecording, playingAudioMsgId, stopActiveAudio, onBack]);
 
   // Handle hardware / swipe back gesture
   useEffect(() => {
@@ -409,6 +599,7 @@ export function ChatScreen({
   // Clean up sound instance on unmount
   useEffect(() => {
     return () => {
+      if (jumpTimerRef.current) clearTimeout(jumpTimerRef.current);
       if (soundRef.current) {
         soundRef.current.unloadAsync().catch(() => {});
         soundRef.current = null;
@@ -724,6 +915,92 @@ export function ChatScreen({
         </View>
       )}
 
+      {/* In-conversation search bar */}
+      {searchVisible && (
+        <View style={styles.searchBar}>
+          <Search size={16} color={colors.textMuted} />
+          <TextInput
+            ref={searchInputRef}
+            style={styles.searchInput}
+            placeholder="Search messages..."
+            placeholderTextColor={colors.textMuted}
+            value={searchQuery}
+            onChangeText={text => {
+              setSearchQuery(text);
+              setSearchMatchIdx(0);
+            }}
+            returnKeyType="search"
+            autoCapitalize="none"
+            autoCorrect={false}
+            accessibilityLabel="Search messages in this conversation"
+          />
+          {searchQuery.length > 0 && (
+            <Text style={styles.searchCount} numberOfLines={1}>
+              {searchMatches.length > 0 ? `${searchMatchIdx + 1}/${searchMatches.length}` : '0'}
+            </Text>
+          )}
+          <TouchableOpacity
+            onPress={() => jumpToMatch(searchMatchIdx - 1)}
+            disabled={searchMatches.length === 0}
+            accessibilityRole="button"
+            accessibilityLabel="Previous match"
+            hitSlop={HIT_SLOP}
+            style={styles.searchNavBtn}
+          >
+            <ChevronUp size={18} color={searchMatches.length === 0 ? colors.textMuted : colors.textPrimary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => jumpToMatch(searchMatchIdx + 1)}
+            disabled={searchMatches.length === 0}
+            accessibilityRole="button"
+            accessibilityLabel="Next match"
+            hitSlop={HIT_SLOP}
+            style={styles.searchNavBtn}
+          >
+            <ChevronDown size={18} color={searchMatches.length === 0 ? colors.textMuted : colors.textPrimary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={closeSearch}
+            accessibilityRole="button"
+            accessibilityLabel="Close search"
+            hitSlop={HIT_SLOP}
+            style={styles.searchNavBtn}
+          >
+            <X size={16} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Offline Banner (realtime disconnected — outbox holds unsent) */}
+      {isOffline && (
+        <View style={styles.offlineBanner} accessibilityRole="alert" accessibilityLabel="You are offline. Messages will send automatically on reconnect.">
+          <View style={styles.offlineDot} />
+          <Text style={styles.offlineText} numberOfLines={2}>
+            You're offline
+            {pendingCount > 0
+              ? ` · ${pendingCount} message${pendingCount === 1 ? '' : 's'} will send on reconnect`
+              : ' · new messages will send on reconnect'}
+          </Text>
+        </View>
+      )}
+
+      {/* Key-Changed Banner (verified before, keys rotated since) */}
+      {isSafetyNumberChanged(chat) && (
+        <TouchableOpacity
+          style={styles.keyChangeBanner}
+          onPress={onOpenSafetyNumbers}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={`Safety number changed for ${participant.name}. Tap to review and re-verify.`}
+        >
+          <ShieldAlert size={15} color="#b45309" />
+          <Text style={styles.keyChangeText} numberOfLines={2}>
+            Safety number changed — re-verify {participant.name} in person
+          </Text>
+          <Text style={styles.keyChangeCta}>Review</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Messages + input live inside the KAV so the header never resizes */}
       <KeyboardAvoidingView
         style={styles.kav}
@@ -733,7 +1010,7 @@ export function ChatScreen({
         {/* Messages Thread */}
         <FlatList
           ref={flatListRef}
-          data={safeMessages}
+          data={threadItems}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.messagesList}
           keyboardShouldPersistTaps="handled"
@@ -743,41 +1020,120 @@ export function ChatScreen({
           removeClippedSubviews={Platform.OS === 'android'}
           onScroll={e => {
             const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
-            isNearBottomRef.current =
+            const near =
               layoutMeasurement.height + contentOffset.y >= contentSize.height - 120;
+            isNearBottomRef.current = near;
+            setShowScrollDown(!near);
+            if (near) setNewArrivedCount(0);
           }}
           scrollEventThrottle={200}
           onContentSizeChange={scrollToBottomIfNeeded}
+          onScrollToIndexFailed={info => {
+            // Variable-height rows: fall back to an estimated offset.
+            flatListRef.current?.scrollToOffset({
+              offset: Math.max(0, info.averageItemLength * info.index - 200),
+              animated: true,
+            });
+            setTimeout(() => {
+              try {
+                flatListRef.current?.scrollToIndex({ index: info.index, viewPosition: 0.5, animated: true });
+              } catch {}
+            }, 250);
+          }}
+          onStartReached={() => {
+            if (hasMoreMessages && !loadingMore && onLoadOlder) onLoadOlder();
+          }}
+          onStartReachedThreshold={0.4}
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+          ListHeaderComponent={
+            loadingMore ? (
+              <View style={styles.historyLoader}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={styles.historyLoaderText}>Loading older messages…</Text>
+              </View>
+            ) : !hasMoreMessages && safeMessages.length > 0 ? (
+              <View style={styles.historyStart}>
+                <Text style={styles.historyStartText}>Beginning of conversation</Text>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
-            <View style={styles.emptyThread}>
-              <Lock size={22} color={colors.textMuted} />
-              <Text style={styles.emptyTitle}>No messages yet</Text>
-              <Text style={styles.emptySubtitle}>Messages here are end-to-end encrypted.</Text>
-            </View>
+            messagesLoading && safeMessages.length === 0 ? (
+              <MessageListSkeleton />
+            ) : (
+              <View style={styles.emptyThread}>
+                <Lock size={22} color={colors.textMuted} />
+                <Text style={styles.emptyTitle}>No messages yet</Text>
+                <Text style={styles.emptySubtitle}>Messages here are end-to-end encrypted.</Text>
+                <Text style={styles.emptyHint}>Tip: swipe any message sideways to reply to it.</Text>
+              </View>
+            )
           }
           renderItem={({ item }) => {
-            const imageAttachment = item.attachment?.type === 'image' ? item.attachment : undefined;
-            const displayMessage = localReactions[item.id]
-              ? { ...item, reaction: localReactions[item.id] }
-              : item;
+            if (item.kind === 'date') {
+              return (
+                <View style={styles.datePillWrap}>
+                  <Text style={styles.datePill}>{item.label}</Text>
+                </View>
+              );
+            }
+            const msg = item.message;
+            const imageAttachment = msg.attachment?.type === 'image' ? msg.attachment : undefined;
+            const displayMessage = localReactions[msg.id]
+              ? { ...msg, reaction: localReactions[msg.id] }
+              : msg;
+            const replyMsg = msg.replyToId ? replyLookup.get(msg.replyToId) : undefined;
             return (
               <ChatBubble
                 message={displayMessage}
-                isMe={item.senderId === currentUser.id}
+                isMe={msg.senderId === currentUser.id}
                 onInspectCiphertext={onInspectCiphertext}
                 onDeleteForEveryone={onDeleteForEveryone}
                 onPlayAudio={handlePlayAudio}
-                isPlayingAudio={playingAudioMsgId === item.id}
+                isPlayingAudio={playingAudioMsgId === msg.id}
                 playbackSpeed={playbackSpeed}
                 onToggleSpeed={handleToggleSpeed}
                 onReact={handleReact}
-                replyMessage={item.replyToId ? replyLookup.get(item.replyToId) : undefined}
+                replyMessage={replyMsg}
+                replySenderName={
+                  replyMsg
+                    ? replyMsg.senderId === currentUser.id
+                      ? 'You'
+                      : participant?.name || 'Contact'
+                    : undefined
+                }
+                onJumpToReply={jumpToOriginalMessage}
+                onRetrySend={onRetrySend}
+                onPressImage={setViewingImageId}
                 onReply={setReplyingTo}
                 imageResolution={imageAttachment ? resolvedImages[imageAttachment.id] : undefined}
+                highlight={msg.id === currentMatchId || msg.id === jumpHighlightId}
+                searchQuery={searchVisible ? searchQuery : undefined}
               />
             );
           }}
         />
+
+        {/* Jump-to-latest pill (appears when scrolled up) */}
+        {showScrollDown && (
+          <TouchableOpacity
+            style={styles.scrollDownBtn}
+            onPress={handleScrollToBottom}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={newArrivedCount > 0 ? `${newArrivedCount} new messages. Jump to latest.` : 'Jump to latest messages'}
+            hitSlop={HIT_SLOP}
+          >
+            <ChevronDown size={18} color={colors.textPrimary} />
+            {newArrivedCount > 0 && (
+              <View style={styles.scrollDownBadge}>
+                <Text style={styles.scrollDownBadgeText}>
+                  {newArrivedCount > 99 ? '99+' : newArrivedCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        )}
 
         {/* Input Bar */}
         <View style={[styles.inputContainer, { paddingBottom: Math.max(10, insets.bottom * 0.6) }]}>
@@ -787,7 +1143,7 @@ export function ChatScreen({
               <View style={styles.replyBarBorder} />
               <View style={styles.replyBarContent}>
                 <Text style={styles.replyBarHeader} numberOfLines={1}>
-                  Replying to {replyingTo.senderId === currentUser.id ? 'yourself' : participant.name}
+                  Replying to {replyingTo.senderId === currentUser.id ? 'yourself' : participant?.name || 'Contact'}
                 </Text>
                 <Text style={styles.replyBarText} numberOfLines={1}>
                   {replyingTo.attachment?.type === 'image'
@@ -887,15 +1243,16 @@ export function ChatScreen({
 
       {/* In-Thread Conversation Controls Modal */}
       {onClearHistory && onDisconnectContact ? (
-        <ChatMenuModal
-          visible={showMenuModal}
-          chat={chat}
-          onOpenSafetyNumbers={onOpenSafetyNumbers}
-          onUpdateDisappearingTimer={onUpdateDisappearingTimer}
-          onClearHistory={onClearHistory}
-          onDisconnectContact={onDisconnectContact}
-          onClose={() => setShowMenuModal(false)}
-        />
+      <ChatMenuModal
+        visible={showMenuModal}
+        chat={chat}
+        onOpenSafetyNumbers={onOpenSafetyNumbers}
+        onUpdateDisappearingTimer={onUpdateDisappearingTimer}
+        onClearHistory={onClearHistory}
+        onDisconnectContact={onDisconnectContact}
+        onSearchMessages={openSearch}
+        onClose={() => setShowMenuModal(false)}
+      />
       ) : null}
 
       {/* Disappearing Timer Selector Modal */}
@@ -906,6 +1263,30 @@ export function ChatScreen({
         onSelectTimer={onUpdateDisappearingTimer}
         onClose={() => setShowDisappearingModal(false)}
       />
+
+      {/* Full-screen Encrypted Image Viewer */}
+      {(() => {
+        const viewingMsg = viewingImageId
+          ? safeMessages.find(m => m.attachment?.id === viewingImageId)
+          : undefined;
+        const viewingRes = viewingImageId ? resolvedImages[viewingImageId] : undefined;
+        return (
+          <ImageViewerModal
+            visible={!!viewingImageId}
+            status={viewingRes?.status}
+            dataUri={viewingRes?.status === 'ready' ? viewingRes.dataUri : undefined}
+            senderName={
+              viewingMsg
+                ? viewingMsg.senderId === currentUser.id
+                  ? 'You'
+                  : participant.name
+                : participant.name
+            }
+            timestamp={viewingMsg?.timestamp}
+            onClose={() => setViewingImageId(null)}
+          />
+        );
+      })()}
     </View>
   );
 }
@@ -1106,6 +1487,141 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     flexGrow: 1,
   },
+  datePillWrap: {
+    alignItems: 'center',
+    marginVertical: 8,
+  },
+  datePill: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  searchInput: {
+    flex: 1,
+    height: 36,
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    color: colors.textPrimary,
+    borderWidth: 1,
+    borderColor: colors.borderFocus,
+  },
+  searchCount: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    minWidth: 30,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+  },
+  searchNavBtn: {
+    padding: 4,
+  },
+  scrollDownBtn: {
+    position: 'absolute',
+    right: 16,
+    bottom: 78,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadows.md,
+  },
+  scrollDownBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  scrollDownBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  historyLoader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+  },
+  historyLoaderText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textMuted,
+  },
+  historyStart: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  historyStartText: {
+    fontSize: 11,
+    color: colors.textMuted,
+    fontStyle: 'italic',
+  },
+  skeletonList: {
+    paddingVertical: 8,
+    gap: 10,
+  },
+  skeletonRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+  },
+  skeletonMeRow: {
+    justifyContent: 'flex-end',
+  },
+  skeletonTheirRow: {
+    justifyContent: 'flex-start',
+  },
+  skeletonBubble: {
+    width: '62%',
+    borderRadius: 16,
+    padding: 12,
+    gap: 8,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  skeletonMeBubble: {
+    opacity: 0.75,
+  },
+  skeletonTheirBubble: {},
+  skeletonLine: {
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.surfaceHighlight,
+  },
+  skeletonShortLine: {
+    width: '55%',
+  },
   emptyThread: {
     flex: 1,
     alignItems: 'center',
@@ -1122,6 +1638,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textMuted,
     textAlign: 'center',
+  },
+  emptyHint: {
+    fontSize: 11,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: 8,
+    fontStyle: 'italic',
   },
   backFallbackBtn: {
     marginTop: 16,
@@ -1249,5 +1772,57 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 11,
     fontWeight: '700',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#fef3c7',
+    borderBottomWidth: 1,
+    borderBottomColor: '#fde68a',
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+  },
+  offlineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#d97706',
+  },
+  offlineText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#92400e',
+    flexShrink: 1,
+  },
+  keyChangeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#fffbeb',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f59e0b',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  keyChangeText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#92400e',
+  },
+  keyChangeCta: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#b45309',
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    overflow: 'hidden',
   },
 });

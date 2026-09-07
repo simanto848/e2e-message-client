@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { StyleSheet, View, StatusBar, Alert, AppState, BackHandler, ToastAndroid, Platform, InteractionManager, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ScreenCapture from 'expo-screen-capture';
@@ -274,6 +274,20 @@ export default function App() {
   // looking identical to "you have zero contacts" during normal startup latency.
   const [isInitialChatsLoading, setIsInitialChatsLoading] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [isMessagesLoading, setIsMessagesLoading] = useState(false);
+  // Paged history: latest PAGE_SIZE first, older windows on scroll-to-top.
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const hasMoreRef = useRef(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
+  const MESSAGE_PAGE_SIZE = 50;
+  // Realtime connectivity (drives offline banner + outbox flushing).
+  const [isSocketConnected, setIsSocketConnected] = useState(socketService.isConnected());
+  // Offline outbox: wire payloads whose REST persist failed (offline send).
+  // The socket layer has its own queue for realtime delivery; this one guards
+  // the DATABASE write, which used to be fire-and-forget (lost forever).
+  const outboxRef = useRef<Map<string, Message>>(new Map());
+  const [outboxCount, setOutboxCount] = useState(0);
   const [incomingRequests, setIncomingRequests] = useState<ContactRequestWithUser[]>([]);
   const [outgoingRequests, setOutgoingRequests] = useState<ContactRequestWithUser[]>([]);
 
@@ -417,6 +431,8 @@ export default function App() {
     isAuthenticated: Boolean(currentUser),
     isCallActive: Boolean(callState.active),
   });
+  const isDecoyModeRef = useRef(isDecoyMode);
+  isDecoyModeRef.current = isDecoyMode;
 
   const handleToggleAntiScreenshot = async (val: boolean) => {
     setAntiScreenshotEnabled(val);
@@ -450,6 +466,35 @@ export default function App() {
     };
     enforce();
   }, [antiScreenshotEnabled, currentUser]);
+
+  // Screenshot-attempt notice: if a capture succeeds while viewing a real
+  // conversation (blocking off or unsupported device), warn loudly and tell
+  // the peer over the verified socket channel (rate-limited server-side).
+  useEffect(() => {
+    if (!currentUser || !activeChatId || isDecoyMode || isAppLocked) return;
+    let sub: { remove: () => void } | null = null;
+    try {
+      sub = ScreenCapture.addScreenshotListener(() => {
+        const chatId = activeChatIdRef.current;
+        if (!chatId || isDecoyModeRef.current) return;
+        const chat = chatsRef.current.find(c => c.id === chatId);
+        if (!chat) return;
+        socketService.sendScreenshotNotice(chat.participant.id, chatId);
+        notificationService.showSecurityNotification({
+          title: 'Screenshot Captured',
+          message: `This chat screen was captured. ${chat.participant.name} has been notified. Enable screenshot blocking in Settings for stronger protection.`,
+          type: 'verification',
+        }).catch(() => {});
+      });
+    } catch (err) {
+      console.warn('[AntiScreenshot] Listener notice:', err);
+    }
+    return () => {
+      try {
+        sub?.remove();
+      } catch {}
+    };
+  }, [currentUser, activeChatId, isDecoyMode, isAppLocked]);
 
   const handleToggleCallVerification = async (val: boolean) => {
     setCallVerificationEnabled(val);
@@ -730,6 +775,8 @@ export default function App() {
       setMySecretKey(null);
       setChats([]);
       setMessages([]);
+      outboxRef.current.clear();
+      setOutboxCount(0);
       setActiveChatId(null);
       setHistoricalKeys([]);
       setInvites([]);
@@ -823,7 +870,7 @@ export default function App() {
         setCurrentUser(data.user);
         setCurrentScreen('chat_list');
         await socketService.connect();
-        await reloadDynamicData(data.user.id);
+        await reloadDynamicData(data.user.id, { secret: keyPair.secretKey, user: data.user });
         performAutoBackupIfNeeded(data.user, keyPair.secretKey, savedFreq);
       } catch (err) {
         console.warn('Session restore notice:', err);
@@ -1073,7 +1120,7 @@ export default function App() {
 
     // Connect realtime socket and load dynamic contacts without blocking
     socketService.connect().catch(() => {});
-    reloadDynamicData(user.id).catch(() => {});
+    reloadDynamicData(user.id, { secret: keyPair.secretKey, user }).catch(() => {});
 
     // Defer heavy cryptographic auto-escrow and scheduled backup to run after
     // screen transitions have completed, keeping the UI instantly interactive
@@ -1120,8 +1167,15 @@ export default function App() {
     setIsRefreshing(false);
   };
 
-  // 2. Reload contacts & requests from the server.
-  const reloadDynamicData = async (userId: string) => {
+  // 2. Reload contacts & requests from the server. Pass explicit keys on the
+  // post-login path — state/refs haven't re-rendered yet at that point, so
+  // the closure would otherwise decrypt every preview as "Locked".
+  const reloadDynamicData = async (
+    userId: string,
+    override?: { secret?: string; user?: UserProfile }
+  ) => {
+    const secret = override?.secret ?? mySecretKeyRef.current;
+    const user = override?.user ?? currentUserRef.current;
     try {
       const [contactList, reqs, userInvites, devices] = await Promise.all([
         api.getContacts(userId),
@@ -1137,7 +1191,7 @@ export default function App() {
       // placeholder string.
       const withDecryptedPreviews = contactList.map(c => {
         if (!c.lastMessage || c.lastMessage.isDeletedForEveryone) return c;
-        const { text } = decryptVerified(c.lastMessage.encryptedPayload, c.participant.publicKey);
+        const { text } = decryptWithKeys(secret, user, c.lastMessage.encryptedPayload, c.participant.publicKey);
         return { ...c, lastMessage: { ...c.lastMessage, text } };
       });
 
@@ -1213,25 +1267,35 @@ export default function App() {
   // sender's public key, but we only trust it if it matches the public key
   // we actually have on file for that contact (from the directory / a prior
   // safety-number verification).
-  const decryptVerified = (payload: EncryptedPayload, expectedPublicKey?: string): { text: string; keyMismatch: boolean } => {
-    if (!mySecretKey) return { text: 'Locked — sign in again to view', keyMismatch: false };
+  //
+  // Pure in (secret, user) so background loaders (outbox flush, pagination)
+  // and post-login reloads can pass explicit keys instead of reading a stale
+  // render closure — the old closure version decrypted everything as
+  // "Locked — sign in again" on the first fetch after login.
+  const decryptWithKeys = (
+    secret: string | null,
+    user: UserProfile | null,
+    payload: EncryptedPayload,
+    expectedPublicKey?: string
+  ): { text: string; keyMismatch: boolean } => {
+    if (!secret) return { text: 'Locked — sign in again to view', keyMismatch: false };
     if (!payload?.ciphertext || !payload?.iv) {
       return { text: '', keyMismatch: false };
     }
 
-    const isSentByMe = currentUser && payload.senderPublicKey === currentUser.publicKey;
+    const isSentByMe = user && payload.senderPublicKey === user.publicKey;
     const peerPublicKey = isSentByMe ? expectedPublicKey : (expectedPublicKey || payload.senderPublicKey);
 
     if (!peerPublicKey) {
       return { text: '⚠️ Missing recipient cryptographic public key.', keyMismatch: true };
     }
 
-    let opened = decryptMessage(payload, mySecretKey, peerPublicKey);
+    let opened = decryptMessage(payload, secret, peerPublicKey);
     let isMismatch = !isSentByMe && Boolean(expectedPublicKey && payload.senderPublicKey && payload.senderPublicKey !== expectedPublicKey);
 
     // Fallbacks: if sender used a mismatched public key, flag keyMismatch
     if (opened === null && payload.senderPublicKey && payload.senderPublicKey !== peerPublicKey) {
-      opened = decryptMessage(payload, mySecretKey, payload.senderPublicKey);
+      opened = decryptMessage(payload, secret, payload.senderPublicKey);
       if (opened !== null) {
         isMismatch = true;
       }
@@ -1259,15 +1323,24 @@ export default function App() {
     return { text: opened, keyMismatch: isMismatch };
   };
 
+  const decryptVerified = (payload: EncryptedPayload, expectedPublicKey?: string): { text: string; keyMismatch: boolean } =>
+    decryptWithKeys(mySecretKeyRef.current, currentUserRef.current, payload, expectedPublicKey);
+
   // 3. Load conversation messages dynamically when opening a chat
+  // (latest page only — older history pages in via loadOlderMessages).
   useEffect(() => {
     if (!currentUser || !activeChatId || !mySecretKey) return;
 
     const targetChatId = activeChatId;
     let cancelled = false;
+    hasMoreRef.current = false;
+    setHasMoreMessages(false);
+    loadingMoreRef.current = false;
+    setIsLoadingMore(false);
     const loadMessages = async () => {
+      setIsMessagesLoading(true);
       try {
-        const rawMessages = await api.getMessages(targetChatId, currentUser.id);
+        const rawMessages = await api.getMessages(targetChatId, currentUser.id, { limit: MESSAGE_PAGE_SIZE });
         if (cancelled || activeChatIdRef.current !== targetChatId) return;
         const knownPublicKey = chatsRef.current.find(c => c.id === targetChatId)?.participant.publicKey;
 
@@ -1278,8 +1351,13 @@ export default function App() {
         });
 
         setMessages(decryptedList);
+        const more = rawMessages.length >= MESSAGE_PAGE_SIZE;
+        hasMoreRef.current = more;
+        setHasMoreMessages(more);
       } catch (err) {
         if (!cancelled) console.warn('Failed to load messages for chat:', targetChatId, err);
+      } finally {
+        if (!cancelled && activeChatIdRef.current === targetChatId) setIsMessagesLoading(false);
       }
     };
 
@@ -1287,7 +1365,55 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChatId, currentUser?.id, mySecretKey]);
+
+  // Older-history pager: prepends the next window above the current oldest.
+  // No-op while a page is in flight or the server reported the beginning.
+  const loadOlderMessages = useCallback(async () => {
+    if (loadingMoreRef.current || !hasMoreRef.current || isDecoyModeRef.current) return;
+    const chatId = activeChatIdRef.current;
+    const user = currentUserRef.current;
+    if (!chatId || !user || !mySecretKeyRef.current) return;
+    loadingMoreRef.current = true;
+    setIsLoadingMore(true);
+    try {
+      const oldest = messagesRef.current.length > 0 ? messagesRef.current[0].timestamp : Date.now();
+      const raw = await api.getMessages(chatId, user.id, { limit: MESSAGE_PAGE_SIZE, before: oldest });
+      if (activeChatIdRef.current !== chatId) return;
+      if (raw.length === 0) {
+        hasMoreRef.current = false;
+        setHasMoreMessages(false);
+        return;
+      }
+      const knownPublicKey = chatsRef.current.find(c => c.id === chatId)?.participant.publicKey;
+      const decrypted = raw.map(m => {
+        if (m.isDeletedForEveryone) return { ...m, text: '' };
+        const { text, keyMismatch } = decryptWithKeys(
+          mySecretKeyRef.current,
+          currentUserRef.current,
+          m.encryptedPayload,
+          knownPublicKey
+        );
+        return { ...m, text, keyMismatch: m.keyMismatch ?? keyMismatch };
+      });
+      setMessages(prev => {
+        if (activeChatIdRef.current !== chatId) return prev;
+        const seen = new Set(prev.map(m => m.id));
+        const fresh = decrypted.filter(m => !seen.has(m.id));
+        return [...fresh, ...prev];
+      });
+      if (raw.length < MESSAGE_PAGE_SIZE) {
+        hasMoreRef.current = false;
+        setHasMoreMessages(false);
+      }
+    } catch (err) {
+      console.warn('[History] Older-page fetch notice:', err);
+    } finally {
+      loadingMoreRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, []);
 
   // Periodic background/fallback sync: only active when app is active, unlocked, and authenticated
   useEffect(() => {
@@ -1297,17 +1423,28 @@ export default function App() {
       if (AppState.currentState !== 'active' || isAppLocked) return;
       await reloadDynamicData(currentUser.id);
 
-      // Only re-fetch messages if socket is not connected (fallback mode)
+      // Only re-fetch messages if socket is not connected (fallback mode).
+      // Merges into the paged list (never replaces) so loaded older pages
+      // survive each poll.
       if (activeChatIdRef.current && !socketService.isConnected()) {
         try {
-          const raw = await api.getMessages(activeChatIdRef.current, currentUser.id);
+          const raw = await api.getMessages(activeChatIdRef.current, currentUser.id, { limit: MESSAGE_PAGE_SIZE });
           const knownPublicKey = chatsRef.current.find(c => c.id === activeChatIdRef.current)?.participant.publicKey;
           const decrypted = raw.map(m => {
             if (m.isDeletedForEveryone) return { ...m, text: '' };
-            const { text } = decryptVerified(m.encryptedPayload, knownPublicKey);
-            return { ...m, text };
+            const { text, keyMismatch } = decryptWithKeys(
+              mySecretKeyRef.current,
+              currentUserRef.current,
+              m.encryptedPayload,
+              knownPublicKey
+            );
+            return { ...m, text, keyMismatch: m.keyMismatch ?? keyMismatch };
           });
-          setMessages(decrypted);
+          setMessages(prev => {
+            const byId = new Map(prev.map(m => [m.id, m]));
+            for (const m of decrypted) byId.set(m.id, { ...byId.get(m.id), ...m });
+            return Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp);
+          });
         } catch {}
       }
     };
@@ -1322,6 +1459,9 @@ export default function App() {
   // 4. Realtime Socket Listeners (presence, incoming messages, call signals, typing)
   useEffect(() => {
     if (!currentUser) return;
+
+    // Sync immediately in case the socket connected before we subscribed.
+    setIsSocketConnected(socketService.isConnected());
 
     // Incoming Contact Request
     const unsubReqReceived = socketService.onContactRequestReceived(async req => {
@@ -1470,6 +1610,35 @@ export default function App() {
       );
     });
 
+    // Connection lifecycle: drive the offline banner, flush the outbox, and
+    // resync anything missed while disconnected.
+    const unsubConnect = socketService.onConnect(() => {
+      setIsSocketConnected(true);
+      flushOutbox().catch(() => {});
+      if (currentUser) reloadDynamicData(currentUser.id).catch(() => {});
+    });
+    const unsubDisconnect = socketService.onDisconnect(() => {
+      setIsSocketConnected(false);
+    });
+
+    // Peer captured the chat screen (Signal-style screenshot notice).
+    const unsubScreenshot = socketService.onScreenshotNotice(data => {
+      if (isDecoyModeRef.current) return;
+      const chat = chatsRef.current.find(
+        c => c.participant?.id === data.senderId || c.id === data.senderId || c.id === data.chatId
+      );
+      notificationService.showSecurityNotification({
+        title: 'Chat Screen Captured',
+        message: `${data.senderName} may have captured your chat screen.`,
+        type: 'verification',
+        onPress: chat
+          ? () => {
+              setActiveChatId(chat.id);
+              setCurrentScreen('chat_detail');
+            }
+          : undefined,
+      }).catch(() => {});
+    });
     // Safety-number verification changed on another of this user's sessions:
     // patch every matching thread (+ the open modal) so devices agree.
     const unsubSafety = socketService.onSafetyNumberUpdated(data => {
@@ -1690,6 +1859,9 @@ export default function App() {
       unsubStatus();
       unsubTyping();
       unsubDelete();
+      unsubConnect();
+      unsubDisconnect();
+      unsubScreenshot();
       unsubSafety();
       unsubCall();
       unsubPresenceSnapshot();
@@ -1789,13 +1961,85 @@ export default function App() {
       )
     );
 
-    // Guaranteed database write to backend (text stripped on wire for zero plaintext exposure)
+    // Guaranteed database write to backend (text stripped on wire for zero plaintext exposure).
+    // Awaited (not fire-and-forget): on failure the message drops into the
+    // offline outbox with a pending clock instead of vanishing silently.
     const wireMsg: Message = { ...newMsg, text: '' };
-    api.sendMessage(wireMsg).catch(err => console.warn('REST send err:', err));
+    try {
+      const res = await api.sendMessage(wireMsg);
+      if (!res?.success) throw new Error(res?.error || 'Persist failed');
+    } catch (err) {
+      console.warn('[Outbox] REST persist failed, queued:', (err as Error)?.message || err);
+      outboxRef.current.set(messageId, wireMsg);
+      setOutboxCount(outboxRef.current.size);
+      const markPending = (m: Message) => (m.id === messageId ? { ...m, status: 'sending' as const } : m);
+      if (targetChatId === activeChatIdRef.current) {
+        setMessages(prev => prev.map(markPending));
+      }
+      setChatHeadMessages(prev => prev.map(markPending));
+      setChats(prev =>
+        prev.map(c =>
+          c.id === targetChatId && c.lastMessage?.id === messageId
+            ? { ...c, lastMessage: { ...c.lastMessage, status: 'sending' as const } }
+            : c
+        )
+      );
+    }
 
-    // Real-time forward via Socket.IO
+    // Real-time forward via Socket.IO (internally queued while offline)
     socketService.sendMessage(wireMsg);
   };
+
+  const markOutboxSent = (messageId: string) => {
+    outboxRef.current.delete(messageId);
+    setOutboxCount(outboxRef.current.size);
+    const markSent = (m: Message) => (m.id === messageId ? { ...m, status: 'sent' as const } : m);
+    setMessages(prev => prev.map(markSent));
+    setChatHeadMessages(prev => prev.map(markSent));
+    setChats(prev =>
+      prev.map(c =>
+        c.lastMessage?.id === messageId
+          ? { ...c, lastMessage: { ...c.lastMessage, status: 'sent' as const } }
+          : c
+      )
+    );
+  };
+
+  // Flush the offline outbox (REST persist works over plain HTTP — no socket
+  // needed — then re-emit on the socket for realtime delivery).
+  const flushOutbox = useCallback(async () => {
+    if (outboxRef.current.size === 0 || isDecoyModeRef.current) return;
+    const pending = Array.from(outboxRef.current.entries());
+    for (const [id, wireMsg] of pending) {
+      try {
+        const res = await api.sendMessage(wireMsg);
+        if (!res?.success) throw new Error(res?.error || 'Persist failed');
+        socketService.sendMessage(wireMsg);
+        markOutboxSent(id);
+      } catch (err) {
+        console.warn('[Outbox] Flush retry failed for', id);
+        // Leave the rest queued; next reconnect/refresh retries again.
+        break;
+      }
+    }
+  }, []);
+
+  // Manual single-message retry (tap the clock bubble).
+  const retryOutboxMessage = useCallback(
+    async (messageId: string) => {
+      const wireMsg = outboxRef.current.get(messageId);
+      if (!wireMsg) return;
+      try {
+        const res = await api.sendMessage(wireMsg);
+        if (!res?.success) throw new Error(res?.error || 'Persist failed');
+        socketService.sendMessage(wireMsg);
+        markOutboxSent(messageId);
+      } catch (err) {
+        Alert.alert('Still Offline', 'Could not send yet. It will retry automatically on reconnect.');
+      }
+    },
+    []
+  );
 
   const handleSendMessage = async (text: string, attachment?: Attachment, replyToId?: string) => {
     if (activeChatId) {
@@ -1914,6 +2158,8 @@ export default function App() {
     setActiveChatId(null);
     setChats([]);
     setMessages([]);
+    outboxRef.current.clear();
+    setOutboxCount(0);
   };
 
   const displayedUser = isDecoyMode ? DECOY_USER : currentUser;
@@ -1976,7 +2222,7 @@ export default function App() {
     }
     let isMounted = true;
     api
-      .getMessages(activeChatHeadThread.id, currentUser.id)
+      .getMessages(activeChatHeadThread.id, currentUser.id, { limit: MESSAGE_PAGE_SIZE })
       .then(rawMessages => {
         if (!isMounted) return;
         const knownPublicKey = activeChatHeadThread.participant.publicKey;
@@ -2209,6 +2455,13 @@ export default function App() {
                   setShowCloudBackupModal(true);
                 }}
                 messages={displayedMessages}
+                messagesLoading={!isDecoyMode && isMessagesLoading}
+                isOffline={!isDecoyMode && !!currentUser && !isSocketConnected}
+                pendingCount={outboxCount}
+                onRetrySend={retryOutboxMessage}
+                onLoadOlder={loadOlderMessages}
+                hasMoreMessages={hasMoreMessages}
+                loadingMore={isLoadingMore}
                 isOnline={onlineUserIds.has(activeChat.participant.id)}
                 lastActiveAt={lastSeenMap[activeChat.participant.id] ?? activeChat.participant.lastActiveAt}
                 onBack={() => {

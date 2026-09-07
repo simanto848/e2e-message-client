@@ -164,6 +164,10 @@ export interface CallState {
   // isn't necessarily over yet (ICE can recover), so this drives a
   // "Reconnecting..." banner rather than ending the call outright.
   isReconnecting: boolean;
+  // Last raw RTCPeerConnection connection state seen ('new' | 'connecting' |
+  // 'connected' | 'disconnected' | 'failed' | 'closed'). Drives the call
+  // quality pill; undefined until the first transition arrives.
+  iceState?: string;
 }
 
 export type BackupFrequency = 'daily' | 'weekly' | 'monthly' | 'off';

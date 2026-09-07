@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator } from 'react-native';
-import { Flame, Check, CheckCheck, Play, Pause, Trash2, ImageIcon, Phone, PhoneOff, Video } from './Icons';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Animated, PanResponder } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import { Flame, Check, CheckCheck, Play, Pause, Trash2, ImageIcon, Phone, PhoneOff, Video, Clock } from './Icons';
 import { Message } from '../types';
 import { colors, shadows } from '../theme';
 import { formatDisappearingTimer } from '../utils/timerUtils';
@@ -19,11 +20,53 @@ interface Props {
   onReact?: (msgId: string, emoji: string) => void;
   replyMessage?: Message;
   onReply?: (msg: Message) => void;
+  replySenderName?: string;
+  onJumpToReply?: (messageId: string) => void;
+  onRetrySend?: (messageId: string) => void;
+  onPressImage?: (attachmentId: string) => void;
   imageResolution?: ImageResolution;
+  highlight?: boolean;
+  searchQuery?: string;
 }
 // Shared single interval across all ChatBubble instances to eliminate timer proliferation
-type TickerCallback = (now: number) => void;
-const tickerListeners = new Set<TickerCallback>();
+/** Render message text with the in-conversation search query highlighted. */
+function renderSearchHighlightedText(text: string, query: string | undefined, baseStyle: any) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q || !text || !text.toLowerCase().includes(q)) {
+    return <Text style={baseStyle}>{text}</Text>;
+  }
+  const lower = text.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let i = 0;
+  let k = 0;
+  while (true) {
+    const idx = lower.indexOf(q, i);
+    if (idx === -1) {
+      parts.push(
+        <Text key={k++} style={baseStyle}>
+          {text.slice(i)}
+        </Text>
+      );
+      break;
+    }
+    if (idx > i) {
+      parts.push(
+        <Text key={k++} style={baseStyle}>
+          {text.slice(i, idx)}
+        </Text>
+      );
+    }
+    parts.push(
+      <Text key={k++} style={[baseStyle, styles.searchHighlight]}>
+        {text.slice(idx, idx + q.length)}
+      </Text>
+    );
+    i = idx + q.length;
+  }
+  return <Text>{parts}</Text>;
+}
+
+type TickerCallback = (now: number) => void;const tickerListeners = new Set<TickerCallback>();
 let sharedTickerInterval: ReturnType<typeof setInterval> | null = null;
 
 function subscribeToSharedTicker(cb: TickerCallback): () => void {
@@ -55,11 +98,43 @@ export function ChatBubble({
   onReact,
   replyMessage,
   onReply,
+  replySenderName,
+  onJumpToReply,
+  onRetrySend,
+  onPressImage,
   imageResolution,
+  highlight = false,
+  searchQuery,
 }: Props) {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [showReactions, setShowReactions] = useState(false);
   const QUICK_EMOJIS = ['👍', '❤️', '🔥', '🔒', '😂', '👀'];
+
+  // Swipe-to-reply (Messenger-style): horizontal drag past the threshold
+  // sets this message as the reply quote. Pure PanResponder — no extra deps.
+  const swipeX = useRef(new Animated.Value(0)).current;
+  const swipeResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.4,
+      onPanResponderMove: (_, g) => swipeX.setValue(Math.max(-70, Math.min(70, g.dx))),
+      onPanResponderRelease: (_, g) => {
+        const fire = Math.abs(g.dx) > 45;
+        Animated.spring(swipeX, { toValue: 0, friction: 7, useNativeDriver: true }).start();
+        if (fire && onReply) {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+          onReply(message);
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(swipeX, { toValue: 0, friction: 7, useNativeDriver: true }).start();
+      },
+    })
+  ).current;
+  const swipeHintOpacity = swipeX.interpolate({
+    inputRange: [-50, -12, 12, 50],
+    outputRange: [0.9, 0, 0, 0.9],
+    extrapolate: 'clamp',
+  });
 
   useEffect(() => {
     if (!message.expiresAt) {
@@ -182,34 +257,111 @@ export function ChatBubble({
         </View>
       )}
 
+      <Animated.View
+        style={[
+          styles.swipeHint,
+          isMe ? styles.swipeHintLeft : styles.swipeHintRight,
+          { opacity: swipeHintOpacity },
+        ]}
+        pointerEvents="none"
+      >
+        <Text style={styles.swipeHintText}>↩</Text>
+      </Animated.View>
+      <Animated.View
+        style={[styles.swipeContent, { transform: [{ translateX: swipeX }] }]}
+        {...swipeResponder.panHandlers}
+      >
       <TouchableOpacity
         activeOpacity={0.95}
         onLongPress={() => setShowReactions(prev => !prev)}
         delayLongPress={250}
+        onPress={() => {
+          // Pending (offline-queued) messages: tap retries the send.
+          if (message.status === 'sending' && onRetrySend) {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+            onRetrySend(message.id);
+          }
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={
+          message.status === 'sending'
+            ? 'Message waiting to send. Activate to retry now.'
+            : isMe
+              ? 'Your message. Long press for options, swipe to reply.'
+              : 'Message. Long press for options, swipe to reply.'
+        }
         style={[
           styles.bubble,
           isMe ? styles.myBubble : styles.theirBubble,
           isAudio && styles.audioBubble,
           message.disappearingTimer > 0 && styles.ephemeralBorder,
+          message.replyToId && styles.replyBubble,
+          highlight && styles.highlightedBubble,
         ]}
       >
-        {/* Reply Quote Block */}
-        {replyMessage && (
-          <View style={[styles.replyQuote, isMe ? styles.myReplyQuote : styles.theirReplyQuote]}>
+        {/* Reply Quote Block — always visible for replies, even when the
+            original message is no longer loaded, so a reply is never
+            mistaken for a plain message. Tap jumps to the original. */}
+        {message.replyToId && (
+          <TouchableOpacity
+            style={[styles.replyQuote, isMe ? styles.myReplyQuote : styles.theirReplyQuote]}
+            onPress={replyMessage && onJumpToReply ? () => onJumpToReply(replyMessage.id) : undefined}
+            disabled={!replyMessage || !onJumpToReply}
+            activeOpacity={0.7}
+            accessibilityRole={replyMessage && onJumpToReply ? 'button' : undefined}
+            accessibilityLabel={
+              replyMessage
+                ? `Reply. Jump to original message from ${replySenderName || 'contact'}.`
+                : 'Reply. Original message unavailable.'
+            }
+          >
             <View style={[styles.replyQuoteBar, isMe ? styles.myReplyQuoteBar : styles.theirReplyQuoteBar]} />
             <View style={styles.replyQuoteContent}>
-              <Text style={[styles.replyQuoteSender, isMe ? styles.myReplyQuoteSender : styles.theirReplyQuoteSender]}>
-                {replyMessage.senderId === message.senderId ? (isMe ? 'You' : 'Original message') : 'Reply'}
-              </Text>
-              <Text style={[styles.replyQuoteText, isMe ? styles.myReplyQuoteText : styles.theirReplyQuoteText]} numberOfLines={1}>
-                {replyMessage.attachment?.type === 'image'
-                  ? '📷 Photo'
-                  : replyMessage.attachment?.type === 'audio'
-                  ? '🎤 Voice Message'
-                  : replyMessage.text}
-              </Text>
+              {replyMessage ? (
+                <>
+                  <Text
+                    style={[styles.replyQuoteSender, isMe ? styles.myReplyQuoteSender : styles.theirReplyQuoteSender]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {replySenderName || (replyMessage.senderId === message.senderId ? 'You' : 'Reply')}
+                  </Text>
+                  <Text
+                    style={[styles.replyQuoteText, isMe ? styles.myReplyQuoteText : styles.theirReplyQuoteText]}
+                    numberOfLines={2}
+                    ellipsizeMode="tail"
+                  >
+                    {replyMessage.attachment?.type === 'image'
+                      ? '📷 Photo'
+                      : replyMessage.attachment?.type === 'audio'
+                      ? '🎤 Voice Message'
+                      : replyMessage.text}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text
+                    style={[styles.replyQuoteSender, isMe ? styles.myReplyQuoteSender : styles.theirReplyQuoteSender]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    ↩ Replied message
+                  </Text>
+                  <Text
+                    style={[
+                      styles.replyQuoteText,
+                      isMe ? styles.myReplyQuoteText : styles.theirReplyQuoteText,
+                      styles.replyQuoteMissing,
+                    ]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    Original message unavailable
+                  </Text>
+                </>
+              )}
             </View>
-          </View>
+          </TouchableOpacity>
         )}
 
         {/* Ephemeral Timer Tag */}
@@ -270,7 +422,14 @@ export function ChatBubble({
             )}
           </View>
         ) : isImage ? (
-          <View style={styles.imageContainer}>
+          <TouchableOpacity
+            style={styles.imageContainer}
+            onPress={message.attachment?.id && onPressImage ? () => onPressImage(message.attachment!.id) : undefined}
+            disabled={!message.attachment?.id || !onPressImage}
+            activeOpacity={0.9}
+            accessibilityRole={onPressImage ? 'button' : undefined}
+            accessibilityLabel={onPressImage ? 'Open image full-screen' : undefined}
+          >
             {imageResolution?.status === 'ready' ? (
               <Image source={{ uri: imageResolution.dataUri }} style={styles.image} resizeMode="cover" />
             ) : imageResolution?.status === 'error' ? (
@@ -283,11 +442,9 @@ export function ChatBubble({
                 <ActivityIndicator size="small" color={isMe ? '#ffffff' : colors.primary} />
               </View>
             )}
-          </View>
+          </TouchableOpacity>
         ) : (
-          <Text style={[styles.messageText, isMe ? styles.myText : styles.theirText]}>
-            {message.text}
-          </Text>
+          renderSearchHighlightedText(message.text, searchQuery, [styles.messageText, isMe ? styles.myText : styles.theirText])
         )}
 
         {/* Bubble Footer */}
@@ -301,11 +458,18 @@ export function ChatBubble({
               <View style={styles.statusCheck}>
                 {message.status === 'read' ? (
                   <CheckCheck size={14} color="#38bdf8" />
+                ) : message.status === 'sending' ? (
+                  <Clock size={13} color="rgba(255,255,255,0.85)" />
                 ) : message.status === 'delivered' ? (
                   <CheckCheck size={14} color="rgba(255,255,255,0.7)" />
                 ) : (
                   <Check size={14} color="rgba(255,255,255,0.7)" />
                 )}
+              </View>
+            )}
+            {!isMe && message.status === 'sending' && (
+              <View style={styles.statusCheck}>
+                <Clock size={13} color={colors.textMuted} />
               </View>
             )}
           </View>
@@ -320,6 +484,7 @@ export function ChatBubble({
           </View>
         )}
       </TouchableOpacity>
+      </Animated.View>
     </View>
   );
 }
@@ -337,11 +502,21 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   bubble: {
-    maxWidth: '82%',
+    width: '100%',
+    minWidth: 76,
     borderRadius: 16,
     paddingHorizontal: 14,
     paddingVertical: 10,
     ...shadows.sm,
+  },
+  // Replies get a wider floor so the quote block never collapses; the width
+  // lives on the bubble (not the quote) so children can't poke outside it.
+  replyBubble: {
+    minWidth: 140,
+  },
+  swipeContent: {
+    flexShrink: 1,
+    maxWidth: '82%',
   },
   myBubble: {
     backgroundColor: colors.primary,
@@ -357,6 +532,40 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderStyle: 'dashed',
     borderColor: '#f59e0b',
+  },
+  highlightedBubble: {
+    borderWidth: 2,
+    borderColor: '#f59e0b',
+  },
+  searchHighlight: {
+    backgroundColor: '#fef08a',
+    color: '#92400e',
+    fontWeight: '700',
+  },
+  swipeHint: {
+    position: 'absolute',
+    top: '50%',
+    marginTop: -16,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: -1,
+  },
+  swipeHintLeft: {
+    left: 4,
+  },
+  swipeHintRight: {
+    right: 4,
+  },
+  swipeHintText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.textSecondary,
   },
   ephemeralHeader: {
     flexDirection: 'row',
@@ -592,21 +801,26 @@ const styles = StyleSheet.create({
   },
   replyQuote: {
     flexDirection: 'row',
-    borderRadius: 8,
-    padding: 8,
+    alignItems: 'stretch',
+    alignSelf: 'stretch',
+    borderRadius: 10,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
     marginBottom: 8,
+    gap: 8,
     overflow: 'hidden',
   },
   myReplyQuote: {
-    backgroundColor: 'rgba(0, 0, 0, 0.15)',
+    backgroundColor: 'rgba(0, 0, 0, 0.18)',
   },
   theirReplyQuote: {
     backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   replyQuoteBar: {
-    width: 3,
+    width: 3.5,
     borderRadius: 2,
-    marginRight: 8,
   },
   myReplyQuoteBar: {
     backgroundColor: '#ffffff',
@@ -616,11 +830,14 @@ const styles = StyleSheet.create({
   },
   replyQuoteContent: {
     flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
   },
   replyQuoteSender: {
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 12,
+    fontWeight: '800',
     marginBottom: 2,
+    letterSpacing: -0.1,
   },
   myReplyQuoteSender: {
     color: '#ffffff',
@@ -629,7 +846,12 @@ const styles = StyleSheet.create({
     color: colors.primaryDark,
   },
   replyQuoteText: {
-    fontSize: 12,
+    fontSize: 12.5,
+    lineHeight: 17,
+  },
+  replyQuoteMissing: {
+    fontStyle: 'italic',
+    opacity: 0.75,
   },
   myReplyQuoteText: {
     color: 'rgba(255, 255, 255, 0.85)',

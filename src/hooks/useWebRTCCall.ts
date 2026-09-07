@@ -140,13 +140,13 @@ export function useWebRTCCall({
         mediaWatchdogRef.current = null;
       }
       webrtcCallEngine.logMediaDiagnostics('[Call] Connected');
-      setCallState(prev => ({ ...prev, isReconnecting: false }));
+      setCallState(prev => ({ ...prev, isReconnecting: false, iceState: state }));
       return;
     }
     if (state === 'disconnected') {
       // Transient path loss (handover/NAT rebinding): try an ICE restart
       // before giving up, instead of freezing in silence.
-      setCallState(prev => ({ ...prev, isReconnecting: true }));
+      setCallState(prev => ({ ...prev, isReconnecting: true, iceState: state }));
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       restartTimerRef.current = setTimeout(async () => {
         restartTimerRef.current = null;
@@ -171,12 +171,12 @@ export function useWebRTCCall({
     }
     if (state === 'failed') {
       clearCallHealthTimers();
-      setCallState(prev => ({ ...prev, isReconnecting: false }));
+      setCallState(prev => ({ ...prev, isReconnecting: false, iceState: state }));
       Alert.alert('Call Disconnected', 'The connection was lost and could not be recovered.');
       handleHangupCall();
       return;
     }
-    setCallState(prev => ({ ...prev, isReconnecting: state === 'disconnected' }));
+    setCallState(prev => ({ ...prev, isReconnecting: state === 'disconnected', iceState: state }));
   };
 
   const handleStartCall = async (type: 'audio' | 'video') => {
@@ -236,6 +236,7 @@ export function useWebRTCCall({
       duration: 0,
       sasVerificationWords: sas,
       isReconnecting: false,
+      iceState: 'new',
     });
 
     try {

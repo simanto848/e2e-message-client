@@ -26,9 +26,12 @@ import {
   Lock,
   Camera,
   User,
+  Bell,
+  BellOff,
 } from './Icons';
 import { CallState } from '../types';
 import { colors, shadows } from '../theme';
+import { callAudio } from '../utils/callAudio';
 
 interface Props {
   callState: CallState;
@@ -69,6 +72,22 @@ export function CallModal({
 }: Props) {
   const [waveBars, setWaveBars] = useState([12, 24, 16, 32, 20, 28, 14]);
   const ringPulseAnim = useRef(new Animated.Value(1)).current;
+  const [ringSilenced, setRingSilenced] = useState(false);
+
+  // Fresh ringtone state for every new call/phase.
+  useEffect(() => {
+    setRingSilenced(false);
+  }, [callState.active, callState.status, callState.isIncoming]);
+
+  const toggleRingSilence = () => {
+    if (ringSilenced) {
+      callAudio.playRingtone();
+      setRingSilenced(false);
+    } else {
+      callAudio.stopAudio();
+      setRingSilenced(true);
+    }
+  };
 
   // Pulsing avatar ring while the call is ringing (either direction) —
   // gives a clear "something is happening" signal before the peer answers.
@@ -115,6 +134,34 @@ export function CallModal({
   const remote = callState.remoteUser;
   const isVideo = callState.type === 'video';
   const isIncomingRinging = callState.isIncoming && callState.status === 'ringing';
+
+  // Call quality pill: LIVE only on a real media path, CONNECTING while ICE
+  // is still negotiating, RECONNECTING on path loss. Previously the UI showed
+  // LIVE as soon as signaling answered — before any audio could flow.
+  const renderQualityPill = () => {
+    if (callState.status !== 'connected') return null;
+    const ice = callState.iceState;
+    if (callState.isReconnecting || ice === 'disconnected') {
+      return (
+        <View style={styles.reconnectingPill}>
+          <Text style={styles.reconnectingText}>Reconnecting…</Text>
+        </View>
+      );
+    }
+    if (ice && ice !== 'connected' && ice !== 'completed') {
+      return (
+        <View style={styles.reconnectingPill}>
+          <Text style={styles.reconnectingText}>Connecting…</Text>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.telemetryPill}>
+        <Radio size={10} color={colors.primary} />
+        <Text style={styles.telemetryText}>LIVE {isVideo ? 'VIDEO' : 'VOICE'}</Text>
+      </View>
+    );
+  };
 
   return (
     <Modal visible={callState.active} animationType="slide" transparent={false}>
@@ -188,22 +235,8 @@ export function CallModal({
               : formatDuration(callState.duration)}
           </Text>
 
-          {/* Telemetry Pill */}
-          {callState.status === 'connected' && !callState.isReconnecting && (
-            <View style={styles.telemetryPill}>
-              <Radio size={10} color={colors.primary} />
-              <Text style={styles.telemetryText}>LIVE {isVideo ? 'VIDEO' : 'VOICE'}</Text>
-            </View>
-          )}
-
-          {/* Reconnecting Banner — the WebRTC connection dropped mid-call
-              (see App.tsx's onConnectionStateChange) but ICE may still
-              recover, so this doesn't end the call outright. */}
-          {callState.status === 'connected' && callState.isReconnecting && (
-            <View style={styles.reconnectingPill}>
-              <Text style={styles.reconnectingText}>Reconnecting…</Text>
-            </View>
-          )}
+          {/* Connection quality Pill */}
+          {renderQualityPill()}
         </View>
 
         {/* Center Profile & Audio Waves (for Audio Calls or Video Off) */}
@@ -276,8 +309,23 @@ export function CallModal({
         {/* Bottom Call Controls & Action Row */}
         <View style={styles.controlsContainer}>
           {isIncomingRinging ? (
-            /* Incoming Call Actions: Accept (Green) or Decline (Red) */
-            <View style={styles.incomingActionRow}>
+            /* Incoming Call Actions: Silence + Accept (Green) or Decline (Red) */
+            <View style={styles.incomingWrap}>
+              <TouchableOpacity
+                style={styles.silenceBtn}
+                onPress={toggleRingSilence}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={ringSilenced ? 'Unsilence ringtone' : 'Silence ringtone'}
+              >
+                {ringSilenced ? (
+                  <Bell size={16} color={colors.textSecondary} />
+                ) : (
+                  <BellOff size={16} color={colors.textSecondary} />
+                )}
+                <Text style={styles.silenceText}>{ringSilenced ? 'Ring silenced' : 'Silence'}</Text>
+              </TouchableOpacity>
+              <View style={styles.incomingActionRow}>
               <TouchableOpacity style={styles.declineButton} onPress={onHangup}>
                 <PhoneOff size={28} color="#ffffff" />
                 <Text style={styles.actionBtnLabel}>Decline</Text>
@@ -294,6 +342,7 @@ export function CallModal({
                 )}
                 <Text style={styles.actionBtnLabel}>Accept</Text>
               </TouchableOpacity>
+              </View>
             </View>
           ) : (
             /* Active Call Controls */
@@ -634,6 +683,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     marginBottom: 10,
+  },
+  incomingWrap: {
+    alignItems: 'center',
+    gap: 14,
+  },
+  silenceBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  silenceText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textSecondary,
   },
   declineButton: {
     alignItems: 'center',
