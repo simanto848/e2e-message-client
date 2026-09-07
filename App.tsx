@@ -96,6 +96,7 @@ import {
 } from './src/services/backgroundSync';
 import { chatHeadNative } from './src/services/chatHeadNative';
 import { perfMark, perfSince, perfLog } from './src/utils/perf';
+import { loadOutbox, saveOutbox, clearOutbox } from './src/utils/outboxStore';
 
 perfMark('app_start');
 
@@ -290,8 +291,15 @@ export default function App() {
   // Offline outbox: wire payloads whose REST persist failed (offline send).
   // The socket layer has its own queue for realtime delivery; this one guards
   // the DATABASE write, which used to be fire-and-forget (lost forever).
-  const outboxRef = useRef<Map<string, Message>>(new Map());
+  // Entries persist in AsyncStorage so a force-kill can't eat unsent mail.
+  const outboxRef = useRef<Map<string, { wire: Message; display: Message }>>(new Map());
   const [outboxCount, setOutboxCount] = useState(0);
+
+  const persistOutbox = useCallback(() => {
+    const uid = currentUserRef.current?.id;
+    if (!uid) return;
+    saveOutbox(uid, Array.from(outboxRef.current.values())).catch(() => {});
+  }, []);
   const [incomingRequests, setIncomingRequests] = useState<ContactRequestWithUser[]>([]);
   const [outgoingRequests, setOutgoingRequests] = useState<ContactRequestWithUser[]>([]);
 
@@ -781,6 +789,7 @@ export default function App() {
       setMessages([]);
       outboxRef.current.clear();
       setOutboxCount(0);
+      if (currentUser?.id) clearOutbox(currentUser.id).catch(() => {});
       setActiveChatId(null);
       setHistoricalKeys([]);
       setInvites([]);
@@ -875,6 +884,7 @@ export default function App() {
         setCurrentScreen('chat_list');
         await socketService.connect();
         await reloadDynamicData(data.user.id, { secret: keyPair.secretKey, user: data.user });
+        restoreOutbox(data.user.id).catch(() => {});
         performAutoBackupIfNeeded(data.user, keyPair.secretKey, savedFreq);
       } catch (err) {
         console.warn('Session restore notice:', err);
@@ -1126,6 +1136,7 @@ export default function App() {
     // Connect realtime socket and load dynamic contacts without blocking
     socketService.connect().catch(() => {});
     reloadDynamicData(user.id, { secret: keyPair.secretKey, user }).catch(() => {});
+    restoreOutbox(user.id).catch(() => {});
 
     // Defer heavy cryptographic auto-escrow and scheduled backup to run after
     // screen transitions have completed, keeping the UI instantly interactive
@@ -1357,7 +1368,7 @@ export default function App() {
           return { ...m, text, keyMismatch: m.keyMismatch ?? keyMismatch };
         });
 
-        setMessages(decryptedList);
+        setMessages(mergeOutboxDisplays(targetChatId, decryptedList));
         const more = rawMessages.length >= MESSAGE_PAGE_SIZE;
         hasMoreRef.current = more;
         setHasMoreMessages(more);
@@ -1984,8 +1995,9 @@ export default function App() {
       if (!res?.success) throw new Error(res?.error || 'Persist failed');
     } catch (err) {
       console.warn('[Outbox] REST persist failed, queued:', (err as Error)?.message || err);
-      outboxRef.current.set(messageId, wireMsg);
+      outboxRef.current.set(messageId, { wire: wireMsg, display: newMsg });
       setOutboxCount(outboxRef.current.size);
+      persistOutbox();
       const markPending = (m: Message) => (m.id === messageId ? { ...m, status: 'sending' as const } : m);
       if (targetChatId === activeChatIdRef.current) {
         setMessages(prev => prev.map(markPending));
@@ -2007,6 +2019,7 @@ export default function App() {
   const markOutboxSent = (messageId: string) => {
     outboxRef.current.delete(messageId);
     setOutboxCount(outboxRef.current.size);
+    persistOutbox();
     const markSent = (m: Message) => (m.id === messageId ? { ...m, status: 'sent' as const } : m);
     setMessages(prev => prev.map(markSent));
     setChatHeadMessages(prev => prev.map(markSent));
@@ -2024,7 +2037,8 @@ export default function App() {
   const flushOutbox = useCallback(async () => {
     if (outboxRef.current.size === 0 || isDecoyModeRef.current) return;
     const pending = Array.from(outboxRef.current.entries());
-    for (const [id, wireMsg] of pending) {
+    for (const [id, entry] of pending) {
+      const wireMsg = entry.wire;
       try {
         const res = await api.sendMessage(wireMsg);
         if (!res?.success) throw new Error(res?.error || 'Persist failed');
@@ -2041,8 +2055,9 @@ export default function App() {
   // Manual single-message retry (tap the clock bubble).
   const retryOutboxMessage = useCallback(
     async (messageId: string) => {
-      const wireMsg = outboxRef.current.get(messageId);
-      if (!wireMsg) return;
+      const entry = outboxRef.current.get(messageId);
+      if (!entry) return;
+      const wireMsg = entry.wire;
       try {
         const res = await api.sendMessage(wireMsg);
         if (!res?.success) throw new Error(res?.error || 'Persist failed');
@@ -2053,6 +2068,42 @@ export default function App() {
       }
     },
     []
+  );
+
+  // Merge durable outbox displays into a freshly loaded page so queued mail
+  // stays visible (history loads would otherwise wipe it).
+  const mergeOutboxDisplays = useCallback((chatId: string, list: Message[]): Message[] => {
+    const mine = Array.from(outboxRef.current.values())
+      .map(e => e.display)
+      .filter(m => (m.chatId === chatId || m.receiverId === chatId) && !list.some(x => x.id === m.id));
+    if (mine.length === 0) return list;
+    return [...list, ...mine].sort((a, b) => a.timestamp - b.timestamp);
+  }, []);
+
+  // Restore durable outbox after login/launch: repopulate the queue, revive
+  // the visible previews, then flush what the network allows.
+  const restoreOutbox = useCallback(
+    async (userId: string) => {
+      const entries = await loadOutbox(userId);
+      if (entries.length === 0) return;
+      for (const e of entries) outboxRef.current.set(e.wire.id, e);
+      setOutboxCount(outboxRef.current.size);
+      setMessages(prev => {
+        const mine = entries.map(e => e.display).filter(m => !prev.some(x => x.id === m.id));
+        return mine.length ? [...prev, ...mine].sort((a, b) => a.timestamp - b.timestamp) : prev;
+      });
+      setChats(prev =>
+        prev.map(c => {
+          const mine = entries.map(e => e.display).filter(m => m.chatId === c.id);
+          if (mine.length === 0) return c;
+          const latest = mine[mine.length - 1];
+          if (c.lastMessage && c.lastMessage.timestamp >= latest.timestamp) return c;
+          return { ...c, lastMessage: latest };
+        })
+      );
+      flushOutbox().catch(() => {});
+    },
+    [flushOutbox]
   );
 
   // Forward picker state + engine. Forwarding RE-ENCRYPTS content for each
@@ -2265,6 +2316,7 @@ export default function App() {
     setMessages([]);
     outboxRef.current.clear();
     setOutboxCount(0);
+    if (currentUser?.id) clearOutbox(currentUser.id).catch(() => {});
   };
 
   const displayedUser = isDecoyMode ? DECOY_USER : currentUser;
