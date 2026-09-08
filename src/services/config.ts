@@ -9,13 +9,33 @@
  * call-signal round trips against this exact URL).
  *
  * Override for local dev by setting EXPO_PUBLIC_BACKEND_URL in mobile/.env
- * (see .env.example) — Expo inlines EXPO_PUBLIC_* vars from .env at build
- * time, no native rebuild needed.
+ * (see .env.example).
+ *
+ * EXPO_PUBLIC_* rebuild note: Expo inlines EXPO_PUBLIC_* vars at BUILD time
+ * (not at runtime). Changing them requires a new build (or an OTA update if
+ * the value is read from JS at startup — BACKEND_URL is, so `eas update`
+ * suffices for JS-only URL swaps; native TURN credentials baked via
+ * app.config.js would need a rebuild). Never assume a .env edit alone
+ * repoints a shipped binary.
+ *
+ * CORS: production server fails fast at boot unless CORS_ORIGIN is set
+ * (server/.env.example). If the app can't reach the backend in prod, check
+ * CORS_ORIGIN includes your Expo origin first.
  */
 
 export const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'https://e2e-message.onrender.com';
 export const API_BASE_URL = `${BACKEND_URL}/api`;
 export const SOCKET_SERVER_URL = BACKEND_URL;
+
+// Warn in production when the compiled-in fallback is in use (likely a missing
+// EXPO_PUBLIC_BACKEND_URL at build time). Dev keeps quiet (localhost .env flow).
+if (typeof __DEV__ !== 'undefined' && !__DEV__ && !process.env.EXPO_PUBLIC_BACKEND_URL) {
+  console.warn(
+    '[config] EXPO_PUBLIC_BACKEND_URL unset at build time — using production fallback ' +
+      BACKEND_URL +
+      '. Set it in mobile/.env (or EAS env) and rebuild/OTA if this device should point elsewhere.'
+  );
+}
 
 export function getBackendBaseUrl(): string {
   return BACKEND_URL;
@@ -41,8 +61,9 @@ export interface IceServerConfig {
 // calling a phone (carrier NAT) can almost never connect peer-to-peer, so a
 // working TURN relay is mandatory for audio to flow at all. Bring your own
 // (self-hosted coturn or Metered free 5GB plan) via mobile/.env — see
-// .env.example. Expo inlines EXPO_PUBLIC_* at build time, no rebuild needed
-// for JS, but these are read when a call starts so an OTA update suffices.
+// .env.example. EXPO_PUBLIC_TURN_* are inlined at build time; since
+// getIceServers() reads them when a call starts, a JS-only credential rotation
+// ships via OTA (`eas update`), no native rebuild needed.
 const FALLBACK_ICE_SERVERS: IceServerConfig[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
