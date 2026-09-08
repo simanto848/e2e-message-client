@@ -115,3 +115,58 @@ export async function loadCachedMessageList(uid: string, chatId: string): Promis
     return [];
   }
 }
+
+/** Remove one message from the per-chat ciphertext cache (expiry / delete-for-everyone). */
+export async function removeCachedMessage(uid: string, chatId: string, messageId: string): Promise<void> {
+  try {
+    const prev = await loadCachedMessageList(uid, chatId);
+    if (!prev.some(m => m.id === messageId)) return;
+    const next = prev.filter(m => m.id !== messageId);
+    await AsyncStorage.setItem(msgsKey(uid, chatId), await sealForUser(uid, JSON.stringify(next)));
+  } catch (err) {
+    logger.warn('Cache', 'Remove message notice:', err);
+  }
+}
+
+/** Drop every cached message whose disappearing timer has passed. Returns purged ids per chat. */
+export async function purgeExpiredCachedMessages(
+  uid: string,
+  chatIds: string[],
+  now: number = Date.now()
+): Promise<Record<string, string[]>> {
+  const purged: Record<string, string[]> = {};
+  for (const chatId of chatIds) {
+    try {
+      const prev = await loadCachedMessageList(uid, chatId);
+      if (prev.length === 0) continue;
+      const expired = prev.filter(m => m.expiresAt && m.expiresAt <= now && !m.isDeletedForEveryone);
+      if (expired.length === 0) continue;
+      const keep = prev.filter(m => !(m.expiresAt && m.expiresAt <= now && !m.isDeletedForEveryone));
+      await AsyncStorage.setItem(msgsKey(uid, chatId), await sealForUser(uid, JSON.stringify(keep)));
+      purged[chatId] = expired.map(m => m.id);
+    } catch (err) {
+      logger.warn('Cache', 'Purge expired notice:', err);
+    }
+  }
+  return purged;
+}
+
+/** Mark a cached message as deleted-for-everyone (tombstone) so offline loads stay consistent. */
+export async function tombstoneCachedMessage(
+  uid: string,
+  chatId: string,
+  messageId: string,
+  deletedAt: number = Date.now()
+): Promise<void> {
+  try {
+    const prev = await loadCachedMessageList(uid, chatId);
+    const idx = prev.findIndex(m => m.id === messageId);
+    if (idx < 0) return;
+    const next = prev.map(m =>
+      m.id === messageId ? { ...m, isDeletedForEveryone: true, text: '', deletedAt } : m
+    );
+    await AsyncStorage.setItem(msgsKey(uid, chatId), await sealForUser(uid, JSON.stringify(next)));
+  } catch (err) {
+    logger.warn('Cache', 'Tombstone notice:', err);
+  }
+}
