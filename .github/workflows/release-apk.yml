@@ -32,7 +32,6 @@ jobs:
           VERSION="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "version_code=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -51,15 +50,12 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
-      # versionName is the human-facing app version (from the tag);
-      # versionCode must strictly increase on every release for Android to
-      # accept it as an update over an existing install, so it's derived
-      # from the ever-increasing GitHub Actions run number rather than the
-      # tag. Neither edit is committed back to the repo — it only affects
-      # this build.
-      - name: Stamp version into the Android build
+      # Single versionCode strategy: EAS autoIncrement (see eas.json production
+      # autoIncrement:true with appVersionSource:remote) is the single source of truth.
+      # The workflow stamps versionName from the git tag and avoids conflicting sed
+      # overrides of versionCode from GITHUB_RUN_NUMBER to prevent version drift.
+      - name: Stamp version name into the Android build
         run: |
-          sed -i "s/versionCode [0-9]\+/versionCode ${{ steps.version.outputs.version_code }}/" android/app/build.gradle
           sed -i "s/versionName \"[^\"]*\"/versionName \"${{ steps.version.outputs.version }}\"/" android/app/build.gradle
 
       - name: Build release APK

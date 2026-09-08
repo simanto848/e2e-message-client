@@ -20,5 +20,6 @@
   },
   "submit": {
     "production": {}
-  }
+  },
+  "_comment": "versionCode strategy: EAS autoIncrement (production autoIncrement:true, appVersionSource:remote) is the single source of truth across the project. Legacy workflow sed of GITHUB_RUN_NUMBER in release-apk.yml has been retired to eliminate version divergence. OTA channels mirror build profiles: development/preview/production."
 }
