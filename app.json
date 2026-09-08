@@ -19,7 +19,10 @@
         "NSCameraUsageDescription": "JABY needs camera access for video calls and QR safety-number verification.",
         "NSMicrophoneUsageDescription": "JABY needs microphone access for voice notes and calls.",
         "NSPhotoLibraryUsageDescription": "JABY needs photo library access to send encrypted images to your contacts.",
-        "UIBackgroundModes": ["audio", "voip"]
+        "UIBackgroundModes": [
+          "audio",
+          "voip"
+        ]
       },
       "runtimeVersion": {
         "policy": "appVersion"
@@ -27,6 +30,8 @@
     },
     "android": {
       "package": "com.jaby.securemessenger",
+      "versionCode": 1,
+      "allowBackup": false,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -35,29 +40,42 @@
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.CAMERA",
-        "android.permission.VIBRATE",
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.POST_NOTIFICATIONS",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_MEDIA_VIDEO",
-        "android.permission.READ_MEDIA_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH",
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.USE_BIOMETRIC",
         "android.permission.USE_FINGERPRINT",
-        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.VIBRATE",
         "android.permission.WAKE_LOCK",
-        "android.permission.BLUETOOTH",
-        "android.permission.POST_NOTIFICATIONS",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
-        "android.permission.READ_PHONE_STATE",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
         "android.permission.MANAGE_OWN_CALLS"
       ],
       "runtimeVersion": {
         "policy": "appVersion"
+      },
+      "permissionRationale": {
+        "_comment": "Minimal set. CAMERA/RECORD_AUDIO/POST_NOTIFICATIONS/READ_MEDIA_IMAGES are just-in-time (requested via src/utils/permissions.ts only when the feature is used). SYSTEM_ALERT_WINDOW is NOT declared: chat-head overlay is requested at runtime via chatHeadNative.requestOverlayPermission only after explicit user consent in Settings. READ_PHONE_STATE removed (not essential; CallKeep uses MANAGE_OWN_CALLS). Legacy READ/WRITE_EXTERNAL_STORAGE removed; scoped READ_MEDIA_IMAGES only (API 33+).",
+        "justInTime": [
+          "android.permission.CAMERA",
+          "android.permission.RECORD_AUDIO",
+          "android.permission.POST_NOTIFICATIONS",
+          "android.permission.READ_MEDIA_IMAGES"
+        ],
+        "overlay": "SYSTEM_ALERT_WINDOW intentionally omitted \u2014 runtime-only with explicit consent.",
+        "removed": [
+          "android.permission.READ_EXTERNAL_STORAGE",
+          "android.permission.WRITE_EXTERNAL_STORAGE",
+          "android.permission.READ_MEDIA_VIDEO",
+          "android.permission.READ_MEDIA_AUDIO",
+          "android.permission.READ_PHONE_STATE",
+          "android.permission.SYSTEM_ALERT_WINDOW"
+        ]
       }
     },
     "web": {
@@ -95,7 +113,8 @@
       "url": "https://u.expo.dev/5fb1608f-a30a-4a27-aafd-83fac17286c9",
       "requestHeaders": {
         "expo-channel-name": "production"
-      }
+      },
+      "_comment": "OTA channel is per build profile (see eas.json channels): production=production, preview=preview, development=development. This requestHeaders value is the production default baked at build time; preview/dev builds override via their eas.json channel (EAS injects the channel at build). Do NOT hardcode preview/dev here \u2014 one app.json serves all profiles."
     }
   }
 }
