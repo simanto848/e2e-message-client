@@ -17,6 +17,8 @@ import {
   formatDisappearingTimer,
   formatTimerDescription,
   PRESET_TIMERS,
+  MAX_DISAPPEARING_TIMER_S,
+  clampDisappearingTimer,
 } from '../utils/timerUtils';
 
 interface Props {
@@ -72,7 +74,10 @@ export function DisappearingTimerModal({
     wasVisible.current = visible;
   }, [visible, currentTimer]);
 
-  const customTotalSeconds = (toNum(hours) * 3600) + (Math.min(59, toNum(minutes)) * 60);
+  // Clamp custom hour:min entry to the server max (604800 = 7d) so Apply never
+  // sends a value the server range-checks to 400. Presets are already in-range.
+  const customTotalSeconds = clampDisappearingTimer((toNum(hours) * 3600) + (Math.min(59, toNum(minutes)) * 60));
+  const customWasClamped = (toNum(hours) * 3600 + Math.min(59, toNum(minutes)) * 60) > MAX_DISAPPEARING_TIMER_S;
 
   const handleSelectPreset = (value: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
@@ -357,7 +362,7 @@ export function DisappearingTimerModal({
                       {customTotalSeconds === 0 ? (
                         '0 hours 0 mins = Messages will not disappear (Off)'
                       ) : (
-                        `Disappears after ${formatTimerDescription(customTotalSeconds)}`
+                        `Disappears after ${formatTimerDescription(customTotalSeconds)}${customWasClamped ? ' (clamped to 7d max)' : ''}`
                       )}
                     </Text>
                   </View>

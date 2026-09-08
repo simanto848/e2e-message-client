@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Modal, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert, TextInput } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { ShieldCheck, ShieldAlert, X, CheckCircle } from './Icons';
 import { ChatThread, UserProfile } from '../types';
@@ -37,6 +37,8 @@ export function SafetyNumberModal({
   const [verifiedNumber, setVerifiedNumber] = useState<string | null>(initialVerifiedNumber);
   const [isComputing, setIsComputing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [scannedValue, setScannedValue] = useState('');
+  const [scanError, setScanError] = useState<string | null>(null);
 
   useEffect(() => {
     setIsVerified(initialIsVerified);
@@ -82,8 +84,42 @@ export function SafetyNumberModal({
     !!verifiedNumber && !!computedSafetyNumber && verifiedNumber.replace(/\s/g, '') !== computedSafetyNumber.replace(/\s/g, '');
   const showVerified = isVerified && !numberChanged;
 
+  // Bidirectional scan-compare: paste/scan the peer's QR payload here. Both
+  // sides must scan EACH OTHER (not just display) — verification is only
+  // valid when the scanned value matches the locally computed number.
+  const normalizeScan = (v: string) =>
+    v.replace(/^JABY-SAFETY-V1:/i, '').replace(/\s/g, '').trim().toUpperCase();
+  const normalizedComputed = (computedSafetyNumber || '').replace(/\s/g, '').trim().toUpperCase();
+  const normalizedScanned = scannedValue ? normalizeScan(scannedValue) : '';
+  const scanMismatch =
+    normalizedScanned.length > 0 && normalizedComputed.length > 0 && normalizedScanned !== normalizedComputed;
+  const scanMatch =
+    normalizedScanned.length > 0 && normalizedComputed.length > 0 && normalizedScanned === normalizedComputed;
+
+  const handleScanChange = (v: string) => {
+    setScannedValue(v);
+    if (!v.trim()) {
+      setScanError(null);
+      return;
+    }
+    const n = normalizeScan(v);
+    const c = (computedSafetyNumber || '').replace(/\s/g, '').trim().toUpperCase();
+    if (c && n !== c) {
+      setScanError('Scanned code does NOT match this chat — do NOT verify. Possible wrong contact or interception.');
+    } else {
+      setScanError(null);
+    }
+  };
+
   const handleVerifyPress = () => {
     if (isSaving || !onToggleVerify) return;
+    if (scanMismatch) {
+      Alert.alert(
+        'Safety Number Mismatch',
+        'The scanned code does not match the computed safety number. Verification rejected — compare again in person.'
+      );
+      return;
+    }
     if (showVerified) {
       Alert.alert(
         'Remove Verification',
@@ -163,6 +199,41 @@ export function SafetyNumberModal({
               <Text style={styles.qrLabel}>Scan this code with {participant.name}'s phone to verify</Text>
             </View>
 
+            {/* Bidirectional verification note */}
+            <View style={styles.compareNote}>
+              <Text style={styles.compareNoteText}>
+                Both sides must scan each other's code in person. Display alone proves nothing — only a matching
+                scan in BOTH directions means no one is intercepting this chat.
+              </Text>
+            </View>
+
+            {/* Peer scan-compare input */}
+            <Text style={styles.scanLabel}>COMPARE SCANNED CODE</Text>
+            <TextInput
+              style={[styles.scanInput, scanMismatch && styles.scanInputError]}
+              placeholder="Paste scanned JABY-SAFETY-V1:… payload"
+              placeholderTextColor={colors.textMuted}
+              value={scannedValue}
+              onChangeText={handleScanChange}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              accessibilityLabel="Paste the scanned safety number to compare"
+            />
+            {scanMatch && (
+              <View style={styles.matchBanner}>
+                <CheckCircle size={15} color="#065f46" />
+                <Text style={styles.matchText}>Scanned code matches — safe to verify.</Text>
+              </View>
+            )}
+            {(scanMismatch || scanError) && (
+              <View style={styles.mismatchBanner}>
+                <ShieldAlert size={15} color="#b91c1c" />
+                <Text style={styles.mismatchText}>
+                  {scanError || 'Scanned code does NOT match — verification rejected.'}
+                </Text>
+              </View>
+            )}
+
             {/* Key-change warning: previously verified, but the number moved */}
             {numberChanged && (
               <View style={styles.changedBanner}>
@@ -178,10 +249,10 @@ export function SafetyNumberModal({
               style={[
                 styles.verifyButton,
                 showVerified ? styles.verifiedBtn : numberChanged ? styles.changedBtn : styles.unverifiedBtn,
-                (isSaving || !computedSafetyNumber) && styles.verifyButtonDisabled,
+                (isSaving || !computedSafetyNumber || scanMismatch) && styles.verifyButtonDisabled,
               ]}
               onPress={handleVerifyPress}
-              disabled={isSaving || !computedSafetyNumber}
+              disabled={isSaving || !computedSafetyNumber || scanMismatch}
               accessibilityRole="button"
               accessibilityLabel={
                 showVerified
@@ -303,6 +374,77 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
     paddingHorizontal: 24,
+  },
+  compareNote: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  compareNoteText: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#1e40af',
+    fontWeight: '600',
+  },
+  scanLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1,
+    color: colors.textSecondary,
+    marginBottom: 6,
+  },
+  scanInput: {
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    height: 44,
+    fontSize: 13,
+    color: colors.textPrimary,
+    marginBottom: 8,
+  },
+  scanInputError: {
+    borderColor: '#fca5a5',
+    backgroundColor: '#fef2f2',
+  },
+  matchBanner: {
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  matchText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#065f46',
+  },
+  mismatchBanner: {
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  mismatchText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#b91c1c',
+    lineHeight: 17,
   },
   verifyButton: {
     flexDirection: 'row',

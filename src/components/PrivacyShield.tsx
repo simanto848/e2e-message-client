@@ -17,7 +17,7 @@ import { ShieldAlert, Fingerprint, Trash2, KeyRound, Lock, ArrowLeft } from './I
 import { colors, shadows } from '../theme';
 import { EraseDataModal } from './EraseDataModal';
 import { beginExternalActivity, endExternalActivity } from '../utils/appLockGuard';
-import { getDuressPin, getDuressAction } from '../utils/duressConfig';
+import { getDuressPin, getDuressAction, recordFailedDuressAttempt, clearDuressFailedAttempts, getDuressLockoutRemainingSeconds } from '../utils/duressConfig';
 import { getPrimaryPin } from '../utils/keyStore';
 
 interface Props {
@@ -51,6 +51,20 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
     setAuthenticating(true);
     beginExternalActivity();
     try {
+      // DURESS HARDENING: a biometric success bypasses PIN entry, which would also
+      // bypass the duress-PIN trigger (coercion: attacker forces biometric to skip
+      // the duress path). When a duress PIN is configured, biometric alone must NOT
+      // unlock — block it and require the passcode so the duress code stays usable.
+      const duressConfigured = await getDuressPin();
+      if (duressConfigured) {
+        Alert.alert(
+          'Passcode Required',
+          'A duress passcode is configured on this device, so biometric unlock is disabled. Enter your passcode to continue.'
+        );
+        setShowPinEntry(true);
+        return;
+      }
+
       const hasHardware = await LocalAuthentication.hasHardwareAsync();
       const isEnrolled = await LocalAuthentication.isEnrolledAsync();
 
@@ -71,10 +85,21 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
       });
 
       if (result.success) {
+        // TOCTOU re-check: duress could have been configured while the prompt was up.
+        const duressAfter = await getDuressPin();
+        if (duressAfter) {
+          Alert.alert(
+            'Passcode Required',
+            'A duress passcode is configured. Enter your passcode to finish unlocking.'
+          );
+          setShowPinEntry(true);
+          return;
+        }
         setEnteredPin('');
         setShowPinEntry(false);
         setFailedAttempts(0);
         setLockoutSeconds(0);
+        try { await clearDuressFailedAttempts(); } catch {}
         onUnlock();
       }
     } finally {
@@ -88,6 +113,15 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
       setPinError(`Too many attempts. Locked for ${lockoutSeconds}s.`);
       return;
     }
+    // Persisted throttle (survives restarts): refuse while a SecureStore lockout is active.
+    try {
+      const remaining = await getDuressLockoutRemainingSeconds();
+      if (remaining > 0) {
+        setLockoutSeconds(remaining);
+        setPinError(`Too many attempts. Locked for ${remaining}s.`);
+        return;
+      }
+    } catch {}
 
     const trimmed = enteredPin.trim();
     if (!trimmed) {
@@ -104,6 +138,7 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
         setShowPinEntry(false);
         setFailedAttempts(0);
         setLockoutSeconds(0);
+        try { await clearDuressFailedAttempts(); } catch {}
         if (duressAction === 'wipe') {
           if (onEmergencyWipe) {
             onEmergencyWipe();
@@ -128,9 +163,11 @@ export function PrivacyShield({ isLocked, onUnlock, onUnlockDecoy, onEmergencyWi
           setPinError('');
           setFailedAttempts(0);
           setLockoutSeconds(0);
+          try { await clearDuressFailedAttempts(); } catch {}
           onUnlock();
           return;
         } else {
+          try { await recordFailedDuressAttempt(); } catch {}
           setFailedAttempts(prev => {
             const next = prev + 1;
             if (next >= 5) {

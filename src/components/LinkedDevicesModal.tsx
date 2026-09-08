@@ -1,8 +1,10 @@
-import React from 'react';
-import { View, Text, Modal, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, Modal, TouchableOpacity, StyleSheet, ScrollView, Platform } from 'react-native';
+import * as Device from 'expo-device';
 import { Laptop, Smartphone, Tablet, Globe, X, Trash2, QrCode } from './Icons';
 import { LinkedDevice } from '../types';
 import { colors, shadows } from '../theme';
+import { api } from '../services/api';
 
 interface Props {
   visible: boolean;
@@ -19,6 +21,23 @@ export function LinkedDevicesModal({
   onLinkNewDevice,
   onClose,
 }: Props) {
+  // Orphan wiring: "Link Another Device" registers this device server-side via
+  // POST /api/backup/devices/register (validation kept server-side) before
+  // delegating to the parent QR flow. Best-effort: parent flow still runs if
+  // the POST fails (offline) so linking never dead-ends.
+  const [linking, setLinking] = useState(false);
+  const handleLinkNewDevice = async () => {
+    if (linking) return;
+    setLinking(true);
+    try {
+      const name = Device.deviceName || `${Platform.OS === 'ios' ? 'iPhone' : 'Android'} device`;
+      await api.registerDevice({ name, type: 'smartphone', os: `${Platform.OS} ${String(Device.osVersion || '')}`.trim() });
+    } catch {}
+    finally {
+      setLinking(false);
+    }
+    onLinkNewDevice();
+  };
   const getDeviceIcon = (type: string) => {
     switch (type) {
       case 'laptop': return <Laptop size={20} color={colors.accentBlue} />;
@@ -43,11 +62,11 @@ export function LinkedDevicesModal({
           </View>
 
           <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-            <TouchableOpacity style={styles.linkNewCard} onPress={onLinkNewDevice}>
+            <TouchableOpacity style={styles.linkNewCard} onPress={handleLinkNewDevice} disabled={linking}>
               <QrCode size={24} color={colors.primaryDark} />
               <View style={styles.linkNewTextContainer}>
                 <Text style={styles.linkNewTitle}>Link Another Device</Text>
-                <Text style={styles.linkNewSubtitle}>Scan QR code to connect desktop or tablet</Text>
+                <Text style={styles.linkNewSubtitle}>{linking ? 'Registering device…' : 'Scan QR code to connect desktop or tablet'}</Text>
               </View>
             </TouchableOpacity>
 
