@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput, RefreshControl, BackHandler } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput, RefreshControl } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { Search, Pin, ShieldCheck, ShieldAlert, Flame, Plus, CheckCircle2, UserPlus, X, UserCheck, Check, CheckCheck } from '../components/Icons';
 import { ChatThread } from '../types';
@@ -21,6 +21,15 @@ interface Props {
   onSelectChat: (chatId: string) => void;
   onOpenRequestsModal: () => void;
   onOpenSearchModal: () => void;
+  /**
+   * Controlled search query (optional). Hardware-back clearing is owned
+   * centrally by decideBackAction (hasSearchQuery snapshot) — this screen
+   * registers no BackHandler. Uncontrolled fallback (internal state) is used
+   * when these props are omitted (current App.tsx usage); a future wave can
+   * pass searchQuery + onSearchQueryChange so the central handler can clear it.
+   */
+  searchQuery?: string;
+  onSearchQueryChange?: (query: string) => void;
 }
 
 function ChatRowSkeleton() {
@@ -48,25 +57,20 @@ export function ChatListScreen({
   onSelectChat,
   onOpenRequestsModal,
   onOpenSearchModal,
+  searchQuery,
+  onSearchQueryChange,
 }: Props) {
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // If search query is active, pressing hardware back clears the search bar
-  useEffect(() => {
-    if (!searchQuery) return;
-
-    const onHardwareBack = () => {
-      setSearchQuery('');
-      return true;
-    };
-
-    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
-    return () => sub.remove();
-  }, [searchQuery]);
+  const [internalQuery, setInternalQuery] = useState('');
+  const isControlled = searchQuery !== undefined;
+  const effectiveQuery = isControlled ? (searchQuery as string) : internalQuery;
+  const setEffectiveQuery = (q: string) => {
+    if (!isControlled) setInternalQuery(q);
+    onSearchQueryChange?.(q);
+  };
 
   const filteredChats = chats.filter(c =>
-    c.participant?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.participant?.handle?.toLowerCase().includes(searchQuery.toLowerCase())
+    c.participant?.name?.toLowerCase().includes(effectiveQuery.toLowerCase()) ||
+    c.participant?.handle?.toLowerCase().includes(effectiveQuery.toLowerCase())
   );
 
   return (
@@ -78,16 +82,16 @@ export function ChatListScreen({
           style={styles.searchInput}
           placeholder="Search chats..."
           placeholderTextColor={colors.textMuted}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
+          value={effectiveQuery}
+          onChangeText={setEffectiveQuery}
           returnKeyType="search"
           autoCapitalize="none"
           autoCorrect={false}
           clearButtonMode="while-editing"
         />
-        {searchQuery.length > 0 && (
+        {effectiveQuery.length > 0 && (
           <TouchableOpacity
-            onPress={() => setSearchQuery('')}
+            onPress={() => setEffectiveQuery('')}
             accessibilityRole="button"
             accessibilityLabel="Clear search"
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}

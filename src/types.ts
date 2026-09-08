@@ -25,7 +25,12 @@ export interface UserProfile {
   lastActiveAt?: number;
 }
 
-export type DisappearingTimer = number; // seconds (0 = off)
+// Seconds (0 = off). Max 604800 (7d). Presets (see utils/timerUtils.ts PRESET_TIMERS):
+// 0,5,15,30,60,300,3600,28800 (8h),86400 (24h),604800 (7d). Custom hour:min values
+// from DisappearingTimerModal are allowed up to the max; the server range-checks
+// 0..604800 and returns 400 otherwise (server/src/routes/contacts.routes.ts).
+export type DisappearingTimer = number;
+export const MAX_DISAPPEARING_TIMER_S = 604800;
 
 export interface EncryptedPayload {
   iv: string;
@@ -36,12 +41,14 @@ export interface EncryptedPayload {
   keyFingerprint: string;
 }
 
+// Canonical attachment-type union. Keep in sync with server/src/routes/media.routes.ts
+// ALLOWED_ATTACHMENT_TYPES (single allowlist) + server/src/types.ts Attachment.
+// Upload path (/api/media/upload) accepts image|audio|video|document; 'call' is
+// metadata-only (call-history log entry, see App.tsx logCallToChat) and must never
+// be POSTed to /upload — it travels inside Message.attachment only.
 export interface Attachment {
   id: string;
   name: string;
-  // 'call' is a call-history log entry (see App.tsx's logCallToChat), not a
-  // real file — reuses this field instead of a separate DB column/message
-  // type, the same way image/audio attachments already piggyback on it.
   type: 'image' | 'document' | 'audio' | 'video' | 'call';
   size: number;
   url: string;
@@ -72,7 +79,15 @@ export interface Message {
   replyToId?: string;
   forwarded?: boolean;
   reactions?: { [emoji: string]: string[] };
+  // Ephemeral-only local UI state — never sent to the server (wire Message.text
+  // must stay '' and reactions sync via reactions map only). New code must use
+  // the local* names; `reaction`/`keyMismatch` remain as deprecated aliases so
+  // ChatBubble/ChatScreen keep compiling without an App.tsx rewrite.
+  localReaction?: string;
+  localKeyMismatch?: boolean;
+  /** @deprecated use localReaction (ephemeral-only, never persisted) */
   reaction?: string;
+  /** @deprecated use localKeyMismatch (ephemeral-only, never persisted) */
   keyMismatch?: boolean;
 }
 
@@ -97,6 +112,12 @@ export interface ChatThread {
   // When set but different from safetyNumber, keys rotated since verification.
   verifiedSafetyNumber?: string | null;
   theme?: ChatCustomTheme;
+  // NOTE: server getContacts currently returns hardcoded defaults for these two
+  // blocks (muted:false/sound:default/showPreview:true + all-true privacy) — see
+  // server/src/database.ts getContacts. Per-thread overrides are local-first for
+  // now.
+  // TODO(persist): add notifications/privacy columns (or a thread_settings table)
+  // and round-trip them via PUT /contacts/thread-settings.
   notificationSettings: {
     muted: boolean;
     sound: 'default' | 'chime' | 'radar' | 'silent';
@@ -124,12 +145,19 @@ export interface ContactRequestWithUser {
   receiver: UserProfile;
 }
 
-export interface SearchOperativeResult extends UserProfile {
+// Public directory DTO: minimal Pick (never fingerprintHash/pinCode/quota) +
+// live connection status. Mirrors server GET /contacts/search + GET /auth/users
+// (id,name,handle,avatar,statusMessage,publicKey,memberSince,isVerifiedMember).
+export type SearchOperativeResult = Pick<
+  UserProfile,
+  'id' | 'name' | 'handle' | 'avatar' | 'statusMessage' | 'publicKey' | 'memberSince' | 'isVerifiedMember'
+> & {
   connectionStatus: 'connected' | 'pending_sent' | 'pending_received' | 'none';
-}
+};
 
 export interface LinkedDevice {
   id: string;
+  userId: string;
   name: string;
   type: 'smartphone' | 'tablet' | 'laptop' | 'browser';
   os: string;
@@ -137,6 +165,10 @@ export interface LinkedDevice {
   ipAddress: string;
   currentDevice: boolean;
   verifiedWithPasskey: boolean;
+  // Expo push routing (server POST /api/backup/devices/push-token). Optional:
+  // absent until registerPushToken succeeds on a physical device.
+  expoPushToken?: string;
+  platform?: 'android' | 'ios';
 }
 
 export interface InviteCode {

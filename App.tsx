@@ -34,6 +34,7 @@ import {
   saveIdentityKeyPair,
   getIdentityKeyPair,
   savePrimaryPin,
+  getPrimaryPin,
   getHistoricalKeyPairs,
   saveHistoricalKeyPair,
   saveBackupFrequency,
@@ -44,7 +45,7 @@ import {
 } from './src/utils/keyStore';
 import { clearDuressConfig } from './src/utils/duressConfig';
 
-import { encryptBackup, decryptBackup, BackupPayload } from './src/utils/backupCrypto';
+import { encryptBackup, decryptBackup, BackupPayload, BACKUP_MIN_PASSPHRASE_LENGTH } from './src/utils/backupCrypto';
 import { api, API_BASE_URL } from './src/services/api';
 import { socketService } from './src/services/socket';
 import { callAudio } from './src/utils/callAudio';
@@ -108,7 +109,7 @@ import {
 } from './src/services/backgroundSync';
 import { chatHeadNative } from './src/services/chatHeadNative';
 import { perfMark, perfSince, perfLog } from './src/utils/perf';
-import { loadOutbox, saveOutbox, clearOutbox } from './src/utils/outboxStore';
+import { loadOutbox, saveOutbox, clearOutbox, removeOutboxEntry } from './src/utils/outboxStore';
 import {
   saveCachedProfile,
   loadCachedProfile,
@@ -118,7 +119,11 @@ import {
   loadCachedChats,
   mergeCachedMessages,
   loadCachedMessageList,
+  removeCachedMessage,
+  purgeExpiredCachedMessages,
+  tombstoneCachedMessage,
 } from './src/utils/messageCache';
+import type { WireMessage } from './src/services/api';
 import {
   DECOY_USER,
   DECOY_ENCRYPTED_PAYLOAD,
@@ -268,9 +273,14 @@ export default function App() {
     setChats(prev => prev.map(c => (c.id === peer.id ? { ...c, lastMessage: newMsg, unreadCount: 0 } : c)));
 
     if (!isIncoming) {
-      const wireMsg: Message = { ...newMsg, text: '' };
-      api.sendMessage(wireMsg).catch(err => logger.warn('CallLog', 'REST send err:', err));
-      socketService.sendMessage(wireMsg);
+      const wireMsg = { ...newMsg, text: '' } as WireMessage;
+      const clientMessageId = newMsg.id;
+      api.sendMessage(wireMsg, { clientMessageId }).catch(err => logger.warn('CallLog', 'REST send err:', err));
+      try {
+        socketService.sendMessage(wireMsg as unknown as Message, { clientMessageId });
+      } catch (err) {
+        logger.warn('CallLog', 'Socket send notice:', err);
+      }
     }
   };
 
@@ -323,6 +333,64 @@ export default function App() {
   });
   const isDecoyModeRef = useRef(isDecoyMode);
   isDecoyModeRef.current = isDecoyMode;
+  const isAppLockedRef = useRef(isAppLocked);
+  isAppLockedRef.current = isAppLocked;
+  // Idempotency for read receipts: one conversation is marked once per open,
+  // retries reuse the same clientMessageId so the server dedupes.
+  const sentReadReceiptsRef = useRef<Set<string>>(new Set());
+  // Stable chronological order for paged history: (timestamp, id) tie-break
+  // so equal-timestamp messages never flip or duplicate across pages.
+  const sortMessagesStable = (list: Message[]): Message[] =>
+    [...list].sort((a, b) => (a.timestamp - b.timestamp) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // Single-source read receipt: socket when live, REST fallback when offline —
+  // never both for the same event. Suppressed while locked / in decoy mode.
+  const sendReadReceiptSingleSource = (peerId: string, chatId: string, scope: string) => {
+    if (isAppLockedRef.current || isDecoyModeRef.current) return;
+    if (sentReadReceiptsRef.current.has(scope)) return;
+    sentReadReceiptsRef.current.add(scope);
+    const clientMessageId = `read_${chatId}_${scope}`;
+    if (socketService.isConnected()) {
+      try {
+        socketService.markRead(peerId, chatId, clientMessageId);
+      } catch {}
+    } else {
+      api.markMessagesAsRead(peerId, chatId, clientMessageId).catch(() => {});
+    }
+  };
+  const sendStatusSingleSource = (
+    messageId: string,
+    chatId: string,
+    status: 'delivered' | 'read',
+    peerId?: string
+  ) => {
+    if (isAppLockedRef.current || isDecoyModeRef.current) return;
+    const scope = `${status}_${messageId}`;
+    if (sentReadReceiptsRef.current.has(scope)) return;
+    sentReadReceiptsRef.current.add(scope);
+    const clientMessageId = `${status}_${messageId}`;
+    if (socketService.isConnected()) {
+      try {
+        socketService.sendStatus(messageId, chatId, status, clientMessageId);
+      } catch {}
+    } else if (status === 'read' && peerId) {
+      api.markMessagesAsRead(peerId, chatId, clientMessageId).catch(() => {});
+    }
+  };
+  // Explicit "lose history" gate for fresh-install key rotation: never
+  // auto-mint a new identity key without the user understanding that every
+  // message encrypted to the old key becomes permanently unreadable.
+  const confirmLoseHistory = (): Promise<boolean> =>
+    new Promise(resolve => {
+      Alert.alert(
+        'No Backup Found — Start Fresh?',
+        'This device has no encryption keys for this account and no restorable backup was unlocked. Generating a new identity key will PERMANENTLY lose access to your previous message history (contacts will also see a safety-number change). Restore from backup instead if you have your backup password.',
+        [
+          { text: 'Restore Instead', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Lose History & Continue', style: 'destructive', onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) }
+      );
+    });
 
   const handleToggleAntiScreenshot = async (val: boolean) => {
     setAntiScreenshotEnabled(val);
@@ -573,6 +641,9 @@ export default function App() {
       }
       socketService.disconnect({ clearListeners: true });
       try {
+        socketService.setQueueUserId(null);
+      } catch {}
+      try {
         stopBackgroundSync();
       } catch {}
       await wipeAllSecureData(currentUser?.id);
@@ -706,6 +777,9 @@ export default function App() {
         setMySecretKey(keyPair.secretKey);
         setCurrentUser(profile);
         enterApp();
+        try {
+          socketService.setQueueUserId(profile.id);
+        } catch {}
         await socketService.connect();
         registerPushToken().catch(() => {});
         await reloadDynamicData(profile.id, { secret: keyPair.secretKey, user: profile });
@@ -770,6 +844,17 @@ export default function App() {
     try {
       const passphrase = await getBackupPassphrase();
       if (!passphrase) {
+        backupRunningRef.current = false;
+        return;
+      }
+      // PIN-as-passphrase separation: never escrow under a weak/short login
+      // PIN. Require the separate strong backup password (>=12) collected via
+      // CloudBackupModal; skip + warn so the next manual backup prompts.
+      if (passphrase.trim().length < BACKUP_MIN_PASSPHRASE_LENGTH) {
+        logger.warn(
+          'AutoBackup',
+          `Saved backup secret too short (>=${BACKUP_MIN_PASSPHRASE_LENGTH} required) — skipping auto-backup until the user sets a strong backup password.`
+        );
         backupRunningRef.current = false;
         return;
       }
@@ -879,22 +964,44 @@ export default function App() {
     }
 
     let keyPair = freshKeyPair || (await getIdentityKeyPair(user.id));
-    let restoredFromCloud = false;
 
     if (!keyPair) {
-      // Missing local key on this device (e.g. fresh install or session was removed)
-      // Check if zero-knowledge cloud backup escrow exists on server
+      // Restore-first flow: never auto-rotate on a fresh install. The server
+      // escrow (if any) is tried BEFORE minting a new key, because rotation
+      // permanently orphans every message encrypted to the old key and flips
+      // every safety number. decryptBackup stays backward-compatible with old
+      // short login PINs (null-path), so legacy vaults still unlock here.
+      let backupChecked = false;
+      let backupExists = false;
       try {
         const backupRes = await api.getCloudBackup(user.id, token);
-        if (backupRes?.success && backupRes.backup && pinCode) {
-          const restoredPayload = decryptBackup(
-            {
-              encryptedData: backupRes.backup.encryptedData,
-              salt: backupRes.backup.salt,
-              iv: backupRes.backup.iv,
-            },
-            pinCode
-          );
+        if (backupRes?.success && backupRes.backup) {
+          backupChecked = true;
+          backupExists = true;
+          // Try the login PIN first (legacy vaults), then any saved separate
+          // backup passphrase already on this device.
+          const candidates: string[] = [];
+          if (pinCode) candidates.push(pinCode);
+          try {
+            const saved = await getBackupPassphrase();
+            if (saved && !candidates.includes(saved)) candidates.push(saved);
+          } catch {}
+          let restoredPayload: BackupPayload | null = null;
+          for (const cand of candidates) {
+            try {
+              restoredPayload = decryptBackup(
+                {
+                  encryptedData: backupRes.backup.encryptedData,
+                  salt: backupRes.backup.salt,
+                  iv: backupRes.backup.iv,
+                },
+                cand
+              );
+            } catch {
+              restoredPayload = null;
+            }
+            if (restoredPayload?.identityKeyPair) break;
+          }
 
           if (restoredPayload?.identityKeyPair) {
             // Prompt the user with custom modern dialog modal
@@ -910,13 +1017,17 @@ export default function App() {
 
             if (shouldRestore) {
               keyPair = restoredPayload.identityKeyPair;
-              restoredFromCloud = true;
               if (restoredPayload.historicalKeyPairs) {
                 for (const hp of restoredPayload.historicalKeyPairs) {
                   await saveHistoricalKeyPair(user.id, hp);
                 }
               }
             }
+          } else if (backupChecked) {
+            // Vault exists but none of the supplied secrets opened it — do NOT
+            // rotate yet. The user must either retry restore with their backup
+            // password or explicitly accept history loss below.
+            logger.warn('Backup', 'Vault exists but PIN/passphrase did not unlock it; requiring explicit choice');
           }
         }
       } catch (err) {
@@ -924,12 +1035,33 @@ export default function App() {
       }
 
       if (!keyPair) {
+        // BLOCKED auto-rotate: require an explicit "lose history" confirm
+        // before generateIdentityKeyPair + updateProfile. This is the only
+        // place a fresh key may be minted for an existing account.
+        const confirmed = await confirmLoseHistory();
+        if (!confirmed) {
+          // User chose restore-instead: send them to the restore flow so they
+          // can supply their strong backup password (separate from login PIN).
+          setCurrentUser(user);
+          setCloudBackupInitialMode('restore');
+          setShowCloudBackupModal(true);
+          await clearSession();
+          Alert.alert(
+            'Restore Required',
+            'Sign in again after restoring your backup, or confirm history loss to continue with a new key.'
+          );
+          resetToAuth();
+          return;
+        }
         keyPair = generateIdentityKeyPair();
         const rotateRes = await api.updateProfile({ publicKey: keyPair.publicKey });
         if (rotateRes?.success && rotateRes.user) {
           user = rotateRes.user;
         } else {
           user = { ...user, publicKey: keyPair.publicKey };
+        }
+        if (backupExists) {
+          logger.warn('Backup', 'Rotated keys after explicit history-loss confirm despite existing vault');
         }
       }
     }
@@ -956,8 +1088,33 @@ export default function App() {
     // Switch screen immediately so user enters chat list with zero delay
     setCurrentUser(user);
     enterApp();
+    // useAppSecurity defaults locked=true (fail-closed): an interactive login
+    // just proved the user, so unlock explicitly — otherwise a fresh login
+    // would sit behind the shield until the next relock cycle.
+    setIsAppLocked(false);
+    sentReadReceiptsRef.current.clear();
+    try {
+      socketService.setQueueUserId(user.id);
+    } catch {}
     saveCachedProfile(user.id, user).catch(() => {});
     perfLog('login → chat list', perfSince('app_start'));
+
+    // PIN-as-passphrase migration: the login PIN is NEVER used as the backup
+    // encryption passphrase anymore (backupCrypto requires >= 12 chars).
+    // If a short login PIN is present, warn once and require a strong,
+    // separate backup password on the next backup via CloudBackupModal.
+    if (pinCode && pinCode.trim().length < BACKUP_MIN_PASSPHRASE_LENGTH) {
+      logger.warn(
+        'Backup',
+        `Login PIN is not a backup passphrase (>=${BACKUP_MIN_PASSPHRASE_LENGTH} required). Prompting for a separate backup password.`
+      );
+      setTimeout(() => {
+        Alert.alert(
+          'Backup Password Required',
+          `Your login PIN can no longer encrypt backups (minimum ${BACKUP_MIN_PASSPHRASE_LENGTH} characters). Please set a separate strong backup password on your next backup — your keys are NOT yet escrowed under the new policy.`
+        );
+      }, 1200);
+    }
 
     // Connect realtime socket and load dynamic contacts without blocking
     socketService.connect().catch(() => {});
@@ -965,38 +1122,13 @@ export default function App() {
     reloadDynamicData(user.id, { secret: keyPair.secretKey, user }).catch(() => {});
     restoreOutbox(user.id).catch(() => {});
 
-    // Defer heavy cryptographic auto-escrow and scheduled backup to run after
-    // screen transitions have completed, keeping the UI instantly interactive
+    // Defer scheduled auto-backup until after transitions. NOTE: no
+    // PIN-escrow here by design — backups are encrypted ONLY with the
+    // separate backup passphrase collected via CloudBackupModal (see
+    // onCreateBackup) and remembered via getBackupPassphrase(). Using the
+    // login PIN would both violate separation and throw under the >=12 rule.
     InteractionManager.runAfterInteractions(() => {
       setTimeout(async () => {
-        if (pinCode && !restoredFromCloud) {
-          try {
-            const backupPayload: BackupPayload = {
-              version: 2,
-              exportedAt: Date.now(),
-              identityKeyPair: keyPair,
-              historicalKeyPairs: loadedHKeys,
-            };
-            const blob = encryptBackup(backupPayload, pinCode);
-            await api.saveCloudBackup(
-              {
-                encryptedData: blob.encryptedData,
-                salt: blob.salt,
-                iv: blob.iv,
-                backupSizeKb: Math.ceil(blob.encryptedData.length / 1024),
-                backupVersion: '2.5.0-E2EE',
-                totalMessagesCount: 0,
-                totalChatsCount: 0,
-                keyFingerprint: user.fingerprintHash,
-              },
-              token
-            ).catch(() => {});
-            cloudBackupMetaRef.current = {
-              ...cloudBackupMetaRef.current,
-              lastBackupTime: Date.now(),
-            };
-          } catch {}
-        }
         performAutoBackupIfNeeded(user, keyPair.secretKey);
       }, 300);
     });
@@ -1221,7 +1353,8 @@ export default function App() {
     const loadMessages = async () => {
       setIsMessagesLoading(true);
       try {
-        const rawMessages = await api.getMessages(targetChatId, currentUser.id, { limit: MESSAGE_PAGE_SIZE });
+        const page = await api.getMessagesPage(targetChatId, currentUser.id, { limit: MESSAGE_PAGE_SIZE });
+        const rawMessages = page.messages;
         if (cancelled || activeChatIdRef.current !== targetChatId) return;
         const knownPublicKey = chatsRef.current.find(c => c.id === targetChatId)?.participant.publicKey;
 
@@ -1240,8 +1373,9 @@ export default function App() {
           return { ...m, text, keyMismatch: m.keyMismatch ?? keyMismatch };
         });
 
-        setMessages(mergeOutboxDisplays(targetChatId, decryptedList));
-        const more = rawMessages.length >= MESSAGE_PAGE_SIZE;
+        setMessages(mergeOutboxDisplays(targetChatId, sortMessagesStable(decryptedList)));
+        // hasMore = full page AND server says more (old servers: full page alone).
+        const more = rawMessages.length === MESSAGE_PAGE_SIZE && page.serverHasMore;
         hasMoreRef.current = more;
         setHasMoreMessages(more);
       } catch (err) {
@@ -1268,15 +1402,26 @@ export default function App() {
     loadingMoreRef.current = true;
     setIsLoadingMore(true);
     try {
-      const oldest = messagesRef.current.length > 0 ? messagesRef.current[0].timestamp : Date.now();
-      const raw = await api.getMessages(chatId, user.id, { limit: MESSAGE_PAGE_SIZE, before: oldest });
+      // (timestamp, id) cursor: the oldest visible message bounds the next
+      // window. beforeId breaks equal-timestamp ties so pages never skip or
+      // repeat when several messages share a millisecond.
+      const sorted = [...messagesRef.current].sort((a, b) => a.timestamp - b.timestamp || (a.id < b.id ? -1 : 1));
+      const oldestMsg = sorted.length > 0 ? sorted[0] : null;
+      const oldest = oldestMsg ? oldestMsg.timestamp : Date.now();
+      const beforeId = oldestMsg ? oldestMsg.id : undefined;
+      const page = await api.getMessagesPage(chatId, user.id, { limit: MESSAGE_PAGE_SIZE, before: oldest, beforeId });
+      const raw = page.messages;
       if (activeChatIdRef.current !== chatId) return;
       if (raw.length === 0) {
         // Offline (or true beginning): prepend any cached history older than
         // what's on screen, then stop — no spinner loop with no network.
         const cached = await loadCachedMessageList(user.id, chatId);
         const seenIds = new Set(messagesRef.current.map(m => m.id));
-        const older = cached.filter(m => !seenIds.has(m.id) && m.timestamp < oldest);
+        const older = cached.filter(
+          m =>
+            !seenIds.has(m.id) &&
+            (m.timestamp < oldest || (m.timestamp === oldest && beforeId !== undefined && m.id < beforeId))
+        );
         if (older.length > 0) {
           const knownPublicKey = chatsRef.current.find(c => c.id === chatId)?.participant.publicKey;
           const decryptedOlder = older.map(m => {
@@ -1292,7 +1437,8 @@ export default function App() {
           setMessages(prev => {
             if (activeChatIdRef.current !== chatId) return prev;
             const seen = new Set(prev.map(mm => mm.id));
-            return [...decryptedOlder.filter(m => !seen.has(m.id)), ...prev];
+            const merged = [...decryptedOlder.filter(m => !seen.has(m.id)), ...prev];
+            return merged.sort((a, b) => a.timestamp - b.timestamp || (a.id < b.id ? -1 : 1));
           });
         }
         hasMoreRef.current = false;
@@ -1313,14 +1459,18 @@ export default function App() {
       });
       setMessages(prev => {
         if (activeChatIdRef.current !== chatId) return prev;
-        const seen = new Set(prev.map(m => m.id));
-        const fresh = decrypted.filter(m => !seen.has(m.id));
-        return [...fresh, ...prev];
+        // Dedupe by id, then stable (timestamp, id) sort so pages merge
+        // deterministically even with equal timestamps.
+        const byId = new Map(prev.map(mm => [mm.id, mm] as [string, Message]));
+        for (const m of decrypted) {
+          if (!byId.has(m.id)) byId.set(m.id, m);
+        }
+        return Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp || (a.id < b.id ? -1 : 1));
       });
-      if (raw.length < MESSAGE_PAGE_SIZE) {
-        hasMoreRef.current = false;
-        setHasMoreMessages(false);
-      }
+      // hasMore = full page AND server says more (no more guessing from length alone).
+      const more = raw.length === MESSAGE_PAGE_SIZE && page.serverHasMore;
+      hasMoreRef.current = more;
+      setHasMoreMessages(more);
     } catch (err) {
       logger.warn('History', 'Older-page fetch notice:', err);
     } finally {
@@ -1357,7 +1507,7 @@ export default function App() {
           setMessages(prev => {
             const byId = new Map(prev.map(m => [m.id, m]));
             for (const m of decrypted) byId.set(m.id, { ...byId.get(m.id), ...m });
-            return Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp);
+            return Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp || (a.id < b.id ? -1 : 1));
           });
           if (raw.length > 0 && activeChatIdRef.current) {
             mergeCachedMessages(currentUser.id, activeChatIdRef.current, raw).catch(() => {});
@@ -1455,10 +1605,11 @@ export default function App() {
         );
 
         if (isCurrentlyOpen) {
-          socketService.sendStatus(msg.id, msg.chatId, 'read');
-          api.markMessagesAsRead(msg.senderId, msg.chatId).catch(() => {});
+          // Single-source auto-read (socket live, REST fallback), suppressed
+          // while locked / in decoy mode inside the helper.
+          sendStatusSingleSource(msg.id, msg.chatId, 'read', msg.senderId);
         } else {
-          socketService.sendStatus(msg.id, msg.chatId, 'delivered');
+          sendStatusSingleSource(msg.id, msg.chatId, 'delivered');
 
           // When new message arrives from another user, include them in chat heads (max 3 users).
           // Normalize to the chat THREAD id (not the raw sender/participant id) so the
@@ -1479,7 +1630,8 @@ export default function App() {
 
           const senderProfile = chatsRef.current.find(c => c.id === msg.senderId)?.participant;
           const currentChat = chatsRef.current.find(c => c.id === msg.senderId);
-          const showPreview = currentChat?.notificationSettings?.showPreview !== false;
+          // Secure default: previews OFF unless the thread explicitly opts in.
+          const showPreview = currentChat?.notificationSettings?.showPreview === true;
           const isMuted = currentChat?.notificationSettings?.muted === true;
 
           if (!isMuted) {
@@ -1490,7 +1642,8 @@ export default function App() {
               chatId: msg.chatId || msg.senderId,
               avatarUri: senderProfile?.avatar,
               showPreview,
-              isDecoyMode,
+              isDecoyMode: isDecoyModeRef.current,
+              isAppLocked: isAppLockedRef.current,
               onPress: () => {
                 setActiveChatId(msg.senderId);
                 setCurrentScreen('chat_detail');
@@ -1522,7 +1675,7 @@ export default function App() {
       );
     });
 
-    // Ephemeral Delete for Everyone
+    // Ephemeral Delete for Everyone: tombstone RAM + cache + outbox + tray.
     const unsubDelete = socketService.onMessageDeletedEveryone(data => {
       setMessages(prev =>
         prev.map(m =>
@@ -1531,6 +1684,45 @@ export default function App() {
             : m
         )
       );
+      const uid = currentUserRef.current?.id;
+      if (uid) {
+        const chatId = data.chatId;
+        tombstoneCachedMessage(uid, chatId, data.messageId, data.deletedAt).catch(() => {});
+        removeOutboxEntry(uid, data.messageId).catch(() => {});
+        outboxRef.current.delete(data.messageId);
+        setOutboxCount(outboxRef.current.size);
+        notificationService.cancelMessageNotification(chatId).catch(() => {});
+      }
+    });
+
+    // Auth rejection: stop-retry already handled in socket.ts (session
+    // cleared, reconnect disabled). Here we route back to auth instead of
+    // spinning forever on a dead token.
+    const unsubUnauthorized = socketService.onUnauthorized(() => {
+      setIsSocketConnected(false);
+      setCurrentUser(null);
+      setMySecretKey(null);
+      setChats([]);
+      setMessages([]);
+      outboxRef.current.clear();
+      setOutboxCount(0);
+      resetToAuth();
+    });
+    // Never-silently-dropped signaling: surface dead-letter as a missed-call /
+    // not-delivered notice so the user knows the peer never got the offer.
+    const unsubNotDelivered = socketService.onNotDelivered(info => {
+      if (isDecoyModeRef.current || isAppLockedRef.current) return;
+      if (info.queue === 'signal') {
+        const kind = (info.payload as any)?.signalType || 'signal';
+        logger.warn('Call', `Signaling not delivered (${kind}):`, info.reason);
+        notificationService
+          .showSecurityNotification({
+            title: 'Call Not Delivered',
+            message: `Your ${kind} could not be delivered (${info.reason}). The peer may show this as a missed call.`,
+            type: 'verification',
+          })
+          .catch(() => {});
+      }
     });
 
     // Connection lifecycle: drive the offline banner, flush the outbox, and
@@ -1672,7 +1864,8 @@ export default function App() {
           callerName: callerProfile.name,
           callType: signal.type || 'audio',
           avatarUri: callerProfile.avatar,
-          isDecoyMode,
+          isDecoyMode: isDecoyModeRef.current,
+          isAppLocked: isAppLockedRef.current,
           onAccept: () => handleAcceptIncomingCall(),
           onDecline: () => handleHangupCall(),
         }).catch(() => {});
@@ -1800,6 +1993,8 @@ export default function App() {
       unsubStatus();
       unsubTyping();
       unsubDelete();
+      unsubUnauthorized();
+      unsubNotDelivered();
       unsubConnect();
       unsubDisconnect();
       unsubScreenshot();
@@ -1810,18 +2005,58 @@ export default function App() {
     };
   }, [currentUser?.id, backgroundSyncEnabled]);
 
-  // 5. Ephemeral Message Self-Destruction Loop
+  // 5. Ephemeral Message Self-Destruction Loop: purge EVERYWHERE, not just
+  // from RAM. Each expired message is (a) tombstoned on the server via
+  // api.deleteMessage + realtime delete_for_everyone, (b) removed from the
+  // ciphertext cache, (c) dropped from the offline outbox, and (d) dismissed
+  // from the notification tray. Fire-and-forget per message so one failure
+  // never blocks the rest of the sweep.
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
-      setMessages(prev =>
-        prev.filter(m => {
-          if (m.expiresAt && m.expiresAt <= now && !m.isDeletedForEveryone) {
-            return false;
+      const expired = messagesRef.current.filter(
+        m => m.expiresAt && m.expiresAt <= now && !m.isDeletedForEveryone
+      );
+      if (expired.length === 0) return;
+      const uid = currentUserRef.current?.id;
+      setMessages(prev => prev.filter(m => !(m.expiresAt && m.expiresAt <= now && !m.isDeletedForEveryone)));
+      setChats(prev =>
+        prev.map(c => {
+          const last = c.lastMessage;
+          if (last && last.expiresAt && last.expiresAt <= now && !last.isDeletedForEveryone) {
+            return { ...c, lastMessage: undefined };
           }
-          return true;
+          return c;
         })
       );
+      for (const m of expired) {
+        const chatId = m.chatId || m.receiverId || m.senderId;
+        // Server tombstone (REST best-effort + realtime authoritative).
+        api.deleteMessage(m.id, chatId).catch(() => {});
+        try {
+          const peerId =
+            chatsRef.current.find(c => c.id === chatId)?.participant.id ||
+            (m.senderId === uid ? m.receiverId : m.senderId);
+          if (peerId) socketService.deleteForEveryone(m.id, chatId, peerId);
+        } catch {}
+        // Local cache + outbox purge + tray dismissal.
+        if (uid && chatId) {
+          removeCachedMessage(uid, chatId, m.id).catch(() => {});
+          tombstoneCachedMessage(uid, chatId, m.id, now).catch(() => {});
+          removeOutboxEntry(uid, m.id).catch(() => {});
+          outboxRef.current.delete(m.id);
+          notificationService.cancelMessageNotification(chatId).catch(() => {});
+        }
+      }
+      setOutboxCount(outboxRef.current.size);
+      persistOutbox();
+      // Batch-purge any other cached threads that expired off-screen.
+      if (uid) {
+        const chatIds = chatsRef.current.map(c => c.id);
+        if (chatIds.length > 0) {
+          purgeExpiredCachedMessages(uid, chatIds, now).catch(() => {});
+        }
+      }
     }, 1000);
 
     return () => clearInterval(interval);
@@ -1912,17 +2147,20 @@ export default function App() {
     // Guaranteed database write to backend (text stripped on wire for zero plaintext exposure).
     // Awaited (not fire-and-forget): on failure the message drops into the
     // offline outbox with a pending clock instead of vanishing silently.
-    const wireMsg: Message = { ...newMsg, text: '' };
+    // Idempotency: the same clientMessageId rides both REST and socket so a
+    // double-delivery / retry dedupes instead of duplicating.
+    const wireMsg = { ...newMsg, text: '' } as WireMessage;
+    const clientMessageId = messageId;
     // Cache our own wire copy (ciphertext) so sent mail stays visible offline.
     if (!isDecoyModeRef.current) {
-      mergeCachedMessages(currentUser.id, targetChatId, [wireMsg]).catch(() => {});
+      mergeCachedMessages(currentUser.id, targetChatId, [wireMsg as unknown as Message]).catch(() => {});
     }
     try {
-      const res = await api.sendMessage(wireMsg);
+      const res = await api.sendMessage(wireMsg, { clientMessageId });
       if (!res?.success) throw new Error(res?.error || 'Persist failed');
     } catch (err) {
       logger.warn('Outbox', 'REST persist failed, queued:', (err as Error)?.message || err);
-      outboxRef.current.set(messageId, { wire: wireMsg, display: newMsg });
+      outboxRef.current.set(messageId, { wire: wireMsg as unknown as Message, display: newMsg });
       setOutboxCount(outboxRef.current.size);
       persistOutbox();
       const markPending = (m: Message) => (m.id === messageId ? { ...m, status: 'sending' as const } : m);
@@ -1939,8 +2177,12 @@ export default function App() {
       );
     }
 
-    // Real-time forward via Socket.IO (internally queued while offline)
-    socketService.sendMessage(wireMsg);
+    // Real-time forward via Socket.IO (durable message queue while offline)
+    try {
+      socketService.sendMessage(wireMsg as unknown as Message, { clientMessageId });
+    } catch (err) {
+      logger.warn('Outbox', 'Socket enqueue notice:', err);
+    }
   };
 
   const markOutboxSent = (messageId: string) => {
@@ -1960,16 +2202,19 @@ export default function App() {
   };
 
   // Flush the offline outbox (REST persist works over plain HTTP — no socket
-  // needed — then re-emit on the socket for realtime delivery).
+  // needed — then re-emit on the socket for realtime delivery). Same
+  // clientMessageId on both legs keeps the retry idempotent.
   const flushOutbox = useCallback(async () => {
     if (outboxRef.current.size === 0 || isDecoyModeRef.current) return;
     const pending = Array.from(outboxRef.current.entries());
     for (const [id, entry] of pending) {
-      const wireMsg = entry.wire;
+      const wireMsg = { ...entry.wire, text: '' } as WireMessage;
       try {
-        const res = await api.sendMessage(wireMsg);
+        const res = await api.sendMessage(wireMsg, { clientMessageId: id });
         if (!res?.success) throw new Error(res?.error || 'Persist failed');
-        socketService.sendMessage(wireMsg);
+        try {
+          socketService.sendMessage(wireMsg as unknown as Message, { clientMessageId: id });
+        } catch {}
         markOutboxSent(id);
       } catch (err) {
         logger.warn('Outbox', 'Flush retry failed for', id);
@@ -1984,11 +2229,13 @@ export default function App() {
     async (messageId: string) => {
       const entry = outboxRef.current.get(messageId);
       if (!entry) return;
-      const wireMsg = entry.wire;
+      const wireMsg = { ...entry.wire, text: '' } as WireMessage;
       try {
-        const res = await api.sendMessage(wireMsg);
+        const res = await api.sendMessage(wireMsg, { clientMessageId: messageId });
         if (!res?.success) throw new Error(res?.error || 'Persist failed');
-        socketService.sendMessage(wireMsg);
+        try {
+          socketService.sendMessage(wireMsg as unknown as Message, { clientMessageId: messageId });
+        } catch {}
         markOutboxSent(messageId);
       } catch (err) {
         Alert.alert('Still Offline', 'Could not send yet. It will retry automatically on reconnect.');
@@ -2018,7 +2265,7 @@ export default function App() {
       .map(e => e.display)
       .filter(m => (m.chatId === chatId || m.receiverId === chatId) && !list.some(x => x.id === m.id));
     if (mine.length === 0) return list;
-    return [...list, ...mine].sort((a, b) => a.timestamp - b.timestamp);
+    return [...list, ...mine].sort((a, b) => a.timestamp - b.timestamp || (a.id < b.id ? -1 : 1));
   }, []);
 
   // Restore durable outbox after login/launch: repopulate the queue, revive
@@ -2031,7 +2278,9 @@ export default function App() {
       setOutboxCount(outboxRef.current.size);
       setMessages(prev => {
         const mine = entries.map(e => e.display).filter(m => !prev.some(x => x.id === m.id));
-        return mine.length ? [...prev, ...mine].sort((a, b) => a.timestamp - b.timestamp) : prev;
+        return mine.length
+          ? [...prev, ...mine].sort((a, b) => a.timestamp - b.timestamp || (a.id < b.id ? -1 : 1))
+          : prev;
       });
       setChats(prev =>
         prev.map(c => {
@@ -2144,13 +2393,16 @@ export default function App() {
     }
   };
 
-  // Handler: Delete for Everyone
+  // Handler: Delete for Everyone — purge server + cache + outbox + tray.
   const handleDeleteForEveryone = (messageId: string) => {
     if (!activeChatId || !currentUser) return;
     const activeChat = chats.find(c => c.id === activeChatId);
     if (!activeChat) return;
 
-    socketService.deleteForEveryone(messageId, activeChatId, activeChat.participant.id);
+    try {
+      socketService.deleteForEveryone(messageId, activeChatId, activeChat.participant.id);
+    } catch {}
+    api.deleteMessage(messageId, activeChatId).catch(() => {});
 
     setMessages(prev =>
       prev.map(m =>
@@ -2159,6 +2411,12 @@ export default function App() {
           : m
       )
     );
+    tombstoneCachedMessage(currentUser.id, activeChatId, messageId, Date.now()).catch(() => {});
+    removeOutboxEntry(currentUser.id, messageId).catch(() => {});
+    outboxRef.current.delete(messageId);
+    setOutboxCount(outboxRef.current.size);
+    persistOutbox();
+    notificationService.cancelMessageNotification(activeChatId).catch(() => {});
   };
 
   // Handler: Send Contact Request. The REST call both saves the request and
@@ -2249,6 +2507,9 @@ export default function App() {
     setActiveChatHeadContactId(null);
     await clearSession();
     socketService.disconnect({ clearListeners: true });
+    try {
+      socketService.setQueueUserId(null);
+    } catch {}
     setCurrentUser(null);
     setMySecretKey(null);
     resetToAuth();
@@ -2529,15 +2790,18 @@ export default function App() {
                   }));
                   setIsChatHeadExpanded(false);
                   setCurrentScreen('chat_detail');
-                  if (!isDecoyMode && currentUser) {
+                  // Read receipts are single-source (socket live, REST fallback)
+                  // and suppressed while locked / in decoy mode.
+                  if (!isDecoyModeRef.current && !isAppLockedRef.current && currentUser) {
                     const targetChat = chats.find(c => c.id === chatId);
                     const peerId = targetChat ? targetChat.participant.id : chatId;
-                    socketService.markRead(peerId, chatId);
-                    api.markMessagesAsRead(peerId, chatId).catch(() => {});
+                    sendReadReceiptSingleSource(peerId, chatId, `open_${chatId}_${Date.now()}`);
                     setChats(prev => prev.map(c => (c.id === chatId ? { ...c, unreadCount: 0 } : c)));
                     setMessages(prev =>
                       prev.map(m => (m.chatId === chatId && m.senderId !== currentUser.id ? { ...m, status: 'read' } : m))
                     );
+                  } else if (currentUser) {
+                    setChats(prev => prev.map(c => (c.id === chatId ? { ...c, unreadCount: 0 } : c)));
                   }
                 }}
                 onOpenRequestsModal={() => setShowRequestsModal(true)}
@@ -2797,13 +3061,39 @@ export default function App() {
           onChangeFrequency={handleUpdateBackupFrequency}
           onCreateBackup={async passphrase => {
             if (!currentUser || !mySecretKey) return false;
+            // PIN-as-passphrase separation: backups require a SEPARATE strong
+            // password (>=12), never the short login PIN. Reject weak input
+            // here (encryptBackup would throw) with a migration-grade message.
+            if (!passphrase || passphrase.trim().length < BACKUP_MIN_PASSPHRASE_LENGTH) {
+              Alert.alert(
+                'Weak Backup Password',
+                `Backup passwords must be at least ${BACKUP_MIN_PASSPHRASE_LENGTH} characters and DIFFERENT from your login PIN. Short PINs no longer encrypt backups.`
+              );
+              return false;
+            }
+            try {
+              const primaryPin = await getPrimaryPin().catch(() => null);
+              if (primaryPin && passphrase === primaryPin) {
+                Alert.alert(
+                  'Use a Different Password',
+                  'Your backup password must be different from your login PIN so a stolen PIN alone cannot unlock your key vault.'
+                );
+                return false;
+              }
+            } catch {}
             const payload: BackupPayload = {
               version: 2,
               exportedAt: Date.now(),
               identityKeyPair: { publicKey: currentUser.publicKey, secretKey: mySecretKey },
               historicalKeyPairs: historicalKeys,
             };
-            const blob = encryptBackup(payload, passphrase);
+            let blob;
+            try {
+              blob = encryptBackup(payload, passphrase);
+            } catch (err: any) {
+              Alert.alert('Backup Failed', err?.message || 'Could not encrypt backup with that password.');
+              return false;
+            }
             const res = await api.saveCloudBackup({
               encryptedData: blob.encryptedData,
               salt: blob.salt,

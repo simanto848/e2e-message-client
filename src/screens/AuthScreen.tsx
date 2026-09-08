@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, BackHandler, Animated, Easing, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, Animated, Easing, KeyboardAvoidingView, Platform } from 'react-native';
 import { ShieldCheck, Lock, KeyRound, Ticket, Fingerprint, User } from '../components/Icons';
 import { JabyLogo } from '../components/JabyLogo';
 import { UserProfile } from '../types';
@@ -17,9 +17,15 @@ interface Props {
     freshKeyPair?: IdentityKeyPair,
     pinCode?: string
   ) => void | Promise<void>;
+  /**
+   * Notifies the parent when Sign-Up/Login tab changes so the central
+   * hardware-back handler (decideBackAction isRegisterMode snapshot) can
+   * route back to Log In. This screen registers no BackHandler itself.
+   */
+  onRegisterModeChange?: (isRegister: boolean) => void;
 }
 
-export function AuthScreen({ onAuthenticated }: Props) {
+export function AuthScreen({ onAuthenticated, onRegisterModeChange }: Props) {
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [handle, setHandle] = useState('');
   const [name, setName] = useState('');
@@ -64,18 +70,13 @@ export function AuthScreen({ onAuthenticated }: Props) {
     };
   }, [loading]);
 
-  // When in registration view, pressing hardware back returns to login view
+  // Hardware back is owned centrally by decideBackAction (isRegisterMode
+  // snapshot → 'exit-register' → parent clears register mode). No local
+  // BackHandler here — competing listeners raced the central handler and
+  // double-handled back. Notify the parent so it can feed the snapshot.
   useEffect(() => {
-    if (!isRegisterMode) return;
-
-    const onHardwareBack = () => {
-      setIsRegisterMode(false);
-      return true;
-    };
-
-    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
-    return () => sub.remove();
-  }, [isRegisterMode]);
+    onRegisterModeChange?.(isRegisterMode);
+  }, [isRegisterMode, onRegisterModeChange]);
 
   const registerStrength = evaluatePasswordStrength(pinCode);
 
@@ -130,6 +131,35 @@ export function AuthScreen({ onAuthenticated }: Props) {
     }
     if (!pinCode || pinCode.length < 6) {
       Alert.alert('PIN Too Short', 'Choose a PIN or passcode of at least 6 characters for enclave protection.');
+      return;
+    }
+    // Strength gate: require score >= 3 (Strong) using the existing evaluator.
+    // Keeps the 6-char minimum above, but short/weak values that score 0-2 are
+    // rejected even if they meet the length floor.
+    const strength = evaluatePasswordStrength(pinCode);
+    if (strength.score < 3) {
+      Alert.alert(
+        'Passcode Too Weak',
+        strength.feedback ||
+          'Choose a stronger passcode (longer, with mixed letters, numbers, and symbols).'
+      );
+      return;
+    }
+    // Reject well-known weak patterns outright (mirrors COMMON_PATTERNS in
+    // utils/passwordStrength — duplicated here so this screen does not depend
+    // on that module exporting its internal list).
+    const lowerPin = pinCode.toLowerCase();
+    const BANNED_PATTERNS = [
+      '1234', '2345', '3456', '4567', '5678', '6789', '7890',
+      '0000', '1111', '2222', '3333', '4444', '5555', '6666',
+      '7777', '8888', '9999', '1212', '1313', '6969',
+      'password', 'admin', 'qwerty', 'asdf', 'letmein',
+    ];
+    if (BANNED_PATTERNS.some(pat => lowerPin.includes(pat))) {
+      Alert.alert(
+        'Passcode Too Predictable',
+        'That passcode contains a commonly abused pattern. Choose something less predictable.'
+      );
       return;
     }
 
@@ -368,7 +398,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
             </View>
           )}
 
-          {/* Quick Demo Fill */}
+          {/* Quick Demo Fill — __DEV__-gated: stripped from production builds (never ships). */}
           {__DEV__ && (
             <View style={styles.quickFillContainer}>
               <Text style={styles.quickFillLabel}>TEST ACCOUNTS</Text>
