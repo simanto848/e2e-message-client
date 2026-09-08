@@ -9,6 +9,21 @@ const LOCAL_SOUNDS = {
   message: require('../../assets/sounds/message.wav'),
 };
 
+// Network sound fallback is best-effort only: local assets are the source of
+// truth (instant, offline). Remote fetch is bounded so a dead network can
+// never hang call setup — it times out and the call proceeds silently.
+const NETWORK_SOUND_TIMEOUT_MS = 8000;
+
+function withSoundTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('sound fetch timed out')), NETWORK_SOUND_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
+}
+
 class CallAudioManager {
   private currentSound: Audio.Sound | null = null;
   private isPlaying = false;
@@ -59,13 +74,16 @@ class CallAudioManager {
         logger.warn('CallAudio', 'Local ringtone asset failed, falling back to network:', localErr);
       }
 
-      // Network fallback
-      const ringtoneUrl = `${API_BASE_URL}/sounds/ringtone`;
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: ringtoneUrl },
-        { shouldPlay: true, isLooping: true, volume: 1.0 }
-      );
-      this.currentSound = sound;
+      // Network fallback (bounded — never blocks call setup)
+      try {
+        const ringtoneUrl = `${API_BASE_URL}/sounds/ringtone`;
+        const { sound } = await withSoundTimeout(
+          Audio.Sound.createAsync({ uri: ringtoneUrl }, { shouldPlay: true, isLooping: true, volume: 1.0 })
+        );
+        this.currentSound = sound;
+      } catch (netErr) {
+        logger.warn('CallAudio', 'Network ringtone fallback failed/timed out:', netErr);
+      }
     } catch (err) {
       logger.warn('CallAudio', 'Ringtone playback error:', err);
     }
@@ -116,13 +134,16 @@ class CallAudioManager {
           }
         });
       } catch (localErr) {
-        // Fallback to network
-        const hangupUrl = `${API_BASE_URL}/sounds/hangup`;
-        const { sound } = await Audio.Sound.createAsync(
-          { uri: hangupUrl },
-          { shouldPlay: true, isLooping: false, volume: 0.9 }
-        );
-        this.currentSound = sound;
+        // Fallback to network (bounded — best-effort only)
+        try {
+          const hangupUrl = `${API_BASE_URL}/sounds/hangup`;
+          const { sound } = await withSoundTimeout(
+            Audio.Sound.createAsync({ uri: hangupUrl }, { shouldPlay: true, isLooping: false, volume: 0.9 })
+          );
+          this.currentSound = sound;
+        } catch (netErr) {
+          logger.warn('CallAudio', 'Network hangup fallback failed/timed out:', netErr);
+        }
       }
     } catch (err) {
       logger.warn('CallAudio', 'Hangup tone error:', err);

@@ -1,5 +1,11 @@
 /**
  * Utility functions and constants for Disappearing Messages (Ephemeral Timer).
+ *
+ * Presets are the contract with the server (contacts.routes.ts
+ * ALLOWED_DISAPPEARING_TIMERS + database.ts allowlist + server/src/types.ts
+ * DisappearingTimer): 0,5,15,30,60,300,3600,28800 (8h),86400,604800 (7d).
+ * MAX 604800 (7d) — custom hour:min values from DisappearingTimerModal are
+ * clamped to this max before send (server returns 400 beyond it).
  */
 
 export function formatDisappearingTimer(seconds: number): string {
@@ -52,3 +58,10 @@ export const PRESET_TIMERS: { label: string; value: number; subtitle: string }[]
   { label: '24h', value: 86400, subtitle: '24 hours (1 day)' },
   { label: '7d', value: 604800, subtitle: '7 days (1 week)' },
 ];
+
+export const MAX_DISAPPEARING_TIMER_S = 604800;
+
+export function clampDisappearingTimer(seconds: number): number {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.min(Math.floor(seconds), MAX_DISAPPEARING_TIMER_S);
+}

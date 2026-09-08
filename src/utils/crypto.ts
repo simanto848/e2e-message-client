@@ -45,62 +45,36 @@ export function bytesToHex(bytes: Uint8Array): string {
     .join('');
 }
 
+/**
+ * Strict hex decoder — rejects non-hex instead of silently dropping characters.
+ * The old implementation stripped invalid chars with /[^0-9a-fA-F]/g, which could
+ * turn attacker-controlled or corrupted input into a *different valid* byte string
+ * (e.g. "zzab" -> "ab"). Fail-closed: throw on any non-hex char or odd length.
+ * Callers pass SHA-256 hex digests (always clean), so throwing is safe.
+ */
 export function hexToBytes(hex: string): Uint8Array {
-  const cleanHex = hex.replace(/[^0-9a-fA-F]/g, '');
-  const bytes = new Uint8Array(Math.floor(cleanHex.length / 2));
+  if (typeof hex !== 'string') {
+    throw new Error('crypto.hexToBytes: input must be a string');
+  }
+  if (hex.length === 0) return new Uint8Array(0);
+  if (hex.length % 2 !== 0) {
+    throw new Error('crypto.hexToBytes: odd-length hex string rejected');
+  }
+  if (!/^[0-9a-fA-F]+$/.test(hex)) {
+    throw new Error('crypto.hexToBytes: non-hex characters rejected');
+  }
+  const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(cleanHex.substring(i * 2, i * 2 + 2), 16);
+    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
   }
   return bytes;
 }
 
-const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-
-export function bytesToBase64(bytes: Uint8Array): string {
-  let output = '';
-  let i = 0;
-  while (i < bytes.length) {
-    const b1 = bytes[i++];
-    const b2 = i < bytes.length ? bytes[i++] : NaN;
-    const b3 = i < bytes.length ? bytes[i++] : NaN;
-
-    const enc1 = b1 >> 2;
-    const enc2 = ((b1 & 3) << 4) | (isNaN(b2) ? 0 : b2 >> 4);
-    let enc3 = isNaN(b2) ? 64 : ((b2 & 15) << 2) | (isNaN(b3) ? 0 : b3 >> 6);
-    let enc4 = isNaN(b3) ? 64 : b3 & 63;
-
-    if (isNaN(b2)) {
-      enc3 = 64;
-      enc4 = 64;
-    } else if (isNaN(b3)) {
-      enc4 = 64;
-    }
-
-    output += B64_CHARS.charAt(enc1) + B64_CHARS.charAt(enc2) + B64_CHARS.charAt(enc3) + B64_CHARS.charAt(enc4);
-  }
-  return output;
-}
-
-export function base64ToBytes(base64: string): Uint8Array {
-  const clean = base64.replace(/[^A-Za-z0-9+/=]/g, '');
-  const bytes: number[] = [];
-  let i = 0;
-  while (i < clean.length) {
-    const enc1 = B64_CHARS.indexOf(clean.charAt(i++));
-    const enc2 = B64_CHARS.indexOf(clean.charAt(i++));
-    const enc3 = B64_CHARS.indexOf(clean.charAt(i++));
-    const enc4 = B64_CHARS.indexOf(clean.charAt(i++));
-
-    const chr1 = (enc1 << 2) | (enc2 >> 4);
-    const chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
-    const chr3 = ((enc3 & 3) << 6) | enc4;
-
-    bytes.push(chr1);
-    if (enc3 !== 64 && !isNaN(enc3)) bytes.push(chr2);
-    if (enc4 !== 64 && !isNaN(enc4)) bytes.push(chr3);
-  }
-  return new Uint8Array(bytes);
-}
+// Single source of truth for base64 is ./base64.ts (pure, no RN deps) so bun/node
+// tests can import it without pulling expo-crypto -> react-native.
+// Re-exported here for backwards compat — do NOT duplicate B64 loops.
+export { bytesToBase64, base64ToBytes } from './base64';
+import { bytesToBase64, base64ToBytes } from './base64';
 
 // SHA-256 hash using expo-crypto (used only for non-secret fingerprint display, never as a key)
 export async function sha256Hash(input: string): Promise<string> {
