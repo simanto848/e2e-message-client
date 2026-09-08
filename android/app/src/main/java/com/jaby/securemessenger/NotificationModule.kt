@@ -75,7 +75,8 @@ class NotificationModule(private val reactContext: ReactApplicationContext) :
                         .build()
                 )
                 setShowBadge(true)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                // PRIVATE (never PUBLIC): lockscreen shows generic label, never sender/call content.
+                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
             }
 
             // 3. Security Alerts Channel
@@ -89,7 +90,8 @@ class NotificationModule(private val reactContext: ReactApplicationContext) :
                 lightColor = Color.parseColor("#f59e0b")
                 enableVibration(true)
                 setShowBadge(true)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                // SECRET: key-change / zeroization alerts never appear on a locked screen.
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
             }
 
             notificationManager.createNotificationChannel(messagesChannel)

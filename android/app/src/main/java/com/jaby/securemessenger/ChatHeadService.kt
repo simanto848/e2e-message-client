@@ -431,21 +431,87 @@ class ChatHeadService : Service() {
         loadAvatarImage(avatarUrl)
     }
 
+    // Avatar allowlist: avatars are served from our Cloudinary CDN (see
+    // mobile/src/utils/avatarUpload.ts). HTTPS-only + host allowlist prevents a
+    // malicious sender profile from pointing the overlay service at an internal
+    // http:// URL (SSRF) or an unbounded hostile image (OOM).
+    private val AVATAR_ALLOWED_HOSTS = setOf("res.cloudinary.com")
+
+    private fun isAllowedAvatarUrl(url: String): Boolean {
+        return try {
+            val parsed = URL(url)
+            if (parsed.protocol != "https") return false
+            val host = parsed.host?.lowercase() ?: return false
+            AVATAR_ALLOWED_HOSTS.any { allowed -> host == allowed || host.endsWith(".$allowed") }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun loadAvatarImage(url: String?) {
         val imgView = chatHeadView?.findViewById<ImageView>(ID_AVATAR_IMG) ?: return
         val initials = chatHeadView?.findViewById<TextView>(ID_INITIALS) ?: return
 
-        if (url.isNullOrBlank()) {
+        if (url.isNullOrBlank() || !isAllowedAvatarUrl(url)) {
             imgView.visibility = View.GONE
             initials.visibility = View.VISIBLE
             return
         }
 
+        // Runs on a background thread (never the UI thread). Bounded: 5s
+        // connect/read timeouts, 512px downsample cap, ~2MB byte cap, and a
+        // pixel-count guard so a hostile image cannot OOM the FGS process.
+        // Any failure falls back to the initials placeholder.
         thread {
+            var connection: java.net.HttpURLConnection? = null
             try {
-                val stream = URL(url).openStream()
-                val bitmap = BitmapFactory.decodeStream(stream)
-                val circularBitmap = getCircularBitmap(bitmap)
+                connection = (URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                    instanceFollowRedirects = true
+                    setRequestProperty("Accept", "image/*")
+                    connect()
+                }
+                val contentLength = connection.contentLength
+                // Reject absurdly large payloads before buffering (>2MB).
+                if (contentLength > 2 * 1024 * 1024) {
+                    throw java.io.IOException("avatar too large: $contentLength bytes")
+                }
+                val bytes = connection.inputStream.use { it.readBytes() }
+                if (bytes.size > 2 * 1024 * 1024 || bytes.isEmpty()) {
+                    throw java.io.IOException("avatar byte cap exceeded or empty")
+                }
+                // Bounds-only decode to compute a 512px-capped sample size.
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                    throw java.io.IOException("undecodable avatar")
+                }
+                // Pixel-count guard pre-decode (~12MP cap).
+                if (bounds.outWidth.toLong() * bounds.outHeight.toLong() > 12_000_000L) {
+                    throw java.io.IOException("avatar dimensions too large")
+                }
+                var sampleSize = 1
+                val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
+                while (maxDim / sampleSize > 512) {
+                    sampleSize *= 2
+                }
+                val opts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                    ?: throw java.io.IOException("decode failed")
+                // Post-decode hard cap: scale down if still >512px (prevents OOM in getCircularBitmap).
+                val capped = if (maxOf(bitmap.width, bitmap.height) > 512) {
+                    val scale = 512f / maxOf(bitmap.width, bitmap.height).toFloat()
+                    Bitmap.createScaledBitmap(
+                        bitmap,
+                        (bitmap.width * scale).toInt().coerceAtLeast(1),
+                        (bitmap.height * scale).toInt().coerceAtLeast(1),
+                        true
+                    )
+                } else {
+                    bitmap
+                }
+                val circularBitmap = getCircularBitmap(capped)
                 imgView.post {
                     imgView.setImageBitmap(circularBitmap)
                     imgView.visibility = View.VISIBLE
@@ -456,6 +522,8 @@ class ChatHeadService : Service() {
                     imgView.visibility = View.GONE
                     initials.visibility = View.VISIBLE
                 }
+            } finally {
+                try { connection?.disconnect() } catch (_: Exception) {}
             }
         }
     }
