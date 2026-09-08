@@ -14,6 +14,10 @@ export interface HardwareBackActions {
   closeModal: (modal: ModalKey) => void;
   backFromChatDetail: () => void;
   backFromSettings: () => void;
+  /** Optional: wired when ChatList exposes hasSearchQuery (central back owns it). */
+  clearSearchQuery?: () => void;
+  /** Optional: wired when Auth exposes isRegisterMode (central back owns it). */
+  exitRegisterMode?: () => void;
 }
 
 const EXIT_CONFIRM_WINDOW_MS = 2000;
@@ -53,6 +57,16 @@ export function useHardwareBack(
           return true;
         case 'close-modal':
           a.closeModal(decision.modal);
+          return true;
+        case 'clear-search':
+          if (a.clearSearchQuery) {
+            a.clearSearchQuery();
+          }
+          return true;
+        case 'exit-register':
+          if (a.exitRegisterMode) {
+            a.exitRegisterMode();
+          }
           return true;
         case 'nav-chat-detail-back':
           a.backFromChatDetail();
