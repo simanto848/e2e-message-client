@@ -7,20 +7,54 @@
  * longer sent on emits that used to include it; the server derives it from
  * the authenticated socket, so a compromised/buggy client can no longer
  * pretend to be a different user.
+ *
+ * Queues: two SEPARATE durable queues — chat messages vs call signaling —
+ * each mirrored to disk via outboxStore (survives force-kill) and capped at
+ * 50 with dead-letter overflow. Offer/answer/ice are NEVER silently dropped:
+ * offline signals are queued, and queue-full/Auth failures return
+ * { queued:false, reason } so the caller can show missed-call / not-delivered
+ * UI instead of leaving the peer ringing forever.
  */
 import { io, Socket } from 'socket.io-client';
 import { Message, ContactRequestWithUser, UserProfile } from '../types';
 
 import { SOCKET_SERVER_URL } from './config';
-import { getSessionToken } from '../utils/keyStore';
+import { getSessionToken, clearSession } from '../utils/keyStore';
+import {
+  QueuedSocketItem,
+  DeadLetterEntry,
+  SOCKET_QUEUE_CAP,
+  loadSocketMessageQueue,
+  saveSocketMessageQueue,
+  loadSocketSignalQueue,
+  saveSocketSignalQueue,
+  appendDeadLetter,
+} from '../utils/outboxStore';
 import { logger } from '../utils/logger';
 
 export { SOCKET_SERVER_URL };
 
+export interface QueuedResult {
+  queued: boolean;
+  via?: 'live' | 'queued';
+  reason?: string;
+}
+
+type NotDeliveredInfo = DeadLetterEntry;
+
 class SocketService {
   private socket: Socket | null = null;
   private listeners: Map<string, Set<Function>> = new Map();
-  private outgoingQueue: Array<{ event: string; payload: any }> = [];
+  // Separate durable queues: chat traffic vs call signaling (never mixed, so a
+  // burst of chat retries can't head-of-line-block an urgent hangup/reject).
+  private messageQueue: QueuedSocketItem[] = [];
+  private signalQueue: QueuedSocketItem[] = [];
+  private deadLetter: DeadLetterEntry[] = [];
+  private queueUserId: string | null = null;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private authFailed = false;
+  private unauthorizedHandlers = new Set<() => void>();
+  private notDeliveredHandlers = new Set<(info: NotDeliveredInfo) => void>();
 
   private addEventListener<T extends Function>(event: string, callback: T): () => void {
     if (!this.listeners.has(event)) {
@@ -40,16 +74,93 @@ class SocketService {
     };
   }
 
+  private emitInternal(event: string, data?: any) {
+    this.listeners.get(event)?.forEach(cb => {
+      try {
+        (cb as any)(data);
+      } catch {}
+    });
+  }
+
   private bindAllListeners() {
     if (!this.socket) return;
     this.listeners.forEach((callbacks, event) => {
+      // Internal pseudo-events (unauthorized / not-delivered) never hit the wire.
+      if (event === 'socket_unauthorized' || event === 'socket_not_delivered') return;
       callbacks.forEach(cb => {
         this.socket?.on(event, cb as any);
       });
     });
   }
 
+  /** Attribute durable queues to a user so they persist/restore per-account. */
+  setQueueUserId(userId: string | null) {
+    this.queueUserId = userId;
+    if (userId) {
+      this.hydrateQueues(userId).catch(() => {});
+    }
+  }
+
+  private async hydrateQueues(userId: string) {
+    try {
+      const [msgs, sigs] = await Promise.all([
+        loadSocketMessageQueue(userId),
+        loadSocketSignalQueue(userId),
+      ]);
+      if (this.queueUserId !== userId) return;
+      if (msgs.length > 0 && this.messageQueue.length === 0) this.messageQueue = msgs.slice(0, SOCKET_QUEUE_CAP);
+      if (sigs.length > 0 && this.signalQueue.length === 0) this.signalQueue = sigs.slice(0, SOCKET_QUEUE_CAP);
+      if (this.socket?.connected) this.flushQueues();
+    } catch {}
+  }
+
+  private schedulePersist() {
+    if (!this.queueUserId) return;
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      const uid = this.queueUserId;
+      if (!uid) return;
+      saveSocketMessageQueue(uid, this.messageQueue).catch(() => {});
+      saveSocketSignalQueue(uid, this.signalQueue).catch(() => {});
+    }, 250);
+  }
+
+  private async pushDeadLetter(queue: 'message' | 'signal', event: string, payload: any, reason: string) {
+    const entry: DeadLetterEntry = { queue, event, payload, reason, droppedAt: Date.now() };
+    this.deadLetter.push(entry);
+    if (this.deadLetter.length > SOCKET_QUEUE_CAP) this.deadLetter.shift();
+    logger.warn('Socket', `Dead-letter [${queue}] ${event}: ${reason}`);
+    this.emitInternal('socket_not_delivered', entry);
+    this.notDeliveredHandlers.forEach(fn => {
+      try {
+        fn(entry);
+      } catch {}
+    });
+    if (this.queueUserId) {
+      appendDeadLetter(this.queueUserId, entry).catch(() => {});
+    }
+  }
+
+  private enqueue(queue: 'message' | 'signal', event: string, payload: any): QueuedResult {
+    const target = queue === 'message' ? this.messageQueue : this.signalQueue;
+    if (target.length >= SOCKET_QUEUE_CAP) {
+      const dropped = target.shift();
+      if (dropped) {
+        void this.pushDeadLetter(queue, dropped.event, dropped.payload, 'queue-full (oldest evicted)');
+      }
+    }
+    target.push({ event, payload, enqueuedAt: Date.now(), attempts: 0 });
+    this.schedulePersist();
+    this.reconnectIfNeeded().catch(() => {});
+    return { queued: true, via: 'queued' };
+  }
+
   async connect() {
+    if (this.authFailed) {
+      logger.warn('Socket', 'Not connecting: session was rejected (unauthorized). Sign in again.');
+      return;
+    }
     if (this.socket && this.socket.connected) {
       return;
     }
@@ -83,12 +194,17 @@ class SocketService {
       if (__DEV__) {
         logger.info('Socket', 'Connected & authenticated to JABY Gateway');
       }
-      this.flushOutgoingQueue();
+      this.authFailed = false;
+      this.flushQueues();
     });
 
     this.socket.on('connect_error', err => {
+      const msg = String((err as any)?.message || err || '');
       if (__DEV__) {
-        logger.warn('Socket', 'Connection/auth error:', err.message);
+        logger.warn('Socket', 'Connection/auth error:', msg);
+      }
+      if (/unauthorized|401|jwt|token|auth/i.test(msg)) {
+        void this.handleUnauthorized(msg);
       }
     });
 
@@ -99,72 +215,172 @@ class SocketService {
     });
   }
 
-  private emitOrQueue(event: string, payload: any) {
-    if (this.socket?.connected) {
-      this.socket.emit(event, payload);
-    } else {
-      if (this.outgoingQueue.length >= 50) {
-        this.outgoingQueue.shift();
+  /** Stop infinite reconnect on auth rejection: clear session so App routes to auth. */
+  private async handleUnauthorized(reason: string) {
+    if (this.authFailed) return;
+    this.authFailed = true;
+    logger.warn('Socket', 'Session unauthorized — stopping reconnect:', reason);
+    try {
+      if (this.socket) {
+        // Stop the Infinity reconnection loop for this dead session.
+        try {
+          (this.socket.io as any).opts.reconnection = false;
+        } catch {}
+        this.socket.disconnect();
       }
-      this.outgoingQueue.push({ event, payload });
-      this.reconnectIfNeeded().catch(() => {});
-    }
+    } catch {}
+    try {
+      await clearSession();
+    } catch {}
+    this.emitInternal('socket_unauthorized');
+    this.unauthorizedHandlers.forEach(fn => {
+      try {
+        fn();
+      } catch {}
+    });
   }
 
-  private flushOutgoingQueue() {
-    if (!this.socket?.connected || this.outgoingQueue.length === 0) return;
-    const items = [...this.outgoingQueue];
-    this.outgoingQueue = [];
-    for (const item of items) {
-      this.socket.emit(item.event, item.payload);
+  /** Subscribe to auth-rejection (App routes to auth screen). */
+  onUnauthorized(callback: () => void): () => void {
+    this.unauthorizedHandlers.add(callback);
+    const off = this.addEventListener('socket_unauthorized', callback as any);
+    return () => {
+      this.unauthorizedHandlers.delete(callback);
+      off();
+    };
+  }
+
+  /** Subscribe to dead-letter (never-silently-dropped) surfacing. */
+  onNotDelivered(callback: (info: NotDeliveredInfo) => void): () => void {
+    this.notDeliveredHandlers.add(callback);
+    const off = this.addEventListener('socket_not_delivered', callback as any);
+    return () => {
+      this.notDeliveredHandlers.delete(callback);
+      off();
+    };
+  }
+
+  getDeadLetter(): DeadLetterEntry[] {
+    return [...this.deadLetter];
+  }
+
+  private emitOrQueueMessage(event: string, payload: any): QueuedResult {
+    if (this.authFailed) return { queued: false, reason: 'unauthorized' };
+    if (this.socket?.connected) {
+      this.socket.emit(event, payload);
+      return { queued: true, via: 'live' };
     }
+    return this.enqueue('message', event, payload);
+  }
+
+  private emitOrQueueSignal(event: string, payload: any): QueuedResult {
+    if (this.authFailed) return { queued: false, reason: 'unauthorized' };
+    if (this.socket?.connected) {
+      this.socket.emit(event, payload);
+      return { queued: true, via: 'live' };
+    }
+    return this.enqueue('signal', event, payload);
+  }
+
+  private flushQueues() {
+    if (!this.socket?.connected) return;
+    if (this.messageQueue.length > 0) {
+      const items = [...this.messageQueue];
+      this.messageQueue = [];
+      for (const item of items) {
+        try {
+          this.socket.emit(item.event, item.payload);
+        } catch {
+          this.messageQueue.push(item);
+        }
+      }
+    }
+    if (this.signalQueue.length > 0) {
+      const items = [...this.signalQueue];
+      this.signalQueue = [];
+      for (const item of items) {
+        try {
+          this.socket.emit(item.event, item.payload);
+        } catch {
+          this.signalQueue.unshift(item);
+          break;
+        }
+      }
+    }
+    this.schedulePersist();
+  }
+
+  // Kept for backward compat (old single-queue callers); flushes both.
+  private flushOutgoingQueue() {
+    this.flushQueues();
   }
 
   /**
    * Re-arm the connection after the app returns to the foreground.
    */
   async reconnectIfNeeded() {
+    if (this.authFailed) return;
     if (this.socket?.connected) return;
     await this.connect();
   }
 
   disconnect(options?: { clearListeners?: boolean }) {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;
     }
     if (options?.clearListeners) {
       this.listeners.clear();
-      this.outgoingQueue = [];
+      this.messageQueue = [];
+      this.signalQueue = [];
+      this.unauthorizedHandlers.clear();
+      this.notDeliveredHandlers.clear();
+      this.authFailed = false;
     }
   }
 
   cleanupListeners() {
     this.listeners.clear();
-    this.outgoingQueue = [];
+    this.messageQueue = [];
+    this.signalQueue = [];
+    this.unauthorizedHandlers.clear();
+    this.notDeliveredHandlers.clear();
+    this.schedulePersist();
   }
 
-  // Messaging
-  sendMessage(message: Message) {
-    this.emitOrQueue('send_message', message);
+  /** Queue depth for offline banners / debugging. */
+  getQueueDepths(): { messages: number; signals: number; deadLetter: number } {
+    return { messages: this.messageQueue.length, signals: this.signalQueue.length, deadLetter: this.deadLetter.length };
   }
 
-  sendStatus(messageId: string, chatId: string, status: 'delivered' | 'read') {
-    this.emitOrQueue('message_status', { messageId, chatId, status });
+  // Messaging (durable message queue; idempotency via clientMessageId)
+  sendMessage(message: Message, opts?: { clientMessageId?: string }): QueuedResult {
+    const clientMessageId = opts?.clientMessageId || (message as Message).id;
+    const payload = clientMessageId ? { ...message, clientMessageId } : message;
+    return this.emitOrQueueMessage('send_message', payload);
   }
 
-  markRead(peerId: string, chatId: string) {
-    this.emitOrQueue('mark_read', { peerId, chatId });
+  sendStatus(messageId: string, chatId: string, status: 'delivered' | 'read', clientMessageId?: string): QueuedResult {
+    return this.emitOrQueueMessage('message_status', { messageId, chatId, status, clientMessageId });
+  }
+
+  markRead(peerId: string, chatId: string, clientMessageId?: string): QueuedResult {
+    return this.emitOrQueueMessage('mark_read', { peerId, chatId, clientMessageId });
   }
 
   sendTyping(chatId: string, receiverId: string, isTyping: boolean) {
+    // Ephemeral only — never queued (a stale "typing…" after reconnect is worse than none).
     if (this.socket?.connected) {
       this.socket.emit('typing_indicator', { chatId, receiverId, isTyping });
     }
   }
 
-  deleteForEveryone(messageId: string, chatId: string, receiverId: string) {
-    this.emitOrQueue('delete_for_everyone', { messageId, chatId, receiverId });
+  deleteForEveryone(messageId: string, chatId: string, receiverId: string): QueuedResult {
+    return this.emitOrQueueMessage('delete_for_everyone', { messageId, chatId, receiverId });
   }
 
   sendCallSignal(signal: {
@@ -177,21 +393,24 @@ class SocketService {
     sdp?: unknown;
     candidate?: unknown;
     sasWords?: string[];
-  }) {
+  }): QueuedResult {
     const payload = {
       ...signal,
       timestamp: Date.now(),
     };
+    if (this.authFailed) return { queued: false, reason: 'unauthorized' };
     if (this.socket?.connected) {
       this.socket.emit('call_signal', payload);
-    } else if (signal.signalType === 'hangup' || signal.signalType === 'reject') {
-      // Critical teardown signals should be queued so the peer is not left ringing/hanging
-      this.emitOrQueue('call_signal', payload);
-    } else {
-      if (__DEV__) {
-        logger.warn('Socket', 'Call signal dropped while disconnected:', signal.signalType);
-      }
+      return { queued: true, via: 'live' };
     }
+    // Offline: NEVER silently drop offer/answer/ice — queue durably so the
+    // caller can show "not delivered / missed call" instead of ghost ringing.
+    // Hangup/reject are equally critical (peer must not hang) so they queue too.
+    const res = this.emitOrQueueSignal('call_signal', payload);
+    if (__DEV__ && !res.queued) {
+      logger.warn('Socket', 'Call signal not queued:', signal.signalType, res.reason);
+    }
+    return res;
   }
 
   // Listeners

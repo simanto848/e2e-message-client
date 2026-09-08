@@ -17,6 +17,26 @@ import { logger } from '../utils/logger';
 
 export { API_BASE_URL };
 
+/**
+ * Wire representation of a chat message: ciphertext only, never plaintext.
+ * `text` must be '' on the wire — enforced at runtime (throw) so a plaintext
+ * leak fails closed instead of silently uploading readable chat content.
+ */
+export type WireMessage = Omit<Message, 'text'> & { text: '' };
+
+function assertWireMessage(msg: any): asserts msg is WireMessage {
+  if (!msg || typeof msg.id !== 'string' || !msg.encryptedPayload?.ciphertext) {
+    throw new Error('api.sendMessage: invalid wire payload (missing id/ciphertext)');
+  }
+  if ((msg as any).text !== '') {
+    throw new Error("api.sendMessage: wire message must have text==='' (plaintext must never leave the device)");
+  }
+}
+
+function clientMessageIdHeaders(clientMessageId?: string): Record<string, string> {
+  return clientMessageId ? { 'X-Client-Message-Id': clientMessageId } : {};
+}
+
 async function authHeaders(): Promise<Record<string, string>> {
   const token = await getSessionToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -249,28 +269,41 @@ export const api = {
     }
   },
 
-  // Messages: Send Message via REST for guaranteed DB persistence
-  async sendMessage(msg: Message): Promise<{ success: boolean; error?: string; messageId?: string }> {
+  // Messages: Send Message via REST for guaranteed DB persistence.
+  // Wire-only: `msg` must be ciphertext with text==='' (throws otherwise).
+  // `clientMessageId` is an idempotency key (defaults to msg.id) so socket +
+  // REST double-delivery and outbox retries dedupe server-side / in logs.
+  async sendMessage(
+    msg: WireMessage,
+    opts?: { clientMessageId?: string } | string
+  ): Promise<{ success: boolean; error?: string; messageId?: string }> {
+    assertWireMessage(msg);
+    const clientMessageId =
+      typeof opts === 'string' ? opts : opts?.clientMessageId || (msg as Message).id;
     try {
+      const headers = { ...(await authedJsonHeaders()), ...clientMessageIdHeaders(clientMessageId) };
       const res = await fetchWithTimeout(`${API_BASE_URL}/contacts/messages/send`, {
         method: 'POST',
-        headers: await authedJsonHeaders(),
-        body: JSON.stringify(msg),
+        headers,
+        body: JSON.stringify(clientMessageId ? { ...msg, clientMessageId } : msg),
       });
       return await safeParseResponse(res, { success: false });
     } catch (err: any) {
-      logger.warn('API', 'REST sendMessage failed, fallback to socket:', err);
+      // NOTE: no automatic socket fallback here — callers decide (sendMessageReliable
+      // tries REST -> socket queue -> outbox). This log only records the REST failure.
+      logger.warn('API', 'REST sendMessage failed (caller should enqueue via socket/outbox):', err);
       return { success: false, error: err?.message || 'Network error' };
     }
   },
 
-  // Messages: Mark Conversation Messages as Read
-  async markMessagesAsRead(peerId: string, chatId?: string) {
+  // Messages: Mark Conversation Messages as Read (idempotent via clientMessageId).
+  async markMessagesAsRead(peerId: string, chatId?: string, clientMessageId?: string) {
     try {
+      const headers = { ...(await authedJsonHeaders()), ...clientMessageIdHeaders(clientMessageId) };
       const res = await fetchWithTimeout(`${API_BASE_URL}/contacts/messages/read`, {
         method: 'POST',
-        headers: await authedJsonHeaders(),
-        body: JSON.stringify({ peerId, chatId }),
+        headers,
+        body: JSON.stringify(clientMessageId ? { peerId, chatId, clientMessageId } : { peerId, chatId }),
       });
       return await safeParseResponse(res, { success: false });
     } catch (err) {
@@ -279,21 +312,80 @@ export const api = {
     }
   },
 
-  // Messages: Fetch History for Contact
-  async getMessages(chatId: string, userId: string, opts?: { limit?: number; before?: number }): Promise<Message[]> {
+  // Messages: Best-effort server purge for an expired disappearing message.
+  // The server runs its own scrubber (scrubExpiredMessages), but the client
+  // tombstones on expiry so history doesn't linger until the next sweep.
+  // No dedicated REST route exists yet — tries DELETE, falls back to the
+  // realtime delete_for_everyone path via socket (callers also emit that).
+  // Never throws; expiry purging must not crash the 1s timer.
+  async deleteMessage(messageId: string, chatId?: string): Promise<{ success: boolean; error?: string }> {
+    if (!messageId) return { success: false, error: 'messageId required' };
+    try {
+      const res = await fetchWithTimeout(
+        `${API_BASE_URL}/contacts/messages/${encodeURIComponent(messageId)}`,
+        { method: 'DELETE', headers: await authedJsonHeaders() }
+      );
+      const parsed: any = await safeParseResponse(res, { success: false });
+      if (parsed?.success) return { success: true };
+      // Server has no DELETE route yet (404) — treat as tombstone request;
+      // the socket delete_for_everyone emit (done by callers) is authoritative.
+      return { success: false, error: parsed?.error || 'No delete route (tombstone via socket)' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error' };
+    }
+  },
+
+  // Messages: Fetch History for Contact.
+  // Cursor is (timestamp, id): `before` bounds timestamp (<), `beforeId`
+  // breaks ties for equal timestamps (stable paging, no skip/dup). `beforeId`
+  // is forwarded when the server supports it and applied client-side otherwise,
+  // so old servers keep working (backward compat).
+  async getMessages(
+    chatId: string,
+    userId: string,
+    opts?: { limit?: number; before?: number; beforeId?: string }
+  ): Promise<Message[]> {
+    const page = await api.getMessagesPage(chatId, userId, opts);
+    return page.messages;
+  },
+
+  // Paged fetch with server-has-more hint. `hasMore` is true only when a full
+  // page arrived AND the server indicates more (or, for old servers without
+  // the flag, when a full page arrived). Callers: hasMore = raw.length===PAGE_SIZE && serverHasMore.
+  async getMessagesPage(
+    chatId: string,
+    userId: string,
+    opts?: { limit?: number; before?: number; beforeId?: string }
+  ): Promise<{ messages: Message[]; hasMore: boolean; serverHasMore: boolean }> {
     try {
       const params = new URLSearchParams();
       if (opts?.limit) params.set('limit', String(opts.limit));
       if (opts?.before) params.set('before', String(opts.before));
+      if (opts?.beforeId) params.set('beforeId', String(opts.beforeId));
       const qs = params.toString();
-      const data = await fetchJsonWithRetry(
+      const data: any = await fetchJsonWithRetry(
         `${API_BASE_URL}/contacts/messages/${chatId}/${userId}${qs ? `?${qs}` : ''}`,
         { headers: await authHeaders() },
         { retries: 2, fallback: { messages: [] } }
       );
-      return data.messages || [];
+      let messages: Message[] = data.messages || [];
+      // Client-side tie-break when the server ignores beforeId: drop any
+      // message at/after the cursor that a timestamp-only page may repeat.
+      if (opts?.beforeId && messages.length > 0) {
+        const seen = messages.findIndex(m => m.id === opts.beforeId);
+        if (seen >= 0) messages = messages.slice(0, seen);
+      }
+      const serverHasMore =
+        typeof data.hasMore === 'boolean'
+          ? data.hasMore
+          : typeof data.serverHasMore === 'boolean'
+            ? data.serverHasMore
+            : messages.length === (opts?.limit ?? messages.length) && messages.length > 0;
+      const limit = opts?.limit ?? messages.length;
+      const hasMore = messages.length === limit && limit > 0 && serverHasMore;
+      return { messages, hasMore, serverHasMore };
     } catch {
-      return [];
+      return { messages: [], hasMore: false, serverHasMore: false };
     }
   },
 
@@ -479,9 +571,20 @@ export const api = {
   // Media Upload — file bytes are already encrypted client-side (same
   // nacl.box scheme as text messages, see src/utils/crypto.ts) before this
   // is called; the server only ever stores/relays ciphertext.
+  //
+  // Accepted types: image|audio|video|document (mirrors server
+  // ALLOWED_ATTACHMENT_TYPES). 'call' is metadata-only and must never be
+  // uploaded (400). Video/document go through this SAME upload path, then the
+  // returned Attachment (metadata only, no ciphertext) is embedded in a
+  // Message.attachment and sent via sendMessage.
+  //
+  // Shape: POST returns {id,...,url:'/api/media/<id>'} RELATIVE + encrypted:true
+  // (no ciphertext — keeps Message.attachment small). Prefixed here to an
+  // absolute URL via BACKEND_URL. GET /api/media/:id returns the same fields
+  // + encryptedPayload (ciphertext) for decryption.
   async uploadMedia(params: {
     name: string;
-    type: 'image' | 'audio';
+    type: 'image' | 'audio' | 'video' | 'document';
     size: number;
     mimeType?: string;
     duration?: number;
@@ -495,7 +598,13 @@ export const api = {
         headers: await authedJsonHeaders(),
         body: JSON.stringify(params),
       });
-      return await safeParseResponse(res, { success: false, error: 'Upload failed' });
+      const data = await safeParseResponse<{ success: boolean; attachment?: Attachment; error?: string }>(res, { success: false, error: 'Upload failed' });
+      // Server returns a relative url (/api/media/<id>) — prefix to absolute so
+      // <Image source={{uri}}>/fetch callers never request a bare path.
+      if (data?.success && data.attachment && typeof data.attachment.url === 'string' && data.attachment.url.startsWith('/')) {
+        data.attachment = { ...data.attachment, url: `${API_BASE_URL.replace(/\/api$/, '')}${data.attachment.url}` };
+      }
+      return data;
     } catch (err: any) {
       return { success: false, error: err.message || 'Upload connection failed' };
     }
@@ -511,6 +620,83 @@ export const api = {
     } catch (err: any) {
       return { success: false, error: err.message || 'Network error fetching media' };
     }
+  },
+
+  // Linked Devices: Register current device (wired to LinkedDevicesModal's
+  // "Link Another Device" — POST /api/backup/devices/register, validation kept
+  // server-side: name required, type/os defaulted).
+  async registerDevice(params: { name: string; type?: string; os?: string }): Promise<{ success: boolean; device?: any; error?: string }> {
+    try {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/backup/devices/register`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify(params),
+      });
+      return await safeParseResponse(res, { success: false, error: 'Network error' });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to register device' };
+    }
+  },
+
+  // Push-token upload: POST /api/backup/devices/push-token {expoPushToken, platform}
+  // behind requireAuth. Called by pushNotifications.registerPushToken after the
+  // Expo token is obtained + SecureStore-persisted. 401 surfaces as
+  // {success:false} so callers can route to sign-in (see contract.test.ts).
+  async uploadPushToken(params: { expoPushToken: string; platform: 'android' | 'ios' }): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!params?.expoPushToken) return { success: false, error: 'expoPushToken required' };
+      const res = await fetchWithTimeout(`${API_BASE_URL}/backup/devices/push-token`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify(params),
+      });
+      return await safeParseResponse(res, { success: false });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Network error uploading push token' };
+    }
+  },
+
+  // 401 helper: true when a result looks like an auth rejection (invalid/expired
+  // session). Callers (App sign-in gate, socket onUnauthorized) use this to
+  // distinguish "sign in again" from transient network failures.
+  isUnauthorizedError(result: any): boolean {
+    const msg = String(result?.error || '').toLowerCase();
+    return result?.status === 401 || msg.includes('unauthorized') || msg.includes('invalid or expired session') || msg.includes('missing or invalid authorization');
+  },
+
+  // Offline-first send: REST (durable DB persist) -> socket queue -> outbox.
+  // Order matters: REST is the source of truth for persistence; the socket
+  // queue only handles realtime delivery when REST is unreachable. `sendViaSocket`
+  // and `enqueueOutbox` are injected so api.ts stays free of socket/outbox imports
+  // (no queue logic lives here — this is pure ordering/orchestration).
+  // Returns the first success, or the last failure if all paths fail.
+  async sendMessageReliable(
+    msg: WireMessage,
+    opts?: {
+      clientMessageId?: string;
+      sendViaSocket?: (msg: WireMessage) => Promise<{ success: boolean; error?: string } | { queued: boolean }>;
+      enqueueOutbox?: (msg: WireMessage) => Promise<void>;
+    }
+  ): Promise<{ success: boolean; via: 'rest' | 'socket' | 'outbox'; error?: string }> {
+    assertWireMessage(msg);
+    const clientMessageId = opts?.clientMessageId || (msg as Message).id;
+    const rest = await api.sendMessage(msg, { clientMessageId });
+    if (rest?.success) return { success: true, via: 'rest' };
+    if (opts?.sendViaSocket) {
+      try {
+        const s = await opts.sendViaSocket(msg);
+        if ((s as any)?.success || (s as any)?.queued) return { success: true, via: 'socket' };
+      } catch {}
+    }
+    if (opts?.enqueueOutbox) {
+      try {
+        await opts.enqueueOutbox(msg);
+        return { success: true, via: 'outbox' };
+      } catch (e: any) {
+        return { success: false, via: 'outbox', error: e?.message || rest?.error || 'All send paths failed' };
+      }
+    }
+    return { success: false, via: 'rest', error: rest?.error || 'REST send failed and no fallback provided' };
   },
 
   // Poll for background incoming calls and unread messages

@@ -8,8 +8,12 @@
  * - Android channels mirroring the native ones (messages/calls/security).
  * - Permission-aware Expo push-token registration (physical device only,
  *   never prompts without user action — callers check status first).
- * - Token persisted in SecureStore; server upload is a TODO until the
- *   backend exposes POST /devices/push-token (see PUSH_TODO below).
+ * - Token persisted in SecureStore + uploaded to POST
+ *   /api/backup/devices/push-token {expoPushToken, platform} (requireAuth).
+ *   Server stores per LinkedDevice and fans out via Expo Push API with only
+ *   {chatId, senderId} (never plaintext).
+ * - Sounds stay local-first: notificationService plays bundled sounds as a
+ *   fallback when push is unavailable/silent — push never carries audio.
  * - Immediate local notifications as a fallback when NotificationModule
  *   is unavailable (Expo Go) — wired in notificationService.ts.
  */
@@ -23,10 +27,7 @@ import { logger } from '../utils/logger';
 
 const PUSH_TOKEN_KEY = 'jaby_push_token';
 
-// PUSH_TODO (server): create POST /api/devices/push-token {expoPushToken,
-// platform} behind auth, store per device, and fan out on new message /
-// incoming call via Expo Push API with only {chatId, senderId} (never
-// plaintext). Client upload call goes in registerPushToken once live.
+// Push-token upload lives in registerPushToken below (POST /api/backup/devices/push-token).
 
 export async function ensureAndroidChannels(): Promise<void> {
   if (Platform.OS !== 'android') return;
@@ -37,16 +38,18 @@ export async function ensureAndroidChannels(): Promise<void> {
       vibrationPattern: [0, 250, 250, 250],
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
     });
+    // PRIVATE (never PUBLIC): lockscreen shows generic label, never caller identity.
     await Notifications.setNotificationChannelAsync('jaby_expo_calls', {
       name: 'Calls',
       importance: Notifications.AndroidImportance.MAX,
       vibrationPattern: [0, 500, 500, 500],
-      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
     });
+    // SECRET mirrors native NotificationModule: safety alerts hidden on lockscreen.
     await Notifications.setNotificationChannelAsync('jaby_expo_security', {
       name: 'Security alerts',
       importance: Notifications.AndroidImportance.HIGH,
-      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.SECRET,
     });
   } catch (err) {
     logger.warn('Push', 'ensureAndroidChannels failed:', err);
@@ -101,6 +104,17 @@ export async function registerPushToken(): Promise<string | null> {
       : (await Notifications.getDevicePushTokenAsync()).data;
     if (token) {
       await SecureStore.setItemAsync(PUSH_TOKEN_KEY, token, SECURE_STORE_OPTIONS).catch(() => {});
+      // Best-effort server upload (never throws — poll + local sounds remain
+      // the fallback). Dynamic import avoids a hard api<->push cycle.
+      try {
+        const { api } = await import('./api');
+        const { Platform: RNPlatform } = await import('react-native');
+        const platform = RNPlatform.OS === 'ios' ? ('ios' as const) : ('android' as const);
+        const res = await api.uploadPushToken({ expoPushToken: token, platform });
+        if (!res?.success) logger.warn('Push', 'push-token upload rejected:', res?.error);
+      } catch (uploadErr) {
+        logger.warn('Push', 'push-token upload failed (local token kept):', uploadErr);
+      }
     }
     return token;
   } catch (err) {

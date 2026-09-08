@@ -1,6 +1,7 @@
 import { Linking, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { API_BASE_URL } from './config';
+import { fetchWithTimeout } from './http';
 import { logger } from '../utils/logger';
 
 export interface ReleaseInfo {
@@ -23,9 +24,12 @@ export interface CheckUpdateResult {
 // Current App Version
 export const CURRENT_APP_VERSION = Constants.expoConfig?.version || '1.0.0';
 
-// Default GitHub Repo for direct releases fallback
-export const GITHUB_RELEASES_API = 'https://api.github.com/repos/simanto848/e2e-message-client/releases/latest';
-export const GITHUB_RELEASES_WEB = 'https://github.com/simanto848/e2e-message-client/releases';
+// Default GitHub Repo for direct releases fallback (jaby-secure-messenger —
+// not the legacy simanto848/e2e-message-client placeholder). The release
+// workflow (mobile/.github/workflows/release-apk.yml) publishes here, and the
+// server default apkUrl points at /releases/latest/download/app-release.apk.
+export const GITHUB_RELEASES_API = 'https://api.github.com/repos/simanto/jaby-secure-messenger/releases/latest';
+export const GITHUB_RELEASES_WEB = 'https://github.com/simanto/jaby-secure-messenger/releases';
 
 /**
  * Compare two semver strings (e.g. "1.1.0" > "1.0.0")
@@ -34,18 +38,31 @@ export const GITHUB_RELEASES_WEB = 'https://github.com/simanto848/e2e-message-cl
  *  -1 if a < b
  *   0 if a == b
  */
-export function compareSemver(a: string, b: string): number {
-  const cleanA = a.replace(/[^0-9.]/g, '').split('.').map(n => parseInt(n, 10) || 0);
-  const cleanB = b.replace(/[^0-9.]/g, '').split('.').map(n => parseInt(n, 10) || 0);
-
-  const len = Math.max(cleanA.length, cleanB.length);
-  for (let i = 0; i < len; i++) {
-    const numA = cleanA[i] || 0;
-    const numB = cleanB[i] || 0;
-    if (numA > numB) return 1;
-    if (numA < numB) return -1;
+function parseSemverStrict(v: string): { nums: number[]; prerelease: string | null } {
+  const trimmed = v.trim().replace(/^v/i, '');
+  // Strict core: MAJOR.MINOR.PATCH with numeric parts only. Anything else
+  // (e.g. "1.0.0-evil", "1.0") is NOT silently coerced to "1.0.0" — a suffix
+  // marks a prerelease which sorts LOWER than the release, so
+  // 1.0.0-evil != 1.0.0 (and < 1.0.0).
+  const m = trimmed.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/);
+  if (!m) {
+    return { nums: [0, 0, 0], prerelease: trimmed || 'invalid' };
   }
-  return 0;
+  return { nums: [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)], prerelease: m[4] ?? null };
+}
+
+export function compareSemver(a: string, b: string): number {
+  const pa = parseSemverStrict(a);
+  const pb = parseSemverStrict(b);
+  for (let i = 0; i < 3; i++) {
+    if (pa.nums[i] > pb.nums[i]) return 1;
+    if (pa.nums[i] < pb.nums[i]) return -1;
+  }
+  // Same numeric core: release > prerelease; prerelease vs prerelease compares lexically.
+  if (pa.prerelease === pb.prerelease) return 0;
+  if (pa.prerelease === null) return 1;
+  if (pb.prerelease === null) return -1;
+  return pa.prerelease < pb.prerelease ? -1 : 1;
 }
 
 /**
@@ -56,9 +73,9 @@ export async function checkForAppUpdates(): Promise<CheckUpdateResult> {
 
   // 1. Try Backend Updates Endpoint First
   try {
-    const backendRes = await fetch(`${API_BASE_URL}/updates/check?currentVersion=${encodeURIComponent(currentVersion)}`, {
+    const backendRes = await fetchWithTimeout(`${API_BASE_URL}/updates/check?currentVersion=${encodeURIComponent(currentVersion)}`, {
       headers: { 'Accept': 'application/json' },
-    });
+    }, 10_000);
     if (backendRes.ok) {
       const data = await backendRes.json();
       if (data.success && data.latest) {
@@ -82,14 +99,20 @@ export async function checkForAppUpdates(): Promise<CheckUpdateResult> {
     // Backend offline or unreachable — fallback to direct GitHub Releases API
   }
 
-  // 2. Direct GitHub Releases API Fallback
+  // 2. Direct GitHub Releases API Fallback.
+  // Host is pinned to api.github.com (no open-redirect follow): fetchWithTimeout
+  // uses the pinned GITHUB_RELEASES_API constant only — never a URL from server
+  // input. TLS is enforced (https://).
+  // NOTE(APK integrity): before prompting install, verify the APK asset SHA
+  // (compare the asset's sha256 against the release notes / backend-signed
+  // manifest). Never silently install an APK whose hash was not verified.
   try {
-    const ghRes = await fetch(GITHUB_RELEASES_API, {
+    const ghRes = await fetchWithTimeout(GITHUB_RELEASES_API, {
       headers: {
         'Accept': 'application/vnd.github.v3+json',
         'User-Agent': 'JABY-Secure-Messenger-App',
       },
-    });
+    }, 10_000);
 
     if (ghRes.ok) {
       const ghData = await ghRes.json();

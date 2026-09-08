@@ -93,17 +93,25 @@ export const notificationService = {
     avatarUri?: string;
     showPreview?: boolean;
     isDecoyMode?: boolean;
+    isAppLocked?: boolean;
     onPress?: () => void;
   }): Promise<void> {
-    if (params.isDecoyMode) {
-      // In Decoy Mode, do not display real sender names or private message previews
+    // Plausible deniability + lockscreen privacy: never surface real content
+    // while locked or in decoy mode. Early return keeps the tray silent.
+    if (params.isDecoyMode || params.isAppLocked) {
       return;
     }
 
-    const title = params.senderName || 'Encrypted Message';
-    const body = params.showPreview !== false && params.text
-      ? (params.text.length > 80 ? `${params.text.slice(0, 80)}…` : params.text)
-      : '🔒 New encrypted message';
+    // Secure default: previews OFF unless the thread explicitly opts in.
+    // Default body reveals nothing on the lockscreen (VISIBILITY_PRIVATE).
+    const showPreview = params.showPreview === true;
+    const title = showPreview ? params.senderName || 'Encrypted Message' : 'JABY Secure';
+    const body =
+      showPreview && params.text
+        ? params.text.length > 80
+          ? `${params.text.slice(0, 80)}…`
+          : params.text
+        : '🔒 New encrypted message';
 
     const notifId = Math.abs((params.chatId.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) + Date.now()) % 100000);
 
@@ -113,6 +121,7 @@ export const notificationService = {
         await NotificationModule.postNotification({
           id: notifId,
           channel: 'messages',
+          visibility: 'private',
           title,
           body,
           chatId: params.chatId,
@@ -161,10 +170,11 @@ export const notificationService = {
     callType: 'audio' | 'video';
     avatarUri?: string;
     isDecoyMode?: boolean;
+    isAppLocked?: boolean;
     onAccept?: () => void;
     onDecline?: () => void;
   }): Promise<void> {
-    if (params.isDecoyMode) return;
+    if (params.isDecoyMode || params.isAppLocked) return;
 
     const title = `Incoming ${params.callType === 'video' ? 'Video' : 'Voice'} Call`;
     const body = `${params.callerName} is calling you on JABY Secure…`;
@@ -176,6 +186,7 @@ export const notificationService = {
         await NotificationModule.postNotification({
           id: notifId,
           channel: 'calls',
+          visibility: 'private',
           title,
           body,
           peerId: params.callerId,
@@ -234,8 +245,10 @@ export const notificationService = {
     title: string;
     message: string;
     type?: 'key_change' | 'device_linked' | 'duress' | 'verification';
+    isDecoyMode?: boolean;
     onPress?: () => void;
   }): Promise<void> {
+    if (params.isDecoyMode) return;
     const notifId = 9999;
 
     if (Platform.OS === 'android' && NotificationModule?.postNotification) {
@@ -243,6 +256,7 @@ export const notificationService = {
         await NotificationModule.postNotification({
           id: notifId,
           channel: 'security',
+          visibility: 'private',
           title: `🛡️ ${params.title}`,
           body: params.message,
           isSecurity: true,
@@ -267,7 +281,33 @@ export const notificationService = {
   },
 
   /**
-   * Clear all displayed notifications
+   * Dismiss a single message notification (used by the disappearing-message
+   * purge so an expired message leaves no tray residue).
+   */
+  async cancelMessageNotification(chatId: string): Promise<void> {
+    try {
+      if (Platform.OS === 'android' && (NotificationModule as any)?.cancelNotification) {
+        // Native module tracks by numeric id; best-effort: derive the same id
+        // scheme used in showMessageNotification, then fall back to Expo dismiss.
+        const notifId = Math.abs(chatId.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 100000);
+        await (NotificationModule as any).cancelNotification(notifId).catch(() => {});
+      }
+      await Notifications.dismissAllNotificationsAsync().catch(() => {});
+    } catch {}
+  },
+
+  async cancelNotification(id: number): Promise<void> {
+    try {
+      if (Platform.OS === 'android' && (NotificationModule as any)?.cancelNotification) {
+        await (NotificationModule as any).cancelNotification(id);
+      }
+    } catch {}
+  },
+
+  /**
+   * Clear all displayed notifications.
+   * All channels are lockscreen-private (VISIBILITY_PRIVATE): message bodies
+   * default to '🔒 New encrypted message' unless a thread opts into previews.
    */
   async cancelAllNotifications(): Promise<void> {
     if (Platform.OS === 'android' && NotificationModule?.cancelAllNotifications) {
