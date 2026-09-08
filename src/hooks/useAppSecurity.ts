@@ -14,7 +14,10 @@ interface UseAppSecurityOptions {
 }
 
 export function useAppSecurity({ isAuthenticated, isCallActive }: UseAppSecurityOptions) {
-  const [isAppLocked, setIsAppLocked] = useState(false);
+  // Fail-closed default: start locked so a restored session never flashes
+  // unlocked content on cold start. Cleared below when there is no session,
+  // and App.tsx clears it again after a fresh interactive login.
+  const [isAppLocked, setIsAppLocked] = useState(true);
   const [autoLockDelay, setAutoLockDelay] = useState<number>(5);
   const autoLockDelayRef = useRef<number>(5);
   autoLockDelayRef.current = autoLockDelay;
@@ -22,6 +25,22 @@ export function useAppSecurity({ isAuthenticated, isCallActive }: UseAppSecurity
   const [antiScreenshotEnabled, setAntiScreenshotEnabled] = useState(true);
   const [callVerificationEnabled, setCallVerificationEnabled] = useState(true);
   const [isDecoyMode, setIsDecoyMode] = useState(false);
+
+  // No session -> no secrets to guard: keep the shield off so the auth
+  // screen is usable. The moment a session appears (cold-start restore OR
+  // fresh login) fail closed to locked — a restored session must never flash
+  // unlocked content. Fresh logins pay one extra shield dismissal until the
+  // App.tsx wave adds an explicit setIsAppLocked(false) after interactive auth.
+  const prevAuthRef = useRef(isAuthenticated);
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setIsAppLocked(false);
+      prevAuthRef.current = false;
+    } else if (!prevAuthRef.current) {
+      setIsAppLocked(true);
+      prevAuthRef.current = true;
+    }
+  }, [isAuthenticated]);
 
   // Load saved privacy and security preferences from local cache on mount
   useEffect(() => {
@@ -97,7 +116,9 @@ export function useAppSecurity({ isAuthenticated, isCallActive }: UseAppSecurity
     let backgroundTimer: NodeJS.Timeout | null = null;
 
     const sub = AppState.addEventListener('change', nextState => {
-      if (nextState === 'background') {
+      // iOS also fires `inactive` for lock-screen / app-switcher / FaceID
+      // interruptions where `background` may never arrive — treat both as leave.
+      if (nextState === 'background' || nextState === 'inactive') {
         if (!isAuthenticated || isExternalActivityActive() || isCallActiveRef.current) {
           return;
         }
@@ -109,7 +130,8 @@ export function useAppSecurity({ isAuthenticated, isCallActive }: UseAppSecurity
 
         const delayMs = autoLockDelayRef.current * 1000;
         backgroundTimer = setTimeout(() => {
-          if (AppState.currentState === 'background' && !isExternalActivityActive() && !isCallActiveRef.current) {
+          const st = AppState.currentState;
+          if ((st === 'background' || st === 'inactive') && !isExternalActivityActive() && !isCallActiveRef.current) {
             setIsAppLocked(true);
           }
         }, delayMs);

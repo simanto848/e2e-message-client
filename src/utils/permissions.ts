@@ -101,24 +101,23 @@ export async function requestAppPermissions(): Promise<AppPermissionsStatus> {
   if (Platform.OS === 'android') {
     beginExternalActivity();
     try {
+      // Minimal just-in-time set: CAMERA / MIC for calls, scoped
+      // READ_MEDIA_IMAGES for avatar/attachment picker (API 33+), and
+      // POST_NOTIFICATIONS. Legacy WRITE_EXTERNAL_STORAGE, READ_MEDIA_VIDEO /
+      // READ_MEDIA_AUDIO, READ_PHONE_STATE and SYSTEM_ALERT_WINDOW are
+      // intentionally never requested (see app.json permissionRationale).
       const permissionsToRequest: any[] = [
         PermissionsAndroid.PERMISSIONS.CAMERA,
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
       ];
 
       if (Number(Platform.Version) >= 33) {
-        permissionsToRequest.push(
-          PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
-          PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO,
-          PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO
-        );
+        permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES);
         const postNotifKey = (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS || 'android.permission.POST_NOTIFICATIONS';
         permissionsToRequest.push(postNotifKey);
       } else {
-        permissionsToRequest.push(
-          PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-          PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE
-        );
+        // Pre-33 scoped fallback: READ only (no WRITE — app never writes shared storage).
+        permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
       }
 
       const granted = await PermissionsAndroid.requestMultiple(permissionsToRequest);
