@@ -31,6 +31,8 @@ export function AuthScreen({ onAuthenticated, onRegisterModeChange }: Props) {
   const [name, setName] = useState('');
   const [pinCode, setPinCode] = useState('');
   const [inviteCode, setInviteCode] = useState('');
+  const [couponCode, setCouponCode] = useState('');
+  const [useCoupon, setUseCoupon] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState('Verifying credentials...');
 
@@ -117,8 +119,14 @@ export function AuthScreen({ onAuthenticated, onRegisterModeChange }: Props) {
 
   const handleRegister = async () => {
     const cleanHandle = handle.trim().replace(/^@+/, '').replace(/\s+/g, '');
-    if (!name.trim() || !cleanHandle || !inviteCode.trim()) {
-      Alert.alert('Missing Details', 'Please enter your name, a handle, and an invite code.');
+    const accessCode = useCoupon ? couponCode.trim() : inviteCode.trim();
+    if (!name.trim() || !cleanHandle || !accessCode) {
+      Alert.alert(
+        'Invite Required',
+        useCoupon
+          ? 'Registration is invite-only. Please enter your name, a handle, and a valid coupon code.'
+          : 'Registration is invite-only. Please enter your name, a handle, and a valid invite code.'
+      );
       return;
     }
     const handleRegex = /^[a-zA-Z0-9_]{3,30}$/;
@@ -177,7 +185,7 @@ export function AuthScreen({ onAuthenticated, onRegisterModeChange }: Props) {
       const res = await api.register({
         name: name.trim(),
         handle: `@${cleanHandle}`,
-        inviteCode: inviteCode.trim(),
+        ...(useCoupon ? { couponCode: accessCode } : { inviteCode: accessCode }),
         publicKey: keyPair.publicKey,
         pinCode,
         fingerprintHash: fingerprint,
@@ -212,7 +220,7 @@ export function AuthScreen({ onAuthenticated, onRegisterModeChange }: Props) {
         setLoadingStep('Account created! Entering enclave...');
         await onAuthenticated(res.user, res.token, keyPair, pinCode);
       } else {
-        Alert.alert('Registration Error', res.error || 'Failed to redeem invite code');
+        Alert.alert('Registration Error', res.error || 'Failed to redeem invite or coupon code');
       }
     } catch {
       Alert.alert('Error', 'Unable to connect to backend server.');
@@ -292,18 +300,40 @@ export function AuthScreen({ onAuthenticated, onRegisterModeChange }: Props) {
                 />
               </View>
 
+              <View style={styles.accessToggleRow}>
+                <TouchableOpacity
+                  style={[styles.accessToggle, !useCoupon && styles.accessToggleActive]}
+                  onPress={() => setUseCoupon(false)}
+                >
+                  <Text style={[styles.accessToggleText, !useCoupon && styles.accessToggleTextActive]}>
+                    Invite Code
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.accessToggle, useCoupon && styles.accessToggleActive]}
+                  onPress={() => setUseCoupon(true)}
+                >
+                  <Text style={[styles.accessToggleText, useCoupon && styles.accessToggleTextActive]}>
+                    Coupon
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
               <View style={styles.inputBox}>
                 <Ticket size={18} color={colors.primary} />
                 <TextInput
                   style={styles.input}
-                  placeholder="Invite Code"
+                  placeholder={useCoupon ? 'Coupon Code (JABY-COUPON-…)' : 'Invite Code (JABY-VIP-…)'}
                   placeholderTextColor={colors.textMuted}
-                  value={inviteCode}
-                  onChangeText={setInviteCode}
+                  value={useCoupon ? couponCode : inviteCode}
+                  onChangeText={useCoupon ? setCouponCode : setInviteCode}
                   autoCapitalize="characters"
                   autoCorrect={false}
                 />
               </View>
+              <Text style={styles.inviteOnlyNote}>
+                Registration is invite-only — you need a valid invitation or coupon to join.
+              </Text>
 
               <View style={styles.inputBox}>
                 <KeyRound size={18} color={colors.textSecondary} />
@@ -574,6 +604,38 @@ const styles = StyleSheet.create({
     flex: 1,
     color: colors.textPrimary,
     fontSize: 14,
+  },
+  accessToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: 10,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 4,
+  },
+  accessToggle: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 7,
+  },
+  accessToggleActive: {
+    backgroundColor: colors.primary,
+  },
+  accessToggleText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  accessToggleTextActive: {
+    color: '#ffffff',
+  },
+  inviteOnlyNote: {
+    fontSize: 11,
+    color: colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 15,
   },
   primaryBtn: {
     flexDirection: 'row',

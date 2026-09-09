@@ -314,13 +314,15 @@ export function ChatBubble({
               <Text style={styles.reactionEmoji}>🛡️</Text>
             </TouchableOpacity>
           )}
-          {isMe && onDeleteForEveryone && (
+          {onDeleteForEveryone && (
             <TouchableOpacity
               style={styles.reactionBtn}
               onPress={() => {
                 onDeleteForEveryone(message.id);
                 setShowReactions(false);
               }}
+              accessibilityRole="button"
+              accessibilityLabel="Delete message for everyone"
             >
               <Text style={styles.reactionEmoji}>🗑️</Text>
             </TouchableOpacity>

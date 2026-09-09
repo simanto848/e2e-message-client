@@ -60,7 +60,7 @@ export function InviteManagerModal({
                 </TouchableOpacity>
               </View>
               <Text style={styles.statusHint}>
-                Share an invite code with friends so they can join JABY.
+                Everyone gets 3 free invites. Share an invite code with friends so they can join JABY.
               </Text>
             </View>
 

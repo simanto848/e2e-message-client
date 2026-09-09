@@ -182,6 +182,20 @@ export interface InviteCode {
   expiresAt: number;
 }
 
+// Promo coupon — separate signup gate from user invites (multi-use).
+export interface CouponCode {
+  code: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: number;
+  maxUses: number;
+  usedCount: number;
+  usedBy?: string;
+  usedAt?: number;
+  expiresAt: number;
+  isActive: boolean;
+}
+
 export interface CallState {
   active: boolean;
   type: 'audio' | 'video';

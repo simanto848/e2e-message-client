@@ -6,3 +6,5 @@
  * share one source of truth.
  */
 export type ScreenType = 'auth' | 'chat_list' | 'chat_detail' | 'settings';
+
+export type BottomTabId = 'chats' | 'search' | 'requests' | 'invites' | 'settings';

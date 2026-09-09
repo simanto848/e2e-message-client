@@ -59,6 +59,7 @@ import { SettingsScreen } from './src/screens/SettingsScreen';
 
 // Components & Modals
 import { Header } from './src/components/Header';
+import { BottomNavBar } from './src/components/BottomNavBar';
 import { CipherInspectorModal } from './src/components/CipherInspectorModal';
 import { SafetyNumberModal } from './src/components/SafetyNumberModal';
 import { CallModal } from './src/components/CallModal';
@@ -2477,6 +2478,8 @@ export default function App() {
           setCurrentUser(prev => prev ? { ...prev, inviteCodesRemaining: remaining } : null);
         }
         Alert.alert('Invite Code Created', `Code: ${newInvite.code}\nValid for 7 days.`);
+      } else {
+        Alert.alert('No Invites Left', res.error || 'You have used all your invites.');
       }
     } catch {
       Alert.alert('Error', 'Unable to mint invite code.');
@@ -2915,6 +2918,50 @@ export default function App() {
                 onToggleChatHeads={handleToggleChatHeads}
               />
             )}
+
+            {/* Bottom navigation — always visible in-app (chats / find /
+                requests / invites / settings). Each icon is functional:
+                chats navigates home, find opens operative search, requests
+                opens the connection queue, invites opens the manager
+                (with quota badge), settings opens preferences. Badges show
+                live unread / pending-request / remaining-invite counts. */}
+            <BottomNavBar
+              activeTab={
+                showRequestsModal
+                  ? 'requests'
+                  : showSearchModal
+                    ? 'search'
+                    : showInvitesModal
+                      ? 'invites'
+                      : currentScreen === 'settings'
+                        ? 'settings'
+                        : 'chats'
+              }
+              unreadCount={displayedChats.reduce((sum, c) => sum + (c.unreadCount || 0), 0)}
+              requestsCount={isDecoyMode ? 0 : incomingRequests.length}
+              inviteCount={displayedUser?.inviteCodesRemaining ?? 0}
+              onTabPress={tab => {
+                if (isDecoyMode) return;
+                switch (tab) {
+                  case 'chats':
+                    setActiveChatId(null);
+                    setCurrentScreen('chat_list');
+                    break;
+                  case 'search':
+                    setShowSearchModal(true);
+                    break;
+                  case 'requests':
+                    setShowRequestsModal(true);
+                    break;
+                  case 'invites':
+                    setShowInvitesModal(true);
+                    break;
+                  case 'settings':
+                    setCurrentScreen(currentScreen === 'settings' ? 'chat_list' : 'settings');
+                    break;
+                }
+              }}
+            />
           </View>
         )}
           </>

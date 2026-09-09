@@ -4,6 +4,7 @@ import {
   Message,
   ContactRequestWithUser,
   InviteCode,
+  CouponCode,
   Attachment,
   EncryptedPayload,
   SearchOperativeResult,
@@ -71,11 +72,13 @@ export const api = {
     }
   },
 
-  // Auth: Register (no token needed yet)
+  // Auth: Register — INVITE-ONLY. Exactly one of inviteCode / couponCode is
+  // required; the server rejects plain registration with 403.
   async register(params: {
     name: string;
     handle: string;
     inviteCode?: string;
+    couponCode?: string;
     publicKey: string;
     pinCode: string;
     fingerprintHash?: string;
@@ -482,6 +485,39 @@ export const api = {
       const res = await fetchWithTimeout(`${API_BASE_URL}/invites/user/${userId}`, { headers: await authHeaders() });
       const data = await safeParseResponse(res, { invites: [] });
       return data.invites || [];
+    } catch {
+      return [];
+    }
+  },
+
+  // Coupons: validate a promo coupon (public, pre-auth).
+  async validateCoupon(code: string) {
+    try {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/coupons/validate/${encodeURIComponent(code)}`);
+      return await safeParseResponse(res, { valid: false });
+    } catch {
+      return { valid: false };
+    }
+  },
+
+  async createCoupon(params: { maxUses?: number; daysValid?: number }): Promise<{ success: boolean; coupon?: CouponCode; error?: string }> {
+    try {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/coupons/create`, {
+        method: 'POST',
+        headers: await authedJsonHeaders(),
+        body: JSON.stringify(params),
+      });
+      return await safeParseResponse(res, { success: false });
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to create coupon' };
+    }
+  },
+
+  async getUserCoupons(userId: string): Promise<CouponCode[]> {
+    try {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/coupons/user/${userId}`, { headers: await authHeaders() });
+      const data = await safeParseResponse(res, { coupons: [] });
+      return data.coupons || [];
     } catch {
       return [];
     }
