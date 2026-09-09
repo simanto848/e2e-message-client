@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Animated, PanResponder } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
-import { Flame, Check, CheckCheck, Play, Pause, Trash2, ImageIcon, Phone, PhoneOff, Video, Clock } from './Icons';
+import { Flame, Check, CheckCheck, Play, Pause, Trash2, ImageIcon, Phone, PhoneOff, Video, Clock, MoreHorizontal } from './Icons';
+import { MessageOptionsMenuModal } from './MessageOptionsMenuModal';
 import { Message } from '../types';
 import { colors, shadows } from '../theme';
 import { formatDisappearingTimer } from '../utils/timerUtils';
@@ -13,6 +14,7 @@ interface Props {
   message: Message;
   isMe: boolean;
   onInspectCiphertext?: (msg: Message) => void;
+  onDeleteForMe?: (msgId: string) => void;
   onDeleteForEveryone?: (msgId: string) => void;
   onPlayAudio?: (msg: Message) => void;
   isPlayingAudio?: boolean;
@@ -92,6 +94,7 @@ export function ChatBubble({
   message,
   isMe,
   onInspectCiphertext,
+  onDeleteForMe,
   onDeleteForEveryone,
   onPlayAudio,
   isPlayingAudio = false,
@@ -111,6 +114,7 @@ export function ChatBubble({
 }: Props) {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [showReactions, setShowReactions] = useState(false);
+  const [showOptionsMenu, setShowOptionsMenu] = useState(false);
   const [showFullTime, setShowFullTime] = useState(false);
   const [copiedTick, setCopiedTick] = useState(false);
   const lastTapRef = useRef(0);
@@ -251,7 +255,7 @@ export function ChatBubble({
 
   return (
     <View style={[styles.container, isMe ? styles.myContainer : styles.theirContainer]}>
-      {/* Floating Quick Reaction Bar */}
+      {/* Floating Quick Emoji Reaction Bar (Appears on hold/long-press) */}
       {showReactions && (
         <View style={[styles.reactionsBar, isMe ? styles.reactionsBarRight : styles.reactionsBarLeft]}>
           {QUICK_EMOJIS.map(emoji => (
@@ -259,75 +263,39 @@ export function ChatBubble({
               key={emoji}
               style={styles.reactionBtn}
               onPress={() => {
+                try {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                } catch {}
                 onReact?.(message.id, emoji);
                 setShowReactions(false);
               }}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={`React ${emoji}`}
             >
               <Text style={styles.reactionEmoji}>{emoji}</Text>
             </TouchableOpacity>
           ))}
-          {message.text && !message.isDeletedForEveryone && (
-            <TouchableOpacity
-              style={styles.reactionBtn}
-              onPress={() => {
-                copyText();
-                setShowReactions(false);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Copy message text"
-            >
-              <Text style={styles.reactionEmoji}>{copiedTick ? '✅' : '📋'}</Text>
-            </TouchableOpacity>
-          )}
-          {onReply && (
-            <TouchableOpacity
-              style={styles.reactionBtn}
-              onPress={() => {
-                onReply(message);
-                setShowReactions(false);
-              }}
-            >
-              <Text style={styles.reactionEmoji}>↩️</Text>
-            </TouchableOpacity>
-          )}
-          {onForward && !message.isDeletedForEveryone && (
-            <TouchableOpacity
-              style={styles.reactionBtn}
-              onPress={() => {
-                onForward(message);
-                setShowReactions(false);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Forward message"
-            >
-              <Text style={styles.reactionEmoji}>➡️</Text>
-            </TouchableOpacity>
-          )}
-          {onInspectCiphertext && (
-            <TouchableOpacity
-              style={styles.reactionBtn}
-              onPress={() => {
-                onInspectCiphertext(message);
-                setShowReactions(false);
-              }}
-            >
-              <Text style={styles.reactionEmoji}>🛡️</Text>
-            </TouchableOpacity>
-          )}
-          {onDeleteForEveryone && (
-            <TouchableOpacity
-              style={styles.reactionBtn}
-              onPress={() => {
-                onDeleteForEveryone(message.id);
-                setShowReactions(false);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Delete message for everyone"
-            >
-              <Text style={styles.reactionEmoji}>🗑️</Text>
-            </TouchableOpacity>
-          )}
         </View>
+      )}
+
+      {/* 3-Dot Options Menu Button on X-Axis (Left side for sent messages) */}
+      {isMe && !message.isDeletedForEveryone && (
+        <TouchableOpacity
+          style={[styles.threeDotsBtn, styles.threeDotsBtnLeft]}
+          onPress={() => {
+            try {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            } catch {}
+            setShowOptionsMenu(true);
+          }}
+          activeOpacity={0.7}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          accessibilityRole="button"
+          accessibilityLabel="Message options"
+        >
+          <MoreHorizontal size={17} color={colors.textMuted} />
+        </TouchableOpacity>
       )}
 
       <Animated.View
@@ -346,16 +314,21 @@ export function ChatBubble({
       >
       <TouchableOpacity
         activeOpacity={0.95}
-        onLongPress={() => setShowReactions(prev => !prev)}
-        delayLongPress={250}
+        onLongPress={() => {
+          try {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          } catch {}
+          setShowReactions(prev => !prev);
+        }}
+        delayLongPress={220}
         onPress={handleBubblePress}
         accessibilityRole="button"
         accessibilityLabel={
           message.status === 'sending'
             ? 'Message waiting to send. Activate to retry now.'
             : isMe
-              ? 'Your message. Tap for full time, double-tap to send a heart, long press for options, swipe to reply.'
-              : 'Message. Tap for full time, double-tap to send a heart, long press for options, swipe to reply.'
+              ? 'Your message. Tap for full time, double-tap to send a heart, long press for reactions.'
+              : 'Message. Tap for full time, double-tap to send a heart, long press for reactions.'
         }
         style={[
           styles.bubble,
@@ -565,6 +538,39 @@ export function ChatBubble({
         )}
       </TouchableOpacity>
       </Animated.View>
+
+      {/* 3-Dot Options Menu Button on X-Axis (Right side for received messages) */}
+      {!isMe && !message.isDeletedForEveryone && (
+        <TouchableOpacity
+          style={[styles.threeDotsBtn, styles.threeDotsBtnRight]}
+          onPress={() => {
+            try {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            } catch {}
+            setShowOptionsMenu(true);
+          }}
+          activeOpacity={0.7}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          accessibilityRole="button"
+          accessibilityLabel="Message options"
+        >
+          <MoreHorizontal size={17} color={colors.textMuted} />
+        </TouchableOpacity>
+      )}
+
+      {/* Message Options Action Sheet Modal */}
+      <MessageOptionsMenuModal
+        visible={showOptionsMenu}
+        message={message}
+        isMe={isMe}
+        onClose={() => setShowOptionsMenu(false)}
+        onReply={msg => onReply?.(msg)}
+        onCopy={message.text ? copyText : undefined}
+        onForward={onForward ? msg => onForward(msg) : undefined}
+        onInspectCiphertext={onInspectCiphertext ? msg => onInspectCiphertext(msg) : undefined}
+        onDeleteForMe={onDeleteForMe ? id => onDeleteForMe(id) : undefined}
+        onDeleteForEveryone={onDeleteForEveryone ? id => onDeleteForEveryone(id) : undefined}
+      />
     </View>
   );
 }
@@ -580,6 +586,24 @@ const styles = StyleSheet.create({
   },
   theirContainer: {
     justifyContent: 'flex-start',
+  },
+  threeDotsBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...shadows.sm,
+  },
+  threeDotsBtnLeft: {
+    marginRight: 6,
+  },
+  threeDotsBtnRight: {
+    marginLeft: 6,
   },
   bubble: {
     width: '100%',

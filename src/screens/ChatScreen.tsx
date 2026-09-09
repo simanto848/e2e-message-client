@@ -74,6 +74,7 @@ interface Props {
   onForwardMessage?: (msg: Message) => void;
   onBack: () => void;
   onSendMessage: (text: string, attachment?: Attachment, replyToId?: string) => void;
+  onDeleteForMe?: (messageId: string) => void;
   onDeleteForEveryone: (messageId: string) => void;
   onStartCall: (type: 'audio' | 'video') => void;
   onInspectCiphertext: (message: Message) => void;
@@ -264,6 +265,7 @@ export function ChatScreen({
   onForwardMessage,
   onBack,
   onSendMessage,
+  onDeleteForMe,
   onDeleteForEveryone,
   onStartCall,
   onInspectCiphertext,
@@ -922,6 +924,7 @@ export function ChatScreen({
           message={displayMessage}
           isMe={msg.senderId === currentUser.id}
           onInspectCiphertext={onInspectCiphertext}
+          onDeleteForMe={onDeleteForMe}
           onDeleteForEveryone={onDeleteForEveryone}
           onPlayAudio={handlePlayAudio}
           isPlayingAudio={playingAudioMsgId === msg.id}
@@ -947,6 +950,7 @@ export function ChatScreen({
       localReactions,
       currentUser.id,
       onInspectCiphertext,
+      onDeleteForMe,
       onDeleteForEveryone,
       handlePlayAudio,
       playingAudioMsgId,

@@ -7,8 +7,6 @@ export type { ModalKey };
 export type { BackSnapshot, BackDecision } from './backDecision';
 
 export interface HardwareBackActions {
-  closeFloatingWindow: () => void;
-  collapseChatHead: () => void;
   clearInspectingMessage: () => void;
   clearSafetyModalChat: () => void;
   closeModal: (modal: ModalKey) => void;
@@ -41,12 +39,6 @@ export function useHardwareBack(
       const decision = decideBackAction(snapshotRef.current());
       const a = actionsRef.current;
       switch (decision.kind) {
-        case 'close-floating-window':
-          a.closeFloatingWindow();
-          return true;
-        case 'collapse-chat-head':
-          a.collapseChatHead();
-          return true;
         case 'block':
           return true;
         case 'close-inspecting':

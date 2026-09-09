@@ -2,8 +2,6 @@ import { describe, test, expect } from 'bun:test';
 import { decideBackAction, type BackSnapshot } from '../backDecision';
 
 const base: BackSnapshot = {
-  isOpenedFromChatHead: false,
-  isChatHeadExpanded: false,
   isAppLocked: false,
   hasRestorePrompt: false,
   callActive: false,
@@ -14,17 +12,6 @@ const base: BackSnapshot = {
 };
 
 describe('decideBackAction priority chain', () => {
-  test('floating chat-head window closes first', () => {
-    expect(
-      decideBackAction({ ...base, isOpenedFromChatHead: true, isChatHeadExpanded: true, isAppLocked: true })
-    ).toEqual({ kind: 'close-floating-window' });
-  });
-
-  test('expanded head collapses before lock block', () => {
-    expect(decideBackAction({ ...base, isChatHeadExpanded: true, isAppLocked: true })).toEqual({
-      kind: 'collapse-chat-head',
-    });
-  });
 
   test('lock / restore / call all block (in that precedence)', () => {
     expect(decideBackAction({ ...base, isAppLocked: true, callActive: true }).kind).toBe('block');

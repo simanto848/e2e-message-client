@@ -1,7 +1,21 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useRef, useEffect } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Animated,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Search, UserPlus, Ticket, Settings } from './Icons';
+import * as Haptics from 'expo-haptics';
+import {
+  MessageSquare,
+  Phone,
+  Search,
+  UserPlus,
+  Ticket,
+  Settings,
+} from './Icons';
 import { colors, shadows } from '../theme';
 import type { BottomTabId } from '../navigation/types';
 
@@ -13,77 +27,150 @@ interface Props {
   onTabPress: (tab: BottomTabId) => void;
 }
 
-function MessageIcon({ size, color }: { size: number; color: string }) {
-  // Inline chat-bubble glyph (no new dep) matching Icons stroke style.
+interface TabItemProps {
+  id: BottomTabId;
+  label: string;
+  badge?: number;
+  active: boolean;
+  onPress: () => void;
+  renderIcon: (color: string) => React.ReactNode;
+}
+
+function NavTabButton({
+  label,
+  badge = 0,
+  active,
+  onPress,
+  renderIcon,
+}: TabItemProps) {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (active) {
+      Animated.sequence([
+        Animated.spring(scaleAnim, {
+          toValue: 1.12,
+          friction: 4,
+          tension: 140,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          friction: 6,
+          tension: 120,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      Animated.timing(scaleAnim, {
+        toValue: 1,
+        duration: 150,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [active, scaleAnim]);
+
+  const handlePress = () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+    onPress();
+  };
+
+  const iconColor = active ? colors.primary : colors.textMuted;
+
   return (
-    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-      <Text style={{ fontSize: size - 4 }}>💬</Text>
-    </View>
+    <TouchableOpacity
+      style={styles.tab}
+      onPress={handlePress}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: active }}
+      hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+    >
+      <View style={[styles.pillWrap, active && styles.pillWrapActive]}>
+        <Animated.View style={[styles.iconContainer, { transform: [{ scale: scaleAnim }] }]}>
+          {renderIcon(iconColor)}
+          {badge > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{badge > 99 ? '99+' : String(badge)}</Text>
+            </View>
+          )}
+        </Animated.View>
+        <Text style={[styles.label, active && styles.labelActive]} numberOfLines={1}>
+          {label}
+        </Text>
+        {active && <View style={styles.activeGlowDot} />}
+      </View>
+    </TouchableOpacity>
   );
 }
 
-export function BottomNavBar({ activeTab, unreadCount = 0, requestsCount = 0, inviteCount = 0, onTabPress }: Props) {
+export function BottomNavBar({
+  activeTab,
+  unreadCount = 0,
+  requestsCount = 0,
+  inviteCount = 0,
+  onTabPress,
+}: Props) {
   const insets = useSafeAreaInsets();
 
-  const tabs: { id: BottomTabId; label: string; badge?: number; render: (active: boolean) => React.ReactNode }[] = [
+  const tabs: Array<{
+    id: BottomTabId;
+    label: string;
+    badge?: number;
+    renderIcon: (color: string) => React.ReactNode;
+  }> = [
     {
       id: 'chats',
       label: 'Chats',
       badge: unreadCount,
-      render: () => <MessageIcon size={24} color={activeTab === 'chats' ? colors.primary : colors.textSecondary} />,
+      renderIcon: color => <MessageSquare size={21} color={color} strokeWidth={2.2} />,
+    },
+    {
+      id: 'calls',
+      label: 'Calls',
+      renderIcon: color => <Phone size={20} color={color} strokeWidth={2.2} />,
     },
     {
       id: 'search',
       label: 'Find',
-      render: (active) => <Search size={22} color={active ? colors.primary : colors.textSecondary} />,
+      renderIcon: color => <Search size={20} color={color} strokeWidth={2.2} />,
     },
     {
       id: 'requests',
       label: 'Requests',
       badge: requestsCount,
-      render: (active) => <UserPlus size={22} color={active ? colors.primary : colors.textSecondary} />,
+      renderIcon: color => <UserPlus size={20} color={color} strokeWidth={2.2} />,
     },
     {
       id: 'invites',
       label: 'Invites',
       badge: inviteCount,
-      render: (active) => <Ticket size={22} color={active ? colors.primary : colors.textSecondary} />,
+      renderIcon: color => <Ticket size={20} color={color} strokeWidth={2.2} />,
     },
     {
       id: 'settings',
       label: 'Settings',
-      render: (active) => <Settings size={22} color={active ? colors.primary : colors.textSecondary} />,
+      renderIcon: color => <Settings size={20} color={color} strokeWidth={2.2} />,
     },
   ];
 
   return (
     <View style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 8) }]}>
       <View style={styles.bar}>
-        {tabs.map(tab => {
-          const active = activeTab === tab.id;
-          return (
-            <TouchableOpacity
-              key={tab.id}
-              style={styles.tab}
-              onPress={() => onTabPress(tab.id)}
-              accessibilityRole="button"
-              accessibilityLabel={tab.label}
-              accessibilityState={{ selected: active }}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <View style={styles.iconWrap}>
-                {tab.render(active)}
-                {!!tab.badge && tab.badge > 0 && (
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>{tab.badge > 99 ? '99+' : String(tab.badge)}</Text>
-                  </View>
-                )}
-              </View>
-              <Text style={[styles.label, active && styles.labelActive]}>{tab.label}</Text>
-              {active && <View style={styles.activeDot} />}
-            </TouchableOpacity>
-          );
-        })}
+        {tabs.map(tab => (
+          <NavTabButton
+            key={tab.id}
+            id={tab.id}
+            label={tab.label}
+            badge={tab.badge}
+            active={activeTab === tab.id}
+            onPress={() => onTabPress(tab.id)}
+            renderIcon={tab.renderIcon}
+          />
+        ))}
       </View>
     </View>
   );
@@ -94,56 +181,72 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-    paddingTop: 6,
-    paddingHorizontal: 4,
+    paddingTop: 4,
+    paddingHorizontal: 2,
     ...shadows.sm,
   },
   bar: {
     flexDirection: 'row',
-    alignItems: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'space-around',
   },
   tab: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 6,
-    gap: 2,
-    minHeight: 56,
+    paddingVertical: 2,
   },
-  iconWrap: {
+  pillWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+    borderRadius: 14,
+    minHeight: 52,
+    width: '100%',
+  },
+  pillWrapActive: {
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+  },
+  iconContainer: {
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 26,
+    width: 26,
+    height: 26,
   },
   badge: {
     position: 'absolute',
-    top: -6,
-    right: -14,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
+    top: -5,
+    right: -13,
+    minWidth: 17,
+    height: 17,
+    borderRadius: 8.5,
     backgroundColor: colors.danger,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 4,
+    paddingHorizontal: 3,
     borderWidth: 1.5,
     borderColor: colors.surface,
+    ...shadows.sm,
   },
   badgeText: {
-    color: '#fff',
-    fontSize: 10,
+    color: '#ffffff',
+    fontSize: 9,
     fontWeight: '800',
   },
   label: {
     fontSize: 10,
-    fontWeight: '700',
-    color: colors.textSecondary,
+    fontWeight: '600',
+    color: colors.textMuted,
+    marginTop: 3,
+    letterSpacing: 0.1,
   },
   labelActive: {
-    color: colors.primaryDark,
+    color: colors.primary,
+    fontWeight: '700',
   },
-  activeDot: {
+  activeGlowDot: {
     width: 4,
     height: 4,
     borderRadius: 2,

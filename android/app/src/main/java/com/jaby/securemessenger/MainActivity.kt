@@ -2,6 +2,7 @@ package com.jaby.securemessenger
 
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -14,9 +15,22 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.
-    // This is required for expo-splash-screen.
-    setTheme(R.style.AppTheme);
+    setTheme(R.style.AppTheme)
     super.onCreate(null)
+
+    // Ensure incoming calls illuminate the display and appear on lockscreen
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+      setShowWhenLocked(true)
+      setTurnScreenOn(true)
+    } else {
+      @Suppress("DEPRECATION")
+      window.addFlags(
+        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+      )
+    }
+
     handleIntent(intent)
   }
 
@@ -27,14 +41,14 @@ class MainActivity : ReactActivity() {
   }
 
   private fun handleIntent(intent: android.content.Intent?) {
-    val chatId = intent?.getStringExtra("chatId")
-    if (!chatId.isNullOrEmpty()) {
-      val contactName = intent.getStringExtra("contactName") ?: ""
-      val fromChatHead = intent.getBooleanExtra("fromChatHead", false)
-      ChatHeadModule.pendingChatId = chatId
-      ChatHeadModule.pendingContactName = contactName
-      ChatHeadModule.fromChatHead = fromChatHead
-      ChatHeadModule.emitPendingIntent(chatId, contactName, fromChatHead)
+    if (intent == null) return
+    val chatId = intent.getStringExtra(NotificationModule.EXTRA_CHAT_ID) ?: intent.getStringExtra("chatId")
+    val callAction = intent.getStringExtra(NotificationModule.EXTRA_CALL_ACTION)
+    val callId = intent.getStringExtra(NotificationModule.EXTRA_CALL_ID)
+    val peerId = intent.getStringExtra(NotificationModule.EXTRA_PEER_ID)
+
+    if (chatId != null || callAction != null || callId != null || peerId != null) {
+      NotificationModule.emitNotificationIntent(chatId, callAction, callId, peerId)
     }
   }
 

@@ -54,13 +54,14 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
         "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-        "android.permission.MANAGE_OWN_CALLS"
+        "android.permission.MANAGE_OWN_CALLS",
+        "android.permission.USE_FULL_SCREEN_INTENT"
       ],
       "runtimeVersion": {
         "policy": "appVersion"
       },
       "permissionRationale": {
-        "_comment": "Minimal set. CAMERA/RECORD_AUDIO/POST_NOTIFICATIONS/READ_MEDIA_IMAGES are just-in-time (requested via src/utils/permissions.ts only when the feature is used). SYSTEM_ALERT_WINDOW is NOT declared: chat-head overlay is requested at runtime via chatHeadNative.requestOverlayPermission only after explicit user consent in Settings. READ_PHONE_STATE removed (not essential; CallKeep uses MANAGE_OWN_CALLS). Legacy READ/WRITE_EXTERNAL_STORAGE removed; scoped READ_MEDIA_IMAGES only (API 33+).",
+        "_comment": "Minimal set. CAMERA/RECORD_AUDIO/POST_NOTIFICATIONS/READ_MEDIA_IMAGES are just-in-time (requested via src/utils/permissions.ts only when the feature is used). USE_FULL_SCREEN_INTENT is declared for incoming call lock-screen alerts. READ_PHONE_STATE removed (not essential; CallKeep uses MANAGE_OWN_CALLS). Legacy READ/WRITE_EXTERNAL_STORAGE removed; scoped READ_MEDIA_IMAGES only (API 33+).",
         "justInTime": [
           "android.permission.CAMERA",
           "android.permission.RECORD_AUDIO",

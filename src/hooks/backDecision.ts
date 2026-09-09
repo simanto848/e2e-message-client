@@ -7,10 +7,9 @@ import type { ScreenType } from '../navigation/types';
  * competing BackHandler listeners (see ChatListScreen/AuthScreen: they expose
  * hasSearchQuery / isRegisterMode snapshot params instead).
  *
- * Priority: floating chat-head window → collapse head → lock/restore/call
- * blocks → message modals → app modals (fixed topmost-first order) →
- * inline search clear → screen nav → register-mode exit → double-tap-to-exit
- * on chat list → system default on auth.
+ * Priority: lock/restore/call blocks → message modals → app modals
+ * (fixed topmost-first order) → inline search clear → screen nav →
+ * register-mode exit → double-tap-to-exit on chat list → system default on auth.
  */
 
 export type ModalKey =
@@ -23,11 +22,10 @@ export type ModalKey =
   | 'linkedDevices'
   | 'invites'
   | 'search'
-  | 'requests';
+  | 'requests'
+  | 'calls';
 
 export interface BackSnapshot {
-  isOpenedFromChatHead: boolean;
-  isChatHeadExpanded: boolean;
   isAppLocked: boolean;
   hasRestorePrompt: boolean;
   callActive: boolean;
@@ -42,8 +40,6 @@ export interface BackSnapshot {
 }
 
 export type BackDecision =
-  | { kind: 'close-floating-window' }
-  | { kind: 'collapse-chat-head' }
   | { kind: 'block' }
   | { kind: 'close-inspecting' }
   | { kind: 'close-safety' }
@@ -70,12 +66,6 @@ const MODAL_PRIORITY: ModalKey[] = [
 ];
 
 export function decideBackAction(snap: BackSnapshot): BackDecision {
-  if (snap.isOpenedFromChatHead && snap.isChatHeadExpanded) {
-    return { kind: 'close-floating-window' };
-  }
-  if (snap.isChatHeadExpanded) {
-    return { kind: 'collapse-chat-head' };
-  }
   if (snap.isAppLocked) {
     return { kind: 'block' };
   }

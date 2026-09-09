@@ -58,11 +58,13 @@ import { ChatScreen } from './src/screens/ChatScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 
 // Components & Modals
+import { InAppNotificationBanner } from './src/components/InAppNotificationBanner';
 import { Header } from './src/components/Header';
 import { BottomNavBar } from './src/components/BottomNavBar';
 import { CipherInspectorModal } from './src/components/CipherInspectorModal';
 import { SafetyNumberModal } from './src/components/SafetyNumberModal';
 import { CallModal } from './src/components/CallModal';
+import { CallsModal } from './src/components/CallsModal';
 import { InviteManagerModal } from './src/components/InviteManagerModal';
 import { LinkedDevicesModal } from './src/components/LinkedDevicesModal';
 import { CloudBackupModal } from './src/components/CloudBackupModal';
@@ -84,15 +86,14 @@ import { colors } from './src/theme';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAppSecurity } from './src/hooks/useAppSecurity';
 import { useWebRTCCall } from './src/hooks/useWebRTCCall';
-import { ChatHeadOverlay, ChatHeadAttachmentData } from './src/components/ChatHeadOverlay';
 import { ForwardPickerModal } from './src/components/ForwardPickerModal';
 import { RestoreSessionModal } from './src/components/RestoreSessionModal';
-import { InAppNotificationBanner } from './src/components/InAppNotificationBanner';
 import { notificationService } from './src/services/notificationService';
 import {
   ensureAndroidChannels,
   configureForegroundHandler,
   registerPushToken,
+  addPushResponseListener,
 } from './src/services/pushNotifications';
 import {
   setupCallKeep,
@@ -106,9 +107,7 @@ import {
   stopBackgroundSync,
   getBackgroundSyncSettings,
   setBackgroundSyncEnabled,
-  setChatHeadsEnabled,
 } from './src/services/backgroundSync';
-import { chatHeadNative } from './src/services/chatHeadNative';
 import { perfMark, perfSince, perfLog } from './src/utils/perf';
 import { loadOutbox, saveOutbox, clearOutbox, removeOutboxEntry } from './src/utils/outboxStore';
 import {
@@ -238,6 +237,20 @@ export default function App() {
       : status === 'declined'
       ? `📞 ${label} declined`
       : `📞 ${label} not answered`;
+
+    if (isIncoming && status === 'missed') {
+      notificationService.showMissedCallNotification({
+        callerId: peer.id,
+        callerName: peer.name || peer.handle || 'Contact',
+        callType: finalState.type || 'audio',
+        chatId: peer.id,
+        isDecoyMode: isDecoyModeRef.current,
+        onPress: () => {
+          setActiveChatId(peer.id);
+          setCurrentScreen('chat_detail');
+        },
+      }).catch(() => {});
+    }
 
     let encryptedPayload;
     try {
@@ -492,6 +505,7 @@ export default function App() {
     setShowDuressModal,
   } = useAppModals();
   const [availableRelease, setAvailableRelease] = useState<ReleaseInfo | null>(null);
+  const [showCallsModal, setShowCallsModal] = useState(false);
 
   // Expo notification channels + foreground handler (once, launch).
   // Registration itself happens post-auth (registerPushToken) so the token
@@ -519,55 +533,18 @@ export default function App() {
     checkUpdates();
   }, []);
 
-  // Background Sync & Messenger Chat Heads
+  // Background Sync & Notifications
   const [backgroundSyncEnabled, setBackgroundSyncEnabledState] = useState(true);
-  const [chatHeadsEnabled, setChatHeadsEnabledState] = useState(true);
-  const [activeChatHeadContactId, setActiveChatHeadContactId] = useState<string | null>(null);
-  const [chatHeadContactIds, setChatHeadContactIds] = useState<string[]>([]);
-  const [isChatHeadDismissed, setIsChatHeadDismissed] = useState(false);
-  const [isChatHeadExpanded, setIsChatHeadExpanded] = useState(false);
-  const [isOpenedFromChatHead, setIsOpenedFromChatHead] = useState(false);
-  const [chatHeadMessages, setChatHeadMessages] = useState<Message[]>([]);
-  const activeChatHeadContactIdRef = useRef<string | null>(null);
-  activeChatHeadContactIdRef.current = activeChatHeadContactId;
 
   useEffect(() => {
     getBackgroundSyncSettings().then(settings => {
       setBackgroundSyncEnabledState(settings.backgroundSyncEnabled);
-      setChatHeadsEnabledState(settings.chatHeadsEnabled);
     });
   }, []);
 
   const handleToggleBackgroundSync = async (val: boolean) => {
     setBackgroundSyncEnabledState(val);
     await setBackgroundSyncEnabled(val);
-  };
-
-  const handleToggleChatHeads = async (val: boolean) => {
-    setChatHeadsEnabledState(val);
-    await setChatHeadsEnabled(val);
-    if (val) setIsChatHeadDismissed(false);
-  };
-
-  const handleCloseFloatingWindow = () => {
-    setIsChatHeadExpanded(false);
-    setIsOpenedFromChatHead(false);
-    // Only leave a bubble behind if that thread still has unread messages —
-    // minimizing a fully-read chat just exits, no stray bubble.
-    if (chatHeadsEnabled && currentUser && chatHeadThread && !isAppLocked && (chatHeadThread.unreadCount || 0) > 0) {
-      chatHeadNative
-        .showNativeChatHead({
-          contactId: chatHeadThread.id,
-          contactName: chatHeadThread.participant.name,
-          avatarUrl: chatHeadThread.participant.avatar,
-          unreadCount: chatHeadThread.unreadCount || 0,
-          isOnline: onlineUserIds.has(chatHeadThread.participant.id),
-        })
-        .catch(() => {});
-    } else {
-      chatHeadNative.hideNativeChatHead().catch(() => {});
-    }
-    BackHandler.exitApp();
   };
 
   // Android Hardware / Swipe Back Navigation Handler. The priority chain
@@ -584,13 +561,12 @@ export default function App() {
       case 'invites': setShowInvitesModal(false); break;
       case 'search': setShowSearchModal(false); break;
       case 'requests': setShowRequestsModal(false); break;
+      case 'calls': setShowCallsModal(false); break;
     }
   };
 
   useHardwareBack(
     () => ({
-      isOpenedFromChatHead,
-      isChatHeadExpanded,
       isAppLocked,
       hasRestorePrompt: Boolean(restoreSessionPrompt),
       callActive: Boolean(callState.active || callState.isIncoming),
@@ -607,12 +583,11 @@ export default function App() {
         showInvitesModal ? ('invites' as const) : null,
         showSearchModal ? ('search' as const) : null,
         showRequestsModal ? ('requests' as const) : null,
+        showCallsModal ? ('calls' as const) : null,
       ].filter((m): m is ModalKey => m !== null),
       currentScreen,
     }),
     {
-      closeFloatingWindow: handleCloseFloatingWindow,
-      collapseChatHead: () => setIsChatHeadExpanded(false),
       clearInspectingMessage: () => setInspectingMessage(null),
       clearSafetyModalChat: () => setSafetyModalChat(null),
       closeModal: closeBackModal,
@@ -1612,23 +1587,6 @@ export default function App() {
         } else {
           sendStatusSingleSource(msg.id, msg.chatId, 'delivered');
 
-          // When new message arrives from another user, include them in chat heads (max 3 users).
-          // Normalize to the chat THREAD id (not the raw sender/participant id) so the
-          // same conversation can never occupy two bubble slots at once.
-          const headThreadId =
-            chatsRef.current.find(
-              c => c.id === msg.senderId || c.id === msg.chatId || c.participant?.id === msg.senderId
-            )?.id || msg.chatId || msg.senderId;
-          setChatHeadContactIds(prev => {
-            const normalized = prev.map(
-              pid => chatsRef.current.find(c => c.id === pid || c.participant?.id === pid)?.id || pid
-            );
-            const filtered = normalized.filter(id => id !== headThreadId);
-            return [headThreadId, ...filtered].slice(0, 3);
-          });
-          setActiveChatHeadContactId(headThreadId);
-          setIsChatHeadDismissed(false);
-
           const senderProfile = chatsRef.current.find(c => c.id === msg.senderId)?.participant;
           const currentChat = chatsRef.current.find(c => c.id === msg.senderId);
           // Secure default: previews OFF unless the thread explicitly opts in.
@@ -1676,7 +1634,7 @@ export default function App() {
       );
     });
 
-    // Ephemeral Delete for Everyone: tombstone RAM + cache + outbox + tray.
+    // Ephemeral Delete for Everyone: tombstone RAM + cache + outbox + tray + chat preview.
     const unsubDelete = socketService.onMessageDeletedEveryone(data => {
       setMessages(prev =>
         prev.map(m =>
@@ -1685,14 +1643,34 @@ export default function App() {
             : m
         )
       );
+      setChats(prev =>
+        prev.map(c => {
+          if (c.lastMessage?.id === data.messageId) {
+            return {
+              ...c,
+              lastMessage: {
+                ...c.lastMessage,
+                isDeletedForEveryone: true,
+                text: 'This message was deleted',
+                deletedAt: data.deletedAt,
+              },
+            };
+          }
+          return c;
+        })
+      );
       const uid = currentUserRef.current?.id;
       if (uid) {
-        const chatId = data.chatId;
-        tombstoneCachedMessage(uid, chatId, data.messageId, data.deletedAt).catch(() => {});
+        if (data.chatId) {
+          tombstoneCachedMessage(uid, data.chatId, data.messageId, data.deletedAt).catch(() => {});
+          notificationService.cancelMessageNotification(data.chatId).catch(() => {});
+        }
+        chatsRef.current.forEach(c => {
+          tombstoneCachedMessage(uid, c.id, data.messageId, data.deletedAt).catch(() => {});
+        });
         removeOutboxEntry(uid, data.messageId).catch(() => {});
         outboxRef.current.delete(data.messageId);
         setOutboxCount(outboxRef.current.size);
-        notificationService.cancelMessageNotification(chatId).catch(() => {});
       }
     });
 
@@ -1946,11 +1924,6 @@ export default function App() {
         },
         onUnreadUpdate: data => {
           if (data.unreadThreads && data.unreadThreads.length > 0) {
-            setIsChatHeadDismissed(false);
-            const rawId = data.unreadThreads[0].peerId;
-            const normalizedId =
-              chatsRef.current.find(c => c.id === rawId || c.participant?.id === rawId)?.id || rawId;
-            setActiveChatHeadContactId(normalizedId);
             reloadDynamicData(currentUser.id);
           }
         },
@@ -2063,7 +2036,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Handler: Send Message to Any Chat (used by both Full Chat & ChatHeadOverlay)
+  // Handler: Send Message to Any Chat
   const sendMessageToChat = async (
     targetChatId: string,
     text: string,
@@ -2137,7 +2110,6 @@ export default function App() {
     if (targetChatId === activeChatId) {
       setMessages(prev => [...prev, newMsg]);
     }
-    setChatHeadMessages(prev => [...prev, newMsg]);
 
     setChats(prev =>
       prev.map(c =>
@@ -2168,7 +2140,6 @@ export default function App() {
       if (targetChatId === activeChatIdRef.current) {
         setMessages(prev => prev.map(markPending));
       }
-      setChatHeadMessages(prev => prev.map(markPending));
       setChats(prev =>
         prev.map(c =>
           c.id === targetChatId && c.lastMessage?.id === messageId
@@ -2192,7 +2163,6 @@ export default function App() {
     persistOutbox();
     const markSent = (m: Message) => (m.id === messageId ? { ...m, status: 'sent' as const } : m);
     setMessages(prev => prev.map(markSent));
-    setChatHeadMessages(prev => prev.map(markSent));
     setChats(prev =>
       prev.map(c =>
         c.lastMessage?.id === messageId
@@ -2394,30 +2364,94 @@ export default function App() {
     }
   };
 
+  // Handler: Delete for Me — drop from RAM + local cache on this device only.
+  const handleDeleteForMe = (messageId: string) => {
+    if (!activeChatId || !currentUser) return;
+    Alert.alert(
+      'Delete for Me?',
+      'This message will be removed from your device only.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete for Me',
+          style: 'destructive',
+          onPress: () => {
+            setMessages(prev => prev.filter(m => m.id !== messageId));
+            removeCachedMessage(currentUser.id, activeChatId, messageId).catch(() => {});
+            removeOutboxEntry(currentUser.id, messageId).catch(() => {});
+            outboxRef.current.delete(messageId);
+            setOutboxCount(outboxRef.current.size);
+            setChats(prev =>
+              prev.map(c => {
+                if (c.id === activeChatId && c.lastMessage?.id === messageId) {
+                  const remaining = messages.filter(m => m.id !== messageId);
+                  const newLast = remaining.length > 0 ? remaining[remaining.length - 1] : undefined;
+                  return { ...c, lastMessage: newLast };
+                }
+                return c;
+              })
+            );
+          },
+        },
+      ]
+    );
+  };
+
   // Handler: Delete for Everyone — purge server + cache + outbox + tray.
   const handleDeleteForEveryone = (messageId: string) => {
     if (!activeChatId || !currentUser) return;
     const activeChat = chats.find(c => c.id === activeChatId);
     if (!activeChat) return;
 
-    try {
-      socketService.deleteForEveryone(messageId, activeChatId, activeChat.participant.id);
-    } catch {}
-    api.deleteMessage(messageId, activeChatId).catch(() => {});
+    Alert.alert(
+      'Delete message?',
+      'This message will be deleted for everyone on both sides.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete for Everyone',
+          style: 'destructive',
+          onPress: () => {
+            const peerId = activeChat.participant.id;
+            try {
+              socketService.deleteForEveryone(messageId, activeChatId, peerId);
+            } catch {}
+            api.deleteMessage(messageId, activeChatId).catch(() => {});
 
-    setMessages(prev =>
-      prev.map(m =>
-        m.id === messageId
-          ? { ...m, isDeletedForEveryone: true, text: '', deletedAt: Date.now() }
-          : m
-      )
+            const now = Date.now();
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === messageId
+                  ? { ...m, isDeletedForEveryone: true, text: '', deletedAt: now }
+                  : m
+              )
+            );
+            setChats(prev =>
+              prev.map(c => {
+                if (c.lastMessage?.id === messageId) {
+                  return {
+                    ...c,
+                    lastMessage: {
+                      ...c.lastMessage,
+                      isDeletedForEveryone: true,
+                      text: 'This message was deleted',
+                      deletedAt: now,
+                    },
+                  };
+                }
+                return c;
+              })
+            );
+            tombstoneCachedMessage(currentUser.id, activeChatId, messageId, now).catch(() => {});
+            removeOutboxEntry(currentUser.id, messageId).catch(() => {});
+            outboxRef.current.delete(messageId);
+            setOutboxCount(outboxRef.current.size);
+            persistOutbox();
+            notificationService.cancelMessageNotification(activeChatId).catch(() => {});
+          },
+        },
+      ]
     );
-    tombstoneCachedMessage(currentUser.id, activeChatId, messageId, Date.now()).catch(() => {});
-    removeOutboxEntry(currentUser.id, messageId).catch(() => {});
-    outboxRef.current.delete(messageId);
-    setOutboxCount(outboxRef.current.size);
-    persistOutbox();
-    notificationService.cancelMessageNotification(activeChatId).catch(() => {});
   };
 
   // Handler: Send Contact Request. The REST call both saves the request and
@@ -2506,8 +2540,6 @@ export default function App() {
   // id so signing back in on the same device doesn't need to rotate keys.
   const handleSignOut = async () => {
     stopBackgroundSync();
-    setIsChatHeadDismissed(false);
-    setActiveChatHeadContactId(null);
     await clearSession();
     socketService.disconnect({ clearListeners: true });
     try {
@@ -2532,82 +2564,11 @@ export default function App() {
     ? (activeChatId ? decoyMessages[activeChatId] || [] : [])
     : messages;
   const activeChat = displayedChats.find(c => c.id === activeChatId);
-  // Messenger-style: in-app bubble exists ONLY for explicitly minimized /
-  // unread threads (chatHeadContactIds). No fallback to displayedChats[0] —
-  // that fallback is what kept a head floating over the chat list on fresh
-  // launch with zero unread. The outside-the-app case is covered by the
-  // native OS overlay (chatHeadNative), not this in-app view.
-  const chatHeadThread = activeChatHeadContactId
-    ? displayedChats.find(c => c.id === activeChatHeadContactId || c.participant?.id === activeChatHeadContactId) || null
-    : null;
 
-  // Multi-user Chat Head threads (up to 3 users max), deduped by thread id so
-  // one conversation can never render two bubbles even if the id list ever
-  // mixes raw participant ids and thread ids.
-  const chatHeadThreads: ChatThread[] = (() => {
-    const seen = new Set<string>();
-    const out: ChatThread[] = [];
-    for (const id of chatHeadContactIds) {
-      const t = displayedChats.find(c => c.id === id || c.participant?.id === id);
-      if (t && !seen.has(t.id)) {
-        seen.add(t.id);
-        out.push(t);
-      }
-      if (out.length >= 3) break;
-    }
-    return out;
-  })();
-
-  const effectiveChatHeadThreads: ChatThread[] = chatHeadThreads.length > 0
-    ? chatHeadThreads
-    : (chatHeadThread ? [chatHeadThread] : []);
-
-  const activeChatHeadThread = (activeChatHeadContactId
-    ? effectiveChatHeadThreads.find(c => c.id === activeChatHeadContactId)
-    : null) || effectiveChatHeadThreads[0] || null;
-
-  // While the in-app mini-chat is expanded, make sure the OS-level bubble is
-  // hidden so the two systems never show the same contact twice at once.
-  useEffect(() => {
-    if (isChatHeadExpanded) {
-      chatHeadNative.hideNativeChatHead().catch(() => {});
-    }
-  }, [isChatHeadExpanded]);
-
-  // Load full conversation history for the active Chat Head (all messages decrypted)
-  useEffect(() => {
-    if (!activeChatHeadThread || !currentUser || !mySecretKey) {
-      setChatHeadMessages([]);
-      return;
-    }
-    if (activeChatHeadThread.id === activeChatId) {
-      setChatHeadMessages(messages);
-      return;
-    }
-    let isMounted = true;
-    api
-      .getMessages(activeChatHeadThread.id, currentUser.id, { limit: MESSAGE_PAGE_SIZE })
-      .then(rawMessages => {
-        if (!isMounted) return;
-        const knownPublicKey = activeChatHeadThread.participant.publicKey;
-        const decrypted: Message[] = rawMessages.map(msg => {
-          if (msg.isDeletedForEveryone) return { ...msg, text: '' };
-          if (msg.text) return msg;
-          const { text } = decryptVerified(msg.encryptedPayload, knownPublicKey);
-          return { ...msg, text: text || '[Encrypted message]' };
-        });
-        setChatHeadMessages(decrypted);
-      })
-      .catch(() => {});
-    return () => {
-      isMounted = false;
-    };
-  }, [activeChatHeadThread?.id, activeChatId, messages, currentUser?.id, mySecretKey]);
-
-  // Send Attachment directly from Chat Head Overlay
-  const handleSendAttachmentFromChatHead = async (
+  // Send Attachment from Heads-Up Banner
+  const handleSendAttachmentFromBanner = async (
     targetChatId: string,
-    asset: ChatHeadAttachmentData
+    asset: { uri: string; name: string; type: 'image' | 'audio'; size: number; mimeType?: string }
   ) => {
     if (!currentUser || !mySecretKey) return;
     const targetChat = chats.find(c => c.id === targetChatId);
@@ -2643,121 +2604,72 @@ export default function App() {
         );
       }
     } catch (err) {
-      logger.warn('App', 'Failed to send attachment from chat head:', err);
+      logger.warn('App', 'Failed to send attachment from banner:', err);
     }
   };
 
-  // Outside-the-App Messenger Chat Heads: Automatically activates when app is minimized / in background
+  // Notification Intent Listener (Answer/Decline calls, open chats on notification tap)
   useEffect(() => {
-    const handleChatHeadIntent = (data: { chatId: string; contactName?: string; fromChatHead?: boolean }) => {
-      if (data && data.chatId) {
-        // Native side sends a contact/thread id — normalize to thread id.
-        const normalizedId =
-          chatsRef.current.find(c => c.id === data.chatId || c.participant?.id === data.chatId)?.id || data.chatId;
-        setActiveChatHeadContactId(normalizedId);
-        setChatHeadContactIds(prev => {
-          const normalized = prev.map(
-            pid => chatsRef.current.find(c => c.id === pid || c.participant?.id === pid)?.id || pid
-          );
-          const filtered = normalized.filter(id => id !== normalizedId);
-          return [normalizedId, ...filtered].slice(0, 3);
-        });
-        setIsChatHeadDismissed(false);
-        setIsChatHeadExpanded(true); // Open floating quick chat directly!
-        if (data.fromChatHead) {
-          setIsOpenedFromChatHead(true);
+    const handleNotificationAction = (data: {
+      chatId?: string;
+      callAction?: string;
+      callId?: string;
+      peerId?: string;
+    }) => {
+      if (!data) return;
+      if (data.callAction === 'accept') {
+        handleAcceptIncomingCall();
+        return;
+      }
+      if (data.callAction === 'decline') {
+        handleHangupCall();
+        return;
+      }
+      if (data.chatId) {
+        const found = chatsRef.current.find(c => c.id === data.chatId || c.participant?.id === data.chatId);
+        if (found) {
+          setActiveChatId(found.id);
+          setCurrentScreen('chat_detail');
         }
       }
     };
 
-    // Check if app was opened by tapping a floating Chat Head from outside the app
-    const checkPendingIntent = async () => {
-      try {
-        const pending = await chatHeadNative.getPendingChatIntent();
-        if (pending) {
-          handleChatHeadIntent(pending);
-        }
-      } catch (err) {
-        logger.warn('ChatHead', 'Pending intent notice:', err);
+    // Check if app was opened via notification tap or full-screen call intent
+    notificationService.getInitialNotification().then(initial => {
+      if (initial) {
+        handleNotificationAction(initial);
       }
-    };
+    }).catch(() => {});
 
-    checkPendingIntent().catch(() => {});
+    // Listen for notification action / tap events while app is running
+    const intentSub = DeviceEventEmitter.addListener('onNotificationIntent', handleNotificationAction);
 
-    const intentSub = DeviceEventEmitter.addListener('onChatHeadIntent', handleChatHeadIntent);
-
-    const sub = AppState.addEventListener('change', nextState => {
-      if (nextState === 'active') {
-        // App returned to foreground: hide outside native overlay so it can
-        // never linger on top of the in-app bubble (the double-bubble bug)
-        // and check for pending tap intent.
-        chatHeadNative.hideNativeChatHead().catch(() => {});
-        checkPendingIntent().catch(() => {});
-      } else if (nextState.match(/inactive|background/)) {
-        setIsOpenedFromChatHead(false);
-        setIsChatHeadExpanded(false);
-        // App minimized: show the native bubble ONLY if there are genuinely
-        // unread messages waiting (most recent first). Exiting after a normal
-        // chat with nothing unread leaves no bubble behind.
-        if (chatHeadsEnabled && currentUser && !isAppLocked && !isDecoyMode) {
-          const freshChats = chatsRef.current;
-          const unreadThreads = freshChats
-            .filter(c => (c.unreadCount || 0) > 0)
-            .sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
-          const preferred = activeChatHeadContactIdRef.current
-            ? unreadThreads.find(
-                t =>
-                  t.id === activeChatHeadContactIdRef.current ||
-                  t.participant?.id === activeChatHeadContactIdRef.current
-              )
-            : null;
-          const top = preferred || unreadThreads[0] || null;
-          if (top) {
-            chatHeadNative
-              .showNativeChatHead({
-                contactId: top.id,
-                contactName: top.participant.name,
-                avatarUrl: top.participant.avatar,
-                unreadCount: top.unreadCount || 0,
-                isOnline: onlineUserIds.has(top.participant.id),
-              })
-              .catch(() => {});
-          } else {
-            chatHeadNative.hideNativeChatHead().catch(() => {});
-          }
-        } else {
-          chatHeadNative.hideNativeChatHead().catch(() => {});
+    // Also handle Expo Push Notification interaction
+    const unsubPush = addPushResponseListener(targetChatId => {
+      if (targetChatId) {
+        const found = chatsRef.current.find(c => c.id === targetChatId || c.participant?.id === targetChatId);
+        if (found) {
+          setActiveChatId(found.id);
+          setCurrentScreen('chat_detail');
         }
       }
     });
 
     return () => {
-      sub.remove();
       intentSub.remove();
+      unsubPush();
     };
-  }, [chatHeadsEnabled, currentUser, isAppLocked, isDecoyMode, onlineUserIds]);
+  }, []);
 
   return (
     <SafeAreaProvider>
-      <SafeAreaView
-        style={[
-          styles.safeArea,
-          isOpenedFromChatHead && isChatHeadExpanded && styles.safeAreaTranslucent,
-        ]}
-      >
-        <StatusBar
-          barStyle={isOpenedFromChatHead && isChatHeadExpanded ? 'light-content' : 'dark-content'}
-          backgroundColor={isOpenedFromChatHead && isChatHeadExpanded ? 'transparent' : colors.background}
-          translucent={isOpenedFromChatHead && isChatHeadExpanded}
-        />
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
 
-        {/* Screen Render: only rendered when NOT in floating chat head mode */}
-        {!(isOpenedFromChatHead && isChatHeadExpanded) && (
-          <>
-            {currentScreen === 'auth' || !displayedUser ? (
-              <AuthScreen onAuthenticated={handleAuthenticated} />
-            ) : (
-              <View style={styles.appContainer}>
+        {currentScreen === 'auth' || !displayedUser ? (
+          <AuthScreen onAuthenticated={handleAuthenticated} />
+        ) : (
+          <View style={styles.appContainer}>
             {/* Top Header */}
             {currentScreen !== 'chat_detail' && (
               <Header
@@ -2784,14 +2696,6 @@ export default function App() {
                 onRefresh={handleRefresh}
                 onSelectChat={chatId => {
                   setActiveChatId(chatId);
-                  setActiveChatHeadContactId(chatId);
-                  // User opened it full-screen — drop it from the minimized
-                  // bubble stack so the bubble doesn't linger over the chat.
-                  setChatHeadContactIds(prev => prev.filter(id => {
-                    const t = chats.find(c => c.id === id || c.participant?.id === id);
-                    return t ? t.id !== chatId : id !== chatId;
-                  }));
-                  setIsChatHeadExpanded(false);
                   setCurrentScreen('chat_detail');
                   // Read receipts are single-source (socket live, REST fallback)
                   // and suppressed while locked / in decoy mode.
@@ -2838,6 +2742,7 @@ export default function App() {
                   setCurrentScreen('chat_list');
                 }}
                 onSendMessage={handleSendMessage}
+                onDeleteForMe={handleDeleteForMe}
                 onDeleteForEveryone={handleDeleteForEveryone}
                 onStartCall={handleStartCall}
                 onInspectCiphertext={msg => setInspectingMessage(msg)}
@@ -2914,8 +2819,6 @@ export default function App() {
                 onBack={() => setCurrentScreen('chat_list')}
                 backgroundSyncEnabled={backgroundSyncEnabled}
                 onToggleBackgroundSync={handleToggleBackgroundSync}
-                chatHeadsEnabled={chatHeadsEnabled}
-                onToggleChatHeads={handleToggleChatHeads}
               />
             )}
 
@@ -2927,15 +2830,17 @@ export default function App() {
                 live unread / pending-request / remaining-invite counts. */}
             <BottomNavBar
               activeTab={
-                showRequestsModal
-                  ? 'requests'
-                  : showSearchModal
-                    ? 'search'
-                    : showInvitesModal
-                      ? 'invites'
-                      : currentScreen === 'settings'
-                        ? 'settings'
-                        : 'chats'
+                showCallsModal
+                  ? 'calls'
+                  : showRequestsModal
+                    ? 'requests'
+                    : showSearchModal
+                      ? 'search'
+                      : showInvitesModal
+                        ? 'invites'
+                        : currentScreen === 'settings'
+                          ? 'settings'
+                          : 'chats'
               }
               unreadCount={displayedChats.reduce((sum, c) => sum + (c.unreadCount || 0), 0)}
               requestsCount={isDecoyMode ? 0 : incomingRequests.length}
@@ -2946,6 +2851,9 @@ export default function App() {
                   case 'chats':
                     setActiveChatId(null);
                     setCurrentScreen('chat_list');
+                    break;
+                  case 'calls':
+                    setShowCallsModal(true);
                     break;
                   case 'search':
                     setShowSearchModal(true);
@@ -2964,8 +2872,23 @@ export default function App() {
             />
           </View>
         )}
-          </>
-        )}
+
+        {/* Encrypted Calls Hub Modal */}
+        <CallsModal
+          visible={!isDecoyMode && showCallsModal}
+          chats={displayedChats}
+          onlineUserIds={onlineUserIds}
+          messages={messages}
+          onCallContact={(targetChat, type) => {
+            setShowCallsModal(false);
+            setActiveChatId(targetChat.id);
+            setCurrentScreen('chat_detail');
+            setTimeout(() => {
+              handleStartCall(type);
+            }, 250);
+          }}
+          onClose={() => setShowCallsModal(false)}
+        />
 
         {/* Contact Requests Modal */}
         <ContactRequestsModal
@@ -2984,9 +2907,6 @@ export default function App() {
           onSendRequest={handleSendContactRequest}
           onOpenChat={peerId => {
             setActiveChatId(peerId);
-            setActiveChatHeadContactId(peerId);
-            setChatHeadContactIds(prev => prev.filter(id => id !== peerId));
-            setIsChatHeadExpanded(false);
             setCurrentScreen('chat_detail');
           }}
           onClose={() => setShowSearchModal(false)}
@@ -3292,85 +3212,16 @@ export default function App() {
           }}
         />
 
-        {/* Floating mini-chat — OUTSIDE-ONLY. It renders solely for the
-            OS-bubble launch flow (isOpenedFromChatHead); inside the app there
-            is deliberately no floating bubble, only the native overlay when
-            the app is backgrounded. */}
-        {currentUser &&
-          chatHeadsEnabled &&
-          !isAppLocked &&
-          isOpenedFromChatHead &&
-          effectiveChatHeadThreads.length > 0 && (
-            <ChatHeadOverlay
-              threads={effectiveChatHeadThreads}
-              activeThreadId={activeChatHeadThread?.id}
-              currentUser={displayedUser || currentUser}
-              messages={activeChatHeadThread?.id === activeChatId ? messages : chatHeadMessages}
-              unreadCount={activeChatHeadThread?.unreadCount || 0}
-              isOnline={activeChatHeadThread ? onlineUserIds.has(activeChatHeadThread.participant.id) : false}
-              onlineUserIds={onlineUserIds}
-              lastSeenMap={lastSeenMap}
-              isExpanded={isChatHeadExpanded}
-              onToggleExpand={setIsChatHeadExpanded}
-              isOpenedFromChatHead={isOpenedFromChatHead}
-              onSelectThread={threadId => setActiveChatHeadContactId(threadId)}
-              onCloseThread={threadId => {
-                setChatHeadContactIds(prev => {
-                  const updated = prev.filter(id => id !== threadId);
-                  if (updated.length === 0) {
-                    setIsChatHeadDismissed(true);
-                    setIsChatHeadExpanded(false);
-                  }
-                  return updated;
-                });
-                if (activeChatHeadContactId === threadId) {
-                  setActiveChatHeadContactId(null);
-                }
-              }}
-              onSendMessage={text => {
-                if (activeChatHeadThread) {
-                  sendMessageToChat(activeChatHeadThread.id, text);
-                }
-              }}
-              onSendAttachment={handleSendAttachmentFromChatHead}
-              onOpenFullChat={chatId => {
-                setIsOpenedFromChatHead(false);
-                setIsChatHeadExpanded(false);
-                setActiveChatId(chatId);
-                setActiveChatHeadContactId(chatId);
-                setChatHeadContactIds(prev => prev.filter(id => id !== chatId));
-                setCurrentScreen('chat_detail');
-              }}
-              onStartCall={(type, threadId) => {
-                const targetId = threadId || activeChatHeadThread?.id;
-                if (targetId) {
-                  setActiveChatId(targetId);
-                  handleStartCall(type);
-                }
-              }}
-              onDismiss={() => {
-                if (isOpenedFromChatHead) {
-                  handleCloseFloatingWindow();
-                } else {
-                  setIsChatHeadDismissed(true);
-                  setIsChatHeadExpanded(false);
-                }
-              }}
-              onDismissFloating={handleCloseFloatingWindow}
-            />
-          )}
-
         {/* Heads-Up In-App Notification Banner (Interactive In-Header Quick Chat, Attachments & Calls) */}
         <InAppNotificationBanner
           onQuickReply={(chatId, text) => sendMessageToChat(chatId, text)}
-          onSendAttachment={handleSendAttachmentFromChatHead}
+          onSendAttachment={handleSendAttachmentFromBanner}
           onStartCall={(type, chatId) => {
             setActiveChatId(chatId);
             handleStartCall(type);
           }}
           onOpenChat={chatId => {
             setActiveChatId(chatId);
-            setActiveChatHeadContactId(chatId);
             setCurrentScreen('chat_detail');
           }}
           onOpenSecurity={() => {
@@ -3388,9 +3239,6 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
-  },
-  safeAreaTranslucent: {
-    backgroundColor: 'transparent',
   },
   appContainer: {
     flex: 1,

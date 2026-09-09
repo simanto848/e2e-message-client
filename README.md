@@ -80,15 +80,17 @@ JABY operates under a **Zero-Knowledge Architecture**:
 - **Decoy Vault**: Entering the Duress PIN seamlessly switches the app into a fully isolated decoy identity with simulated contacts and innocuous message histories. Real contact requests, search operatives, linked devices, invite codes, safety numbers, and cloud backups are completely suppressed.
 - **Emergency Zeroize Wipe**: Instant panic button zeroizes all session tokens, private keys, and historical keyrings across all accounts ever registered on the device.
 
-### 5. Native Chat Heads (Android)
-- Floating bubble overlay that renders over the Android OS and third-party apps, similar to Facebook Messenger.
-- Implemented natively via `ChatHeadService.kt` and `ChatHeadModule.kt` using `SYSTEM_ALERT_WINDOW`.
-- Integrated fallback in-app overlay for platforms without draw-over-apps permissions.
+### 5. High-Priority Incoming Call & Lockscreen Wakeup (Android)
+- Incoming encrypted audio and video calls reliably display even when the device is locked, the screen is off, or the app is closed/backgrounded.
+- Utilizes `USE_FULL_SCREEN_INTENT` with `setFullScreenIntent(pendingIntent, true)` to present heads-up calling UI directly.
+- Android `MainActivity` configures `setShowWhenLocked(true)` and `setTurnScreenOn(true)` to wake up the screen immediately on call arrival.
+- Interactive notification action buttons ("Answer" and "Decline") allow immediate action directly from the notification shade or heads-up banner.
 
 ### 6. Push & In-App Notification System
 - Native Android Notification Channels:
   - `jaby_channel_messages`: High importance, vibration, LED indicators, private lockscreen visibility.
-  - `jaby_channel_calls`: Max importance, ringtone sound, heads-up display.
+  - `jaby_channel_calls`: Max importance, ringtone sound, heads-up display with full-screen intent.
+  - `jaby_channel_missed_calls`: High importance missed call alerts with direct navigation to the caller's chat.
   - `jaby_channel_security`: Critical security alerts (key mismatches, safety number changes, device links).
 - Interactive top-dropping in-app notification toasts (`InAppNotificationBanner.tsx`) with direct reply, call accept/decline, and security alert inspection.
 
@@ -105,14 +107,12 @@ JABY operates under a **Zero-Knowledge Architecture**:
 mobile/
 ├── android/                        # Android native project & Gradle config
 │   └── app/src/main/
-│       ├── AndroidManifest.xml     # Hardware & system permissions
+│       ├── AndroidManifest.xml     # Hardware & system permissions (USE_FULL_SCREEN_INTENT)
 │       └── java/com/jaby/securemessenger/
-│           ├── MainActivity.kt     # App entry point
+│           ├── MainActivity.kt     # App entry point (showWhenLocked & turnScreenOn)
 │           ├── MainApplication.kt  # React Native package registry
-│           ├── ChatHeadService.kt  # Android WindowManager floating bubble service
-│           ├── ChatHeadModule.kt   # React Native bridge for chat heads
-│           ├── ChatHeadPackage.kt  # Package linking ChatHead & Notification modules
-│           └── NotificationModule.kt # Native notification channels & dispatch
+│           ├── NotificationPackage.kt # Package linking native NotificationModule
+│           └── NotificationModule.kt # Native notification channels, actions & dispatch
 ├── assets/                         # Icons, splash images, and sound effects
 ├── src/
 │   ├── components/                 # Reusable UI & Modal components
@@ -126,7 +126,6 @@ mobile/
 │   │   ├── CloudBackupModal.tsx    # Zero-knowledge backup creation & restore
 │   │   ├── PermissionsModal.tsx    # Hardware permissions onboarding
 │   │   ├── DuressSettingsModal.tsx # Duress PIN & action configuration
-│   │   ├── ChatHeadOverlay.tsx     # In-app chat head fallback overlay
 │   │   ├── SearchOperativeModal.tsx # Handle-based user discovery
 │   │   └── Icons.tsx               # Curated Lucide SVG icon collection
 │   ├── hooks/                      # Custom React hooks
@@ -142,7 +141,6 @@ mobile/
 │   │   ├── socket.ts               # Socket.io client with offline queueing
 │   │   ├── notificationService.ts  # Unified OS & in-app notification manager
 │   │   ├── backgroundSync.ts       # Dynamic backoff background sync (5s/15s)
-│   │   ├── chatHeadNative.ts       # Bridge to native ChatHeadModule
 │   │   └── updateService.ts        # OTA update checking via Expo Updates
 │   ├── utils/                      # Cryptography, storage & system utilities
 │   │   ├── crypto.ts               # X25519, XSalsa20-Poly1305 & SAS generator
@@ -268,14 +266,11 @@ const boxed = nacl.secretbox(plaintextBytes, nonceBytes, key);
 
 ## Native Android Modules
 
-### `ChatHeadModule` & `ChatHeadService`
-- Uses Android `WindowManager` to render floating chat avatars directly over the Android home screen and other running applications.
-- Manages touch drag physics, screen snap animations, and trash-can dismiss targets.
-- Displays unread message badges and contact presence indicators.
-
 ### `NotificationModule`
-- Pre-creates 3 high-priority notification channels in Android `NotificationManager`.
-- Supports full-screen pending intents for incoming VoIP calls.
+- Pre-creates 4 high-priority notification channels in Android `NotificationManager`: messages, incoming calls, missed calls, and security alerts.
+- Dispatches full-screen pending intents with `USE_FULL_SCREEN_INTENT` to display incoming VoIP call alerts over the lockscreen.
+- Provides interactive notification action buttons ("Answer" and "Decline") directly on incoming call notifications.
+- Bridges notification actions and tap events back to React Native via `DeviceEventEmitter` (`onNotificationIntent`) and `getInitialNotification()`.
 - Integrates with Android 13+ `POST_NOTIFICATIONS` runtime permissions.
 
 ---

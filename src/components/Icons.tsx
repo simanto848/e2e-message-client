@@ -49,6 +49,14 @@ function createIcon(renderChildren: (color: string) => React.ReactNode) {
   return IconComponent;
 }
 
+export const MessageSquare = createIcon(() => (
+  <Path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+));
+
+export const MessageCircle = createIcon(() => (
+  <Path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />
+));
+
 export const Shield = createIcon(() => (
   <Path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
 ));
@@ -218,6 +226,20 @@ export const ArrowRight = createIcon(() => (
   </>
 ));
 
+export const ArrowUpRight = createIcon(() => (
+  <>
+    <Line x1="7" y1="17" x2="17" y2="7" />
+    <Polyline points="7 7 17 7 17 17" />
+  </>
+));
+
+export const ArrowDownLeft = createIcon(() => (
+  <>
+    <Line x1="17" y1="7" x2="7" y2="17" />
+    <Polyline points="17 17 7 17 7 7" />
+  </>
+));
+
 export const Phone = createIcon(() => (
   <Path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
 ));
@@ -296,6 +318,20 @@ export const Trash2 = createIcon(() => (
     <Path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
     <Line x1="10" y1="11" x2="10" y2="17" />
     <Line x1="14" y1="11" x2="14" y2="17" />
+  </>
+));
+
+export const Reply = createIcon(() => (
+  <>
+    <Polyline points="9 17 4 12 9 7" />
+    <Path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+  </>
+));
+
+export const Forward = createIcon(() => (
+  <>
+    <Polyline points="15 17 20 12 15 7" />
+    <Path d="M4 18v-2a4 4 0 0 1 4-4h12" />
   </>
 ));
 
@@ -438,6 +474,14 @@ export const MoreVertical = createIcon(() => (
     <Circle cx="12" cy="12" r="1" />
     <Circle cx="12" cy="5" r="1" />
     <Circle cx="12" cy="19" r="1" />
+  </>
+));
+
+export const MoreHorizontal = createIcon(() => (
+  <>
+    <Circle cx="12" cy="12" r="1" />
+    <Circle cx="19" cy="12" r="1" />
+    <Circle cx="5" cy="12" r="1" />
   </>
 ));
 

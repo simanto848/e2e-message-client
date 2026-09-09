@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Switch, Alert, BackHandler, Platform } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { EraseDataModal } from '../components/EraseDataModal';
-import { chatHeadNative } from '../services/chatHeadNative';
 import {
   ArrowLeft,
   ShieldCheck,
@@ -21,8 +20,6 @@ import {
   RefreshCw,
   Calendar,
   Radio,
-  Smartphone,
-  CheckCircle2,
 } from '../components/Icons';
 import { UserProfile, BackupFrequency } from '../types';
 import { colors, shadows } from '../theme';
@@ -53,8 +50,6 @@ interface Props {
   onBack: () => void;
   backgroundSyncEnabled?: boolean;
   onToggleBackgroundSync?: (val: boolean) => void;
-  chatHeadsEnabled?: boolean;
-  onToggleChatHeads?: (val: boolean) => void;
 }
 
 export function SettingsScreen({
@@ -82,24 +77,8 @@ export function SettingsScreen({
   onBack,
   backgroundSyncEnabled = true,
   onToggleBackgroundSync,
-  chatHeadsEnabled = true,
-  onToggleChatHeads,
 }: Props) {
   const [showEraseModal, setShowEraseModal] = useState(false);
-  const [overlayPermissionGranted, setOverlayPermissionGranted] = useState(true);
-
-  useEffect(() => {
-    if (Platform.OS === 'android') {
-      chatHeadNative.checkOverlayPermission().then(setOverlayPermissionGranted);
-    }
-  }, []);
-
-  const handleRequestOverlayPermission = async () => {
-    await chatHeadNative.requestOverlayPermission();
-    setTimeout(() => {
-      chatHeadNative.checkOverlayPermission().then(setOverlayPermissionGranted);
-    }, 1200);
-  };
 
   // Handle hardware / swipe back gesture
   useEffect(() => {
@@ -242,8 +221,8 @@ export function SettingsScreen({
           )}
         </View>
 
-        {/* Background Sync & Chat Heads */}
-        <Text style={styles.sectionHeader}>BACKGROUND SYNC & CHAT HEADS</Text>
+        {/* Background Sync & Notifications */}
+        <Text style={styles.sectionHeader}>BACKGROUND SYNC & NOTIFICATIONS</Text>
         <View style={styles.settingCard}>
           <View style={styles.toggleRow}>
             <View style={styles.toggleTextContainer}>
@@ -260,43 +239,6 @@ export function SettingsScreen({
               onValueChange={onToggleBackgroundSync}
               trackColor={{ false: colors.surfaceHighlight, true: '#a7f3d0' }}
               thumbColor={backgroundSyncEnabled ? colors.primary : colors.textMuted}
-            />
-          </View>
-
-          <View style={[styles.toggleRow, styles.borderTop]}>
-            <View style={styles.toggleTextContainer}>
-              <View style={styles.rowAlign}>
-                <Smartphone size={18} color={colors.accentBlue} />
-                <Text style={styles.toggleTitle}>Messenger Chat Heads (Outside App)</Text>
-              </View>
-              <Text style={styles.toggleDesc}>
-                Automatically shows a floating chat head over your home screen and other apps when minimized, just like Facebook Messenger.
-              </Text>
-              {Platform.OS === 'android' && chatHeadsEnabled && (
-                <View style={styles.permissionStatusContainer}>
-                  {overlayPermissionGranted ? (
-                    <View style={styles.permissionGrantedBadge}>
-                      <CheckCircle2 size={13} color={colors.primary} />
-                      <Text style={styles.permissionGrantedText}>Display over other apps: Allowed</Text>
-                    </View>
-                  ) : (
-                    <TouchableOpacity
-                      style={styles.permissionRequestBtn}
-                      onPress={handleRequestOverlayPermission}
-                    >
-                      <ShieldAlert size={14} color={colors.warning} />
-                      <Text style={styles.permissionRequestText}>Grant "Appear on top" Permission</Text>
-                      <ChevronRight size={14} color={colors.warning} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-              )}
-            </View>
-            <Switch
-              value={chatHeadsEnabled}
-              onValueChange={onToggleChatHeads}
-              trackColor={{ false: colors.surfaceHighlight, true: '#a7f3d0' }}
-              thumbColor={chatHeadsEnabled ? colors.primary : colors.textMuted}
             />
           </View>
         </View>
@@ -592,43 +534,6 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: 4,
     lineHeight: 16,
-  },
-  permissionStatusContainer: {
-    marginTop: 8,
-  },
-  permissionGrantedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#ecfdf5',
-    borderColor: '#a7f3d0',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    alignSelf: 'flex-start',
-  },
-  permissionGrantedText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.primaryText,
-  },
-  permissionRequestBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#fffbeb',
-    borderColor: '#fde68a',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    alignSelf: 'flex-start',
-  },
-  permissionRequestText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#b45309',
   },
   menuItem: {
     flexDirection: 'row',

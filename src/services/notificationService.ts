@@ -144,20 +144,6 @@ export const notificationService = {
         data: { chatId: params.chatId, senderId: params.senderId },
       });
     }
-
-    // 2. Dispatch In-App Banner Event
-    const inAppItem: InAppNotification = {
-      id: `msg_${Date.now()}_${notifId}`,
-      type: 'message',
-      title,
-      body,
-      senderId: params.senderId,
-      chatId: params.chatId,
-      avatarUri: params.avatarUri,
-      timestamp: Date.now(),
-      onPress: params.onPress,
-    };
-    inAppListeners.forEach(fn => fn(inAppItem));
   },
 
   /**
@@ -190,6 +176,7 @@ export const notificationService = {
           title,
           body,
           peerId: params.callerId,
+          callId: params.callId,
           isCall: true,
         });
       } catch (err) {
@@ -209,21 +196,87 @@ export const notificationService = {
         data: { callId: params.callId, senderId: params.callerId },
       });
     }
+  },
+
+  /**
+   * Dispatch a missed call notification
+   */
+  async showMissedCallNotification(params: {
+    callerId: string;
+    callerName: string;
+    callType?: 'audio' | 'video';
+    timestamp?: number;
+    chatId?: string;
+    isDecoyMode?: boolean;
+    onPress?: () => void;
+  }): Promise<void> {
+    if (params.isDecoyMode) return;
+
+    const callTypeLabel = params.callType === 'video' ? 'video' : 'voice';
+    const title = 'Missed Call';
+    const body = `Missed ${callTypeLabel} call from ${params.callerName || 'Contact'}`;
+    const targetChatId = params.chatId || params.callerId;
+    const notifId = Math.abs((targetChatId.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) + Date.now()) % 100000);
+
+    if (Platform.OS === 'android' && NotificationModule?.postNotification) {
+      try {
+        await NotificationModule.postNotification({
+          id: notifId,
+          channel: 'missed_calls',
+          visibility: 'private',
+          title,
+          body,
+          chatId: targetChatId,
+          peerId: params.callerId,
+        });
+      } catch (err) {
+        logger.warn('Notifications', 'Failed to post native missed call notification:', err);
+        await postExpoFallback({
+          channel: EXPO_CHANNELS.calls,
+          title,
+          body,
+          data: { chatId: targetChatId, callerId: params.callerId, type: 'missed_call' },
+        });
+      }
+    } else {
+      await postExpoFallback({
+        channel: EXPO_CHANNELS.calls,
+        title,
+        body,
+        data: { chatId: targetChatId, callerId: params.callerId, type: 'missed_call' },
+      });
+    }
 
     const inAppItem: InAppNotification = {
-      id: `call_${params.callId}`,
+      id: `missed_${Date.now()}`,
       type: 'call',
-      title,
+      title: `📞 ${title}`,
       body,
       senderId: params.callerId,
-      avatarUri: params.avatarUri,
-      timestamp: Date.now(),
-      onAction: action => {
-        if (action === 'accept') params.onAccept?.();
-        if (action === 'decline') params.onDecline?.();
-      },
+      chatId: targetChatId,
+      timestamp: params.timestamp || Date.now(),
+      onPress: params.onPress,
     };
     inAppListeners.forEach(fn => fn(inAppItem));
+  },
+
+  /**
+   * Retrieve cold-start initial notification payload if app was opened via notification/call action
+   */
+  async getInitialNotification(): Promise<{
+    chatId?: string;
+    callAction?: string;
+    callId?: string;
+    peerId?: string;
+  } | null> {
+    if (Platform.OS === 'android' && NotificationModule?.getInitialNotification) {
+      try {
+        return await NotificationModule.getInitialNotification();
+      } catch {
+        return null;
+      }
+    }
+    return null;
   },
 
   /**
