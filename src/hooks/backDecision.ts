@@ -95,7 +95,7 @@ export function decideBackAction(snap: BackSnapshot): BackDecision {
   if (snap.currentScreen === 'chat_detail') {
     return { kind: 'nav-chat-detail-back' };
   }
-  if (snap.currentScreen === 'settings') {
+  if (snap.currentScreen === 'settings' || snap.currentScreen === 'requests' || snap.currentScreen === 'calls') {
     return { kind: 'nav-settings-back' };
   }
   if (snap.currentScreen === 'chat_list') {

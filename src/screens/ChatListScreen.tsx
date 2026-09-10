@@ -19,8 +19,8 @@ interface Props {
   isOffline?: boolean;
   onRefresh?: () => void;
   onSelectChat: (chatId: string) => void;
-  onOpenRequestsModal: () => void;
-  onOpenSearchModal: () => void;
+  onOpenRequestsModal?: () => void;
+  onOpenSearchModal?: () => void;
   /**
    * Controlled search query (optional). Hardware-back clearing is owned
    * centrally by decideBackAction (hasSearchQuery snapshot) — this screen
@@ -281,17 +281,6 @@ export function ChatListScreen({
           );
         }}
       />
-
-      {/* Floating Action Button (Search Operatives) */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={onOpenSearchModal}
-        accessibilityRole="button"
-        accessibilityLabel="Search for people to chat"
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      >
-        <Plus size={24} color="#ffffff" />
-      </TouchableOpacity>
     </View>
   );
 }
