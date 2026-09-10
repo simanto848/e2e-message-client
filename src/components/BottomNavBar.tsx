@@ -10,10 +10,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import {
   MessageSquare,
-  Phone,
-  Search,
   UserPlus,
-  Ticket,
+  Phone,
   Settings,
 } from './Icons';
 import { colors, shadows } from '../theme';
@@ -23,7 +21,6 @@ interface Props {
   activeTab: BottomTabId;
   unreadCount?: number;
   requestsCount?: number;
-  inviteCount?: number;
   onTabPress: (tab: BottomTabId) => void;
 }
 
@@ -111,7 +108,6 @@ export function BottomNavBar({
   activeTab,
   unreadCount = 0,
   requestsCount = 0,
-  inviteCount = 0,
   onTabPress,
 }: Props) {
   const insets = useSafeAreaInsets();
@@ -124,41 +120,30 @@ export function BottomNavBar({
   }> = [
     {
       id: 'chats',
-      label: 'Chats',
+      label: 'Chat',
       badge: unreadCount,
-      renderIcon: color => <MessageSquare size={21} color={color} strokeWidth={2.2} />,
+      renderIcon: color => <MessageSquare size={22} color={color} strokeWidth={2.2} />,
+    },
+    {
+      id: 'requests',
+      label: 'Request',
+      badge: requestsCount,
+      renderIcon: color => <UserPlus size={22} color={color} strokeWidth={2.2} />,
     },
     {
       id: 'calls',
       label: 'Calls',
-      renderIcon: color => <Phone size={20} color={color} strokeWidth={2.2} />,
-    },
-    {
-      id: 'search',
-      label: 'Find',
-      renderIcon: color => <Search size={20} color={color} strokeWidth={2.2} />,
-    },
-    {
-      id: 'requests',
-      label: 'Requests',
-      badge: requestsCount,
-      renderIcon: color => <UserPlus size={20} color={color} strokeWidth={2.2} />,
-    },
-    {
-      id: 'invites',
-      label: 'Invites',
-      badge: inviteCount,
-      renderIcon: color => <Ticket size={20} color={color} strokeWidth={2.2} />,
+      renderIcon: color => <Phone size={22} color={color} strokeWidth={2.2} />,
     },
     {
       id: 'settings',
       label: 'Settings',
-      renderIcon: color => <Settings size={20} color={color} strokeWidth={2.2} />,
+      renderIcon: color => <Settings size={22} color={color} strokeWidth={2.2} />,
     },
   ];
 
   return (
-    <View style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+    <View style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 10) }]}>
       <View style={styles.bar}>
         {tabs.map(tab => (
           <NavTabButton

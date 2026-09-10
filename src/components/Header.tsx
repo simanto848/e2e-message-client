@@ -1,25 +1,24 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { Ticket, Lock, Settings } from './Icons';
+import { Ticket } from './Icons';
 import { JabyLogo } from './JabyLogo';
+import { Avatar } from './Avatar';
+import { UserProfile } from '../types';
 import { colors, shadows } from '../theme';
 
 interface Props {
-  onLockPress: () => void;
-  onInvitesPress: () => void;
-  onSettingsPress: () => void;
+  currentUser?: UserProfile | null;
+  onAvatarPress?: () => void;
+  onInvitesPress?: () => void;
+  onLockPress?: () => void;
   inviteCount?: number;
   isEnclaveActive?: boolean;
 }
 
-// Linked Devices and Chat Backup used to live here too, but they're already
-// reachable from Settings (ACCOUNT section) — having them in both places was
-// redundant clutter, so this row now only keeps what's worth one-tap access:
-// invite quota at a glance, settings, and the lock button.
 export function Header({
-  onLockPress,
+  currentUser,
+  onAvatarPress,
   onInvitesPress,
-  onSettingsPress,
   inviteCount = 0,
   isEnclaveActive = true,
 }: Props) {
@@ -31,35 +30,32 @@ export function Header({
       </View>
 
       <View style={styles.rightActions}>
-        <TouchableOpacity
-          style={styles.pillButton}
-          onPress={onInvitesPress}
-          accessibilityRole="button"
-          accessibilityLabel={`${inviteCount} invites remaining. Manage invites.`}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Ticket size={14} color={colors.primaryDark} />
-          <Text style={styles.pillText}>{inviteCount}</Text>
-        </TouchableOpacity>
+        {onInvitesPress && (
+          <TouchableOpacity
+            style={styles.pillButton}
+            onPress={onInvitesPress}
+            accessibilityRole="button"
+            accessibilityLabel={`${inviteCount} invites remaining. Manage invites.`}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ticket size={14} color={colors.primaryDark} />
+            <Text style={styles.pillText}>{inviteCount}</Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity
-          style={styles.iconButton}
-          onPress={onSettingsPress}
+          style={styles.avatarButton}
+          onPress={onAvatarPress}
+          activeOpacity={0.8}
           accessibilityRole="button"
-          accessibilityLabel="Open settings"
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          accessibilityLabel={`Signed in as ${currentUser?.name || 'Account'}. Open settings.`}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
-          <Settings size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.lockButton}
-          onPress={onLockPress}
-          accessibilityRole="button"
-          accessibilityLabel="Lock app"
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Lock size={16} color={colors.danger} />
+          <Avatar
+            uri={currentUser?.avatar}
+            name={currentUser?.name || 'User'}
+            size={36}
+          />
         </TouchableOpacity>
       </View>
     </View>
@@ -115,26 +111,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  iconButton: {
-    minWidth: 40,
-    minHeight: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 7,
+  avatarButton: {
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    padding: 1,
     backgroundColor: colors.surfaceElevated,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  lockButton: {
-    minWidth: 40,
-    minHeight: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 7,
-    backgroundColor: colors.dangerLight,
-    borderColor: '#fca5a5',
-    borderWidth: 1,
-    borderRadius: 10,
+    ...shadows.sm,
   },
 });

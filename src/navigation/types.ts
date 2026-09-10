@@ -7,4 +7,4 @@
  */
 export type ScreenType = 'auth' | 'chat_list' | 'chat_detail' | 'settings';
 
-export type BottomTabId = 'chats' | 'calls' | 'search' | 'requests' | 'invites' | 'settings';
+export type BottomTabId = 'chats' | 'requests' | 'calls' | 'settings';

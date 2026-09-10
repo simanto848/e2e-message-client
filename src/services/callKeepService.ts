@@ -13,8 +13,18 @@
  */
 import { Platform } from 'react-native';
 import * as Crypto from 'expo-crypto';
-import RNCallKeep from 'react-native-callkeep';
 import { logger } from '../utils/logger';
+
+let RNCallKeep: any = null;
+try {
+  // Guarded require so New Architecture / TurboModule interop parsing errors
+  // (e.g. method overload exceptions in Bridgeless mode) do not crash module evaluation on boot.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const callkeepModule = require('react-native-callkeep');
+  RNCallKeep = callkeepModule?.default || callkeepModule;
+} catch (err) {
+  RNCallKeep = null;
+}
 
 // CALLKEEP_TODO (killed-state iOS wake): add react-native-voip-push-notification,
 // register its PushKit token with the server alongside the Expo push token,
@@ -27,7 +37,7 @@ let isAvailable: boolean | null = null;
 
 /** True only on a dev build with the native module linked + setup done. */
 export function isCallKeepAvailable(): boolean {
-  return isAvailable === true && isSetup;
+  return !!RNCallKeep && isAvailable === true && isSetup;
 }
 
 function markUnavailable(reason: string): false {
@@ -41,6 +51,7 @@ function markUnavailable(reason: string): false {
 export async function setupCallKeep(): Promise<boolean> {
   if (isSetup) return isCallKeepAvailable();
   try {
+    if (!RNCallKeep) return markUnavailable('RNCallKeep module not loaded');
     if (Platform.OS !== 'android' && Platform.OS !== 'ios') return markUnavailable('unsupported platform');
     const options = {
       ios: {
@@ -63,7 +74,7 @@ export async function setupCallKeep(): Promise<boolean> {
     };
     await RNCallKeep.setup(options);
     // Reject system-UI originated outgoing calls — dialing stays in-app.
-    RNCallKeep.addEventListener('didReceiveStartCallAction', ({ handle, callUUID }) => {
+    RNCallKeep.addEventListener('didReceiveStartCallAction', ({ handle, callUUID }: { handle?: string; callUUID?: string }) => {
       if (callUUID) RNCallKeep.endCall(callUUID);
       logger.info('CallKeep', 'system dial suppressed, handle:', handle);
     });
@@ -131,10 +142,10 @@ export interface CallKeepCallbacks {
 export function addCallKeepListeners(callbacks: CallKeepCallbacks): () => void {
   if (!isCallKeepAvailable()) return () => {};
   try {
-    const answerSub = RNCallKeep.addEventListener('answerCall', ({ callUUID }) => {
+    const answerSub = RNCallKeep.addEventListener('answerCall', ({ callUUID }: { callUUID: string }) => {
       callbacks.onAnswerCall?.(callUUID);
     });
-    const endSub = RNCallKeep.addEventListener('endCall', ({ callUUID }) => {
+    const endSub = RNCallKeep.addEventListener('endCall', ({ callUUID }: { callUUID: string }) => {
       callbacks.onEndCall?.(callUUID);
     });
     return () => {

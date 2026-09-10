@@ -26,12 +26,13 @@ export function JabyLogo({ size = 44, showText = true, subtitle = 'SECURE MESSEN
           stroke="url(#shieldGrad)"
           strokeWidth="4"
         />
-        <Circle cx="50" cy="46" r="14" fill="none" stroke="#10b981" strokeWidth="3" strokeDasharray="4 3" />
         <Path
-          d="M50 38 V48 M50 56 V58"
-          stroke="#0284c7"
-          strokeWidth="3.5"
+          d="M38 48 L46 56 L62 38"
+          fill="none"
+          stroke="#10b981"
+          strokeWidth="4.5"
           strokeLinecap="round"
+          strokeLinejoin="round"
         />
       </Svg>
       {showText && (

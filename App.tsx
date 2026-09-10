@@ -2663,7 +2663,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
 
         {currentScreen === 'auth' || !displayedUser ? (
@@ -2673,12 +2673,13 @@ export default function App() {
             {/* Top Header */}
             {currentScreen !== 'chat_detail' && (
               <Header
-                onLockPress={() => {
-                  if (isDecoyMode) setIsDecoyMode(false);
-                  setIsAppLocked(true);
+                currentUser={displayedUser}
+                onAvatarPress={() => {
+                  setShowCallsModal(false);
+                  setShowRequestsModal(false);
+                  setCurrentScreen(currentScreen === 'settings' ? 'chat_list' : 'settings');
                 }}
                 onInvitesPress={() => setShowInvitesModal(true)}
-                onSettingsPress={() => setCurrentScreen(currentScreen === 'settings' ? 'chat_list' : 'settings')}
                 inviteCount={displayedUser.inviteCodesRemaining}
               />
             )}
@@ -2822,54 +2823,46 @@ export default function App() {
               />
             )}
 
-            {/* Bottom navigation — always visible in-app (chats / find /
-                requests / invites / settings). Each icon is functional:
-                chats navigates home, find opens operative search, requests
-                opens the connection queue, invites opens the manager
-                (with quota badge), settings opens preferences. Badges show
-                live unread / pending-request / remaining-invite counts. */}
-            <BottomNavBar
-              activeTab={
-                showCallsModal
-                  ? 'calls'
-                  : showRequestsModal
-                    ? 'requests'
-                    : showSearchModal
-                      ? 'search'
-                      : showInvitesModal
-                        ? 'invites'
-                        : currentScreen === 'settings'
-                          ? 'settings'
-                          : 'chats'
-              }
-              unreadCount={displayedChats.reduce((sum, c) => sum + (c.unreadCount || 0), 0)}
-              requestsCount={isDecoyMode ? 0 : incomingRequests.length}
-              inviteCount={displayedUser?.inviteCodesRemaining ?? 0}
-              onTabPress={tab => {
-                if (isDecoyMode) return;
-                switch (tab) {
-                  case 'chats':
-                    setActiveChatId(null);
-                    setCurrentScreen('chat_list');
-                    break;
-                  case 'calls':
-                    setShowCallsModal(true);
-                    break;
-                  case 'search':
-                    setShowSearchModal(true);
-                    break;
-                  case 'requests':
-                    setShowRequestsModal(true);
-                    break;
-                  case 'invites':
-                    setShowInvitesModal(true);
-                    break;
-                  case 'settings':
-                    setCurrentScreen(currentScreen === 'settings' ? 'chat_list' : 'settings');
-                    break;
+            {/* Bottom navigation bar (4 tabs: Chat, Request, Calls, Settings) */}
+            {currentScreen !== 'chat_detail' && (
+              <BottomNavBar
+                activeTab={
+                  showCallsModal
+                    ? 'calls'
+                    : showRequestsModal
+                      ? 'requests'
+                      : currentScreen === 'settings'
+                        ? 'settings'
+                        : 'chats'
                 }
-              }}
-            />
+                unreadCount={displayedChats.reduce((sum, c) => sum + (c.unreadCount || 0), 0)}
+                requestsCount={isDecoyMode ? 0 : incomingRequests.length}
+                onTabPress={tab => {
+                  if (isDecoyMode) return;
+                  switch (tab) {
+                    case 'chats':
+                      setShowCallsModal(false);
+                      setShowRequestsModal(false);
+                      setActiveChatId(null);
+                      setCurrentScreen('chat_list');
+                      break;
+                    case 'requests':
+                      setShowCallsModal(false);
+                      setShowRequestsModal(true);
+                      break;
+                    case 'calls':
+                      setShowRequestsModal(false);
+                      setShowCallsModal(true);
+                      break;
+                    case 'settings':
+                      setShowCallsModal(false);
+                      setShowRequestsModal(false);
+                      setCurrentScreen('settings');
+                      break;
+                  }
+                }}
+              />
+            )}
           </View>
         )}
 
