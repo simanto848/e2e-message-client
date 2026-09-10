@@ -56,6 +56,8 @@ import { AuthScreen } from './src/screens/AuthScreen';
 import { ChatListScreen } from './src/screens/ChatListScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
+import { RequestsScreen } from './src/screens/RequestsScreen';
+import { CallsScreen } from './src/screens/CallsScreen';
 
 // Components & Modals
 import { InAppNotificationBanner } from './src/components/InAppNotificationBanner';
@@ -2675,8 +2677,6 @@ export default function App() {
               <Header
                 currentUser={displayedUser}
                 onAvatarPress={() => {
-                  setShowCallsModal(false);
-                  setShowRequestsModal(false);
                   setCurrentScreen(currentScreen === 'settings' ? 'chat_list' : 'settings');
                 }}
                 onInvitesPress={() => setShowInvitesModal(true)}
@@ -2712,8 +2712,47 @@ export default function App() {
                     setChats(prev => prev.map(c => (c.id === chatId ? { ...c, unreadCount: 0 } : c)));
                   }
                 }}
-                onOpenRequestsModal={() => setShowRequestsModal(true)}
-                onOpenSearchModal={() => setShowSearchModal(true)}
+                onOpenRequestsModal={() => setCurrentScreen('requests')}
+                onOpenSearchModal={() => setCurrentScreen('requests')}
+              />
+            )}
+
+            {currentScreen === 'requests' && (
+              <RequestsScreen
+                incomingRequests={incomingRequests}
+                outgoingRequests={outgoingRequests}
+                currentUserId={displayedUser?.id}
+                onAcceptRequest={handleAcceptContactRequest}
+                onDeclineRequest={handleDeclineContactRequest}
+                onSendRequest={handleSendContactRequest}
+                onOpenChatWithPeer={peerId => {
+                  const targetChat = chats.find(c => c.participant.id === peerId);
+                  if (targetChat) {
+                    setActiveChatId(targetChat.id);
+                    setCurrentScreen('chat_detail');
+                  } else {
+                    handleRefresh();
+                  }
+                }}
+                onRefresh={handleRefresh}
+                refreshing={isRefreshing}
+              />
+            )}
+
+            {currentScreen === 'calls' && (
+              <CallsScreen
+                chats={displayedChats}
+                onlineUserIds={onlineUserIds}
+                messages={messages}
+                onStartCall={(targetChat, type) => {
+                  setActiveChatId(targetChat.id);
+                  setCurrentScreen('chat_detail');
+                  setTimeout(() => {
+                    handleStartCall(type);
+                  }, 250);
+                }}
+                onRefresh={handleRefresh}
+                refreshing={isRefreshing}
               />
             )}
 
@@ -2827,10 +2866,10 @@ export default function App() {
             {currentScreen !== 'chat_detail' && (
               <BottomNavBar
                 activeTab={
-                  showCallsModal
-                    ? 'calls'
-                    : showRequestsModal
-                      ? 'requests'
+                  currentScreen === 'requests'
+                    ? 'requests'
+                    : currentScreen === 'calls'
+                      ? 'calls'
                       : currentScreen === 'settings'
                         ? 'settings'
                         : 'chats'
@@ -2841,22 +2880,19 @@ export default function App() {
                   if (isDecoyMode) return;
                   switch (tab) {
                     case 'chats':
-                      setShowCallsModal(false);
-                      setShowRequestsModal(false);
                       setActiveChatId(null);
                       setCurrentScreen('chat_list');
                       break;
                     case 'requests':
-                      setShowCallsModal(false);
-                      setShowRequestsModal(true);
+                      setActiveChatId(null);
+                      setCurrentScreen('requests');
                       break;
                     case 'calls':
-                      setShowRequestsModal(false);
-                      setShowCallsModal(true);
+                      setActiveChatId(null);
+                      setCurrentScreen('calls');
                       break;
                     case 'settings':
-                      setShowCallsModal(false);
-                      setShowRequestsModal(false);
+                      setActiveChatId(null);
                       setCurrentScreen('settings');
                       break;
                   }
@@ -2865,45 +2901,6 @@ export default function App() {
             )}
           </View>
         )}
-
-        {/* Encrypted Calls Hub Modal */}
-        <CallsModal
-          visible={!isDecoyMode && showCallsModal}
-          chats={displayedChats}
-          onlineUserIds={onlineUserIds}
-          messages={messages}
-          onCallContact={(targetChat, type) => {
-            setShowCallsModal(false);
-            setActiveChatId(targetChat.id);
-            setCurrentScreen('chat_detail');
-            setTimeout(() => {
-              handleStartCall(type);
-            }, 250);
-          }}
-          onClose={() => setShowCallsModal(false)}
-        />
-
-        {/* Contact Requests Modal */}
-        <ContactRequestsModal
-          visible={!isDecoyMode && showRequestsModal}
-          incomingRequests={incomingRequests}
-          outgoingRequests={outgoingRequests}
-          onAccept={handleAcceptContactRequest}
-          onDecline={handleDeclineContactRequest}
-          onClose={() => setShowRequestsModal(false)}
-        />
-
-        {/* Search Operative & Connect Modal */}
-        <SearchOperativeModal
-          visible={!isDecoyMode && showSearchModal}
-          currentUserId={currentUser?.id || ''}
-          onSendRequest={handleSendContactRequest}
-          onOpenChat={peerId => {
-            setActiveChatId(peerId);
-            setCurrentScreen('chat_detail');
-          }}
-          onClose={() => setShowSearchModal(false)}
-        />
 
         {/* Ciphertext Inspector Modal */}
         <CipherInspectorModal
