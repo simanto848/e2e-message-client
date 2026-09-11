@@ -27,9 +27,9 @@ async function postExpoFallback(params: {
   title: string;
   body: string;
   data?: Record<string, unknown>;
-}): Promise<void> {
+}): Promise<string | null> {
   try {
-    await Notifications.scheduleNotificationAsync({
+    return await Notifications.scheduleNotificationAsync({
       content: {
         title: params.title,
         body: params.body,
@@ -38,7 +38,9 @@ async function postExpoFallback(params: {
       },
       trigger: null,
     });
-  } catch {}
+  } catch {
+    return null;
+  }
 }
 
 export interface InAppNotification {
@@ -58,6 +60,7 @@ type NotificationListener = (notif: InAppNotification) => void;
 const inAppListeners = new Set<NotificationListener>();
 
 let lastCallNotificationId: number | null = null;
+let lastExpoCallNotificationId: string | null = null;
 
 export const notificationService = {
   /**
@@ -181,7 +184,7 @@ export const notificationService = {
         });
       } catch (err) {
         logger.warn('Notifications', 'Failed to post native call notification:', err);
-        await postExpoFallback({
+        lastExpoCallNotificationId = await postExpoFallback({
           channel: EXPO_CHANNELS.calls,
           title,
           body,
@@ -189,7 +192,7 @@ export const notificationService = {
         });
       }
     } else {
-      await postExpoFallback({
+      lastExpoCallNotificationId = await postExpoFallback({
         channel: EXPO_CHANNELS.calls,
         title,
         body,
@@ -288,6 +291,12 @@ export const notificationService = {
         await NotificationModule.cancelNotification(lastCallNotificationId);
       } catch {}
       lastCallNotificationId = null;
+    }
+    if (lastExpoCallNotificationId !== null) {
+      try {
+        await Notifications.dismissNotificationAsync(lastExpoCallNotificationId);
+      } catch {}
+      lastExpoCallNotificationId = null;
     }
   },
 
