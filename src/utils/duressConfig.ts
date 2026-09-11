@@ -66,6 +66,8 @@ export async function clearDuressConfig(): Promise<void> {
   await Promise.all([
     SecureStore.deleteItemAsync(DURESS_PIN_KEY, SECURE_STORE_OPTIONS),
     SecureStore.deleteItemAsync(DURESS_ACTION_KEY, SECURE_STORE_OPTIONS),
+    SecureStore.deleteItemAsync(DURESS_ATTEMPTS_KEY, SECURE_STORE_OPTIONS),
+    SecureStore.deleteItemAsync(DURESS_LOCKOUT_UNTIL_KEY, SECURE_STORE_OPTIONS),
   ]);
 }
 
