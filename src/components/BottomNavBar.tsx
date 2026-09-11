@@ -40,18 +40,23 @@ function NavTabButton({
   onPress,
   renderIcon,
 }: TabItemProps) {
-  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const scaleAnim = useRef<Animated.Value | null>(null);
+  if (!scaleAnim.current) {
+    scaleAnim.current = new Animated.Value(1);
+  }
 
   useEffect(() => {
+    const anim = scaleAnim.current;
+    if (!anim) return;
     if (active) {
       Animated.sequence([
-        Animated.spring(scaleAnim, {
+        Animated.spring(anim, {
           toValue: 1.12,
           friction: 4,
           tension: 140,
           useNativeDriver: true,
         }),
-        Animated.spring(scaleAnim, {
+        Animated.spring(anim, {
           toValue: 1,
           friction: 6,
           tension: 120,
@@ -59,13 +64,13 @@ function NavTabButton({
         }),
       ]).start();
     } else {
-      Animated.timing(scaleAnim, {
+      Animated.timing(anim, {
         toValue: 1,
         duration: 150,
         useNativeDriver: true,
       }).start();
     }
-  }, [active, scaleAnim]);
+  }, [active]);
 
   const handlePress = () => {
     try {
@@ -87,7 +92,7 @@ function NavTabButton({
       hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
     >
       <View style={[styles.pillWrap, active && styles.pillWrapActive]}>
-        <Animated.View style={[styles.iconContainer, { transform: [{ scale: scaleAnim }] }]}>
+        <Animated.View style={[styles.iconContainer, { transform: [{ scale: scaleAnim.current! }] }]}>
           {renderIcon(iconColor)}
           {badge > 0 && (
             <View style={styles.badge}>

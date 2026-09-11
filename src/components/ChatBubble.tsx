@@ -161,29 +161,47 @@ export function ChatBubble({
 
   // Swipe-to-reply (Messenger-style): horizontal drag past the threshold
   // sets this message as the reply quote. Pure PanResponder — no extra deps.
-  const swipeX = useRef(new Animated.Value(0)).current;
-  const swipeResponder = useRef(
-    PanResponder.create({
+  const swipeX = useRef<Animated.Value | null>(null);
+  if (!swipeX.current) {
+    swipeX.current = new Animated.Value(0);
+  }
+
+  const onReplyRef = useRef(onReply);
+  onReplyRef.current = onReply;
+  const messageRef = useRef(message);
+  messageRef.current = message;
+
+  const swipeResponder = useRef<ReturnType<typeof PanResponder.create> | null>(null);
+  if (!swipeResponder.current) {
+    swipeResponder.current = PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.4,
-      onPanResponderMove: (_, g) => swipeX.setValue(Math.max(-70, Math.min(70, g.dx))),
+      onPanResponderMove: (_, g) => swipeX.current?.setValue(Math.max(-70, Math.min(70, g.dx))),
       onPanResponderRelease: (_, g) => {
         const fire = Math.abs(g.dx) > 45;
-        Animated.spring(swipeX, { toValue: 0, friction: 7, useNativeDriver: true }).start();
-        if (fire && onReply) {
+        if (swipeX.current) {
+          Animated.spring(swipeX.current, { toValue: 0, friction: 7, useNativeDriver: true }).start();
+        }
+        if (fire && onReplyRef.current && messageRef.current) {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-          onReply(message);
+          onReplyRef.current(messageRef.current);
         }
       },
       onPanResponderTerminate: () => {
-        Animated.spring(swipeX, { toValue: 0, friction: 7, useNativeDriver: true }).start();
+        if (swipeX.current) {
+          Animated.spring(swipeX.current, { toValue: 0, friction: 7, useNativeDriver: true }).start();
+        }
       },
-    })
-  ).current;
-  const swipeHintOpacity = swipeX.interpolate({
-    inputRange: [-50, -12, 12, 50],
-    outputRange: [0.9, 0, 0, 0.9],
-    extrapolate: 'clamp',
-  });
+    });
+  }
+
+  const swipeHintOpacity = useRef<Animated.AnimatedInterpolation<string | number> | null>(null);
+  if (!swipeHintOpacity.current) {
+    swipeHintOpacity.current = swipeX.current.interpolate({
+      inputRange: [-50, -12, 12, 50],
+      outputRange: [0.9, 0, 0, 0.9],
+      extrapolate: 'clamp',
+    });
+  }
 
   useEffect(() => {
     if (!message.expiresAt) {
@@ -302,15 +320,15 @@ export function ChatBubble({
         style={[
           styles.swipeHint,
           isMe ? styles.swipeHintLeft : styles.swipeHintRight,
-          { opacity: swipeHintOpacity },
+          { opacity: swipeHintOpacity.current! },
         ]}
         pointerEvents="none"
       >
         <Text style={styles.swipeHintText}>↩</Text>
       </Animated.View>
       <Animated.View
-        style={[styles.swipeContent, { transform: [{ translateX: swipeX }] }]}
-        {...swipeResponder.panHandlers}
+        style={[styles.swipeContent, { transform: [{ translateX: swipeX.current! }] }]}
+        {...swipeResponder.current!.panHandlers}
       >
       <TouchableOpacity
         activeOpacity={0.95}

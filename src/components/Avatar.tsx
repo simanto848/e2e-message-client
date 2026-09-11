@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { View, Text, Image, StyleSheet, StyleProp, ViewStyle, ImageStyle } from 'react-native';
 
 interface Props {
@@ -37,11 +37,8 @@ function initialsForName(name?: string): string {
  * so a broken/missing avatar never just silently renders nothing.
  */
 export function Avatar({ uri, name, size, style }: Props) {
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    setFailed(false);
-  }, [uri]);
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  const isFailed = !!uri && failedUri === uri;
 
   // Caller `style` goes first and the computed size/color object second, so
   // layout props from the caller (e.g. marginRight) still apply but can't
@@ -49,12 +46,12 @@ export function Avatar({ uri, name, size, style }: Props) {
   // (existing avatar styles across the app set a placeholder backgroundColor
   // for the loading state, which would otherwise silently defeat the
   // colored-initials fallback).
-  if (uri && !failed) {
+  if (uri && !isFailed) {
     return (
       <Image
         source={{ uri }}
         style={[style as StyleProp<ImageStyle>, { width: size, height: size, borderRadius: size / 2 }]}
-        onError={() => setFailed(true)}
+        onError={() => setFailedUri(uri)}
       />
     );
   }
