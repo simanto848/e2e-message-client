@@ -37,6 +37,10 @@ describe('decideBackAction priority chain', () => {
       kind: 'close-modal',
       modal: 'requests',
     });
+    expect(decideBackAction({ ...base, openModals: ['calls'] })).toEqual({
+      kind: 'close-modal',
+      modal: 'calls',
+    });
   });
 
   test('screen navigation: detail and settings go back to list', () => {

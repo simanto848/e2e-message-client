@@ -63,6 +63,7 @@ const MODAL_PRIORITY: ModalKey[] = [
   'invites',
   'search',
   'requests',
+  'calls',
 ];
 
 export function decideBackAction(snap: BackSnapshot): BackDecision {
