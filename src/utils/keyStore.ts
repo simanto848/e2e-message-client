@@ -16,10 +16,9 @@ const CURRENT_USER_ID_KEY = 'jaby_current_user_id';
 const IDENTITY_KEYPAIR_PREFIX = 'jaby_identity_keypair_';
 const BACKUP_FREQUENCY_KEY = 'jaby_backup_frequency';
 const BACKUP_PASSPHRASE_KEY = 'jaby_backup_passphrase';
-
-
 import { SECURE_STORE_OPTIONS } from './secureOptions';
 export { SECURE_STORE_OPTIONS };
+
 
 // SecureStore keys are restricted to [A-Za-z0-9._-]; sanitize just in case a
 // userId ever contains something outside that set.
@@ -168,26 +167,15 @@ export async function clearIdentityKeyPair(userId: string): Promise<void> {
 
 /**
  * Clear session tokens and auth credentials on sign out.
- * Wipes the active session and device identity keys for the user so unencrypted
- * private keys do not remain persisted across accounts.
+ * Wipes the active session and credentials. Identity keypairs stay preserved in SecureStore
+ * so signing back in does not force key rotation; full key zeroization is performed via wipeAllSecureData.
  */
-export async function clearSession(userId?: string | null): Promise<void> {
-  let uid = userId;
-  if (!uid) {
-    try {
-      uid = await getCurrentUserId();
-    } catch {}
-  }
-
+export async function clearSession(): Promise<void> {
   const tasks: Promise<unknown>[] = [
     clearSessionToken(),
     clearCurrentUserId(),
     clearPrimaryPin(),
   ];
-
-  if (uid) {
-    tasks.push(clearIdentityKeyPair(uid));
-  }
 
   await Promise.allSettled(tasks);
 }
