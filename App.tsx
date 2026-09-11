@@ -1668,7 +1668,9 @@ export default function App() {
           notificationService.cancelMessageNotification(data.chatId).catch(() => {});
         }
         chatsRef.current.forEach(c => {
-          tombstoneCachedMessage(uid, c.id, data.messageId, data.deletedAt).catch(() => {});
+          if (c.id !== data.chatId) {
+            tombstoneCachedMessage(uid, c.id, data.messageId, data.deletedAt).catch(() => {});
+          }
         });
         removeOutboxEntry(uid, data.messageId).catch(() => {});
         outboxRef.current.delete(data.messageId);
@@ -2018,7 +2020,6 @@ export default function App() {
         // Local cache + outbox purge + tray dismissal.
         if (uid && chatId) {
           removeCachedMessage(uid, chatId, m.id).catch(() => {});
-          tombstoneCachedMessage(uid, chatId, m.id, now).catch(() => {});
           removeOutboxEntry(uid, m.id).catch(() => {});
           outboxRef.current.delete(m.id);
           notificationService.cancelMessageNotification(chatId).catch(() => {});
