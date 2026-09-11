@@ -9,6 +9,7 @@ const KEY_BACKGROUND_SYNC = '@jaby_background_sync_enabled';
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let isPolling = false;
 let isSyncActive = true;
+let currentSyncSessionId = 0;
 
 interface SyncCallbacks {
   onIncomingCall?: (callSignal: any) => void;
@@ -34,19 +35,20 @@ export async function getBackgroundSyncSettings(): Promise<{
 export async function setBackgroundSyncEnabled(enabled: boolean): Promise<void> {
   isSyncActive = enabled;
   await AsyncStorage.setItem(KEY_BACKGROUND_SYNC, enabled ? 'true' : 'false').catch(() => {});
-  if (!enabled && pollTimer) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
+  if (!enabled) {
+    stopBackgroundSync();
   }
 }
 
 export function startBackgroundSync(callbacks: SyncCallbacks): void {
   activeCallbacks = callbacks;
+  const sessionId = ++currentSyncSessionId;
 
   if (pollTimer) {
     clearTimeout(pollTimer);
     pollTimer = null;
   }
+  isPolling = false;
 
   // Dedupe by callId: poll runs every 5-15s and the server keeps a pending
   // offer until it expires/acks — without this the same incoming call would
@@ -55,7 +57,7 @@ export function startBackgroundSync(callbacks: SyncCallbacks): void {
   const MAX_SEEN_CALLS = 50;
 
   const poll = async () => {
-    if (isPolling || !isSyncActive) return;
+    if (sessionId !== currentSyncSessionId || isPolling || !isSyncActive) return;
     // AppState gating: when the app is foregrounded AND the realtime socket is
     // live, signaling already arrives via socket — skip the REST poll tick to
     // save battery (socket is the source of truth; poll is the background fallback).
@@ -63,6 +65,7 @@ export function startBackgroundSync(callbacks: SyncCallbacks): void {
     isPolling = true;
     try {
       const res = await api.pollNotifications();
+      if (sessionId !== currentSyncSessionId || !isSyncActive) return;
       if (res.success) {
         // If there's an incoming call offer waiting
         if (res.pendingCall && res.pendingCall.signalPayload) {
@@ -137,24 +140,34 @@ export function startBackgroundSync(callbacks: SyncCallbacks): void {
   // Dynamic backoff scheduling: 5s when socket is disconnected, 15s when socket is healthy and connected,
   // plus up to 2s jitter so a fleet of backgrounded devices doesn't thundering-herd the poll endpoint.
   const scheduleNext = () => {
-    if (pollTimer === null) return;
+    if (sessionId !== currentSyncSessionId || pollTimer === null || !isSyncActive) return;
     const baseMs = socketService.isConnected() ? 15000 : 5000;
     const jitterMs = Math.random() * 2000;
     const intervalMs = baseMs + jitterMs;
     pollTimer = setTimeout(async () => {
+      if (sessionId !== currentSyncSessionId) return;
       await poll();
       scheduleNext();
     }, intervalMs);
   };
 
   pollTimer = setTimeout(() => {
-    poll().finally(() => scheduleNext());
+    if (sessionId !== currentSyncSessionId) return;
+    poll().finally(() => {
+      if (sessionId === currentSyncSessionId) {
+        scheduleNext();
+      }
+    });
   }, 1000);
 }
 
 export function stopBackgroundSync(): void {
+  currentSyncSessionId++;
   if (pollTimer) {
     clearTimeout(pollTimer);
     pollTimer = null;
   }
+  isPolling = false;
+  activeCallbacks = {};
 }
+
