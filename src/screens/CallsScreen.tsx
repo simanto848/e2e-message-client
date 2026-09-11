@@ -77,7 +77,9 @@ export function CallsScreen({
 
     for (const msg of messages) {
       if (msg.attachment?.type === 'call' && !logs.some(l => l.id === msg.id)) {
-        const chat = chats.find(c => c.id === msg.chatId || c.participant.id === msg.senderId);
+        const chat = chats.find(
+          c => c.id === msg.chatId || c.participant.id === msg.senderId || c.participant.id === msg.receiverId
+        );
         if (chat) {
           const att = msg.attachment;
           logs.push({
