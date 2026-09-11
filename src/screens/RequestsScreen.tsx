@@ -60,10 +60,17 @@ export function RequestsScreen({
   const [searchLoading, setSearchLoading] = useState(false);
   const [sendingIds, setSendingIds] = useState<Set<string>>(new Set());
 
+  const handleQueryChange = (text: string) => {
+    setQuery(text);
+    if (!text.trim()) {
+      setSearchResults([]);
+    }
+  };
+
   // Debounced search for operatives
   useEffect(() => {
-    if (activeTab !== 'search' || !query.trim()) {
-      setSearchResults([]);
+    const trimmed = query.trim();
+    if (activeTab !== 'search' || !trimmed) {
       return;
     }
 
@@ -71,7 +78,7 @@ export function RequestsScreen({
     const executeSearch = async () => {
       setSearchLoading(true);
       try {
-        const list = await api.searchOperatives(query);
+        const list = await api.searchOperatives(trimmed);
         if (!cancelled) {
           const filtered = currentUserId ? list.filter(item => item.id !== currentUserId) : list;
           setSearchResults(filtered);
@@ -124,6 +131,7 @@ export function RequestsScreen({
     setActiveTab(tab);
     if (tab !== 'search') {
       Keyboard.dismiss();
+      setSearchResults([]);
     }
   };
 
@@ -232,14 +240,14 @@ export function RequestsScreen({
               placeholder="Search by name or @handle..."
               placeholderTextColor={colors.textMuted}
               value={query}
-              onChangeText={setQuery}
+              onChangeText={handleQueryChange}
               autoCapitalize="none"
               autoCorrect={false}
               returnKeyType="search"
             />
             {query.length > 0 && (
               <TouchableOpacity
-                onPress={() => setQuery('')}
+                onPress={() => handleQueryChange('')}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 <X size={16} color={colors.textMuted} />
@@ -261,7 +269,7 @@ export function RequestsScreen({
               </View>
               <Text style={styles.emptyTitle}>No operatives found</Text>
               <Text style={styles.emptySubtitle}>
-                No matches found for "{query}". Check spelling or try a handle.
+                No matches found for &quot;{query}&quot;. Check spelling or try a handle.
               </Text>
             </View>
           )}
@@ -442,7 +450,7 @@ export function RequestsScreen({
               </View>
               <Text style={styles.heroTitle}>No Sent Requests</Text>
               <Text style={styles.heroSubtitle}>
-                You haven't sent any pending invitations. Use Find Friends to connect with others.
+                You haven&apos;t sent any pending invitations. Use Find Friends to connect with others.
               </Text>
             </View>
           ) : (

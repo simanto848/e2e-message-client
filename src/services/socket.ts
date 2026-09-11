@@ -315,8 +315,6 @@ class SocketService {
       this.listeners.clear();
       this.messageQueue = [];
       this.signalQueue = [];
-      this.unauthorizedHandlers.clear();
-      this.notDeliveredHandlers.clear();
       this.authFailed = false;
     }
   }
@@ -325,8 +323,6 @@ class SocketService {
     this.listeners.clear();
     this.messageQueue = [];
     this.signalQueue = [];
-    this.unauthorizedHandlers.clear();
-    this.notDeliveredHandlers.clear();
     this.schedulePersist();
   }
 
