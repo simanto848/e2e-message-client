@@ -53,8 +53,6 @@ class SocketService {
   private queueUserId: string | null = null;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private authFailed = false;
-  private unauthorizedHandlers = new Set<() => void>();
-  private notDeliveredHandlers = new Set<(info: NotDeliveredInfo) => void>();
 
   private addEventListener<T extends Function>(event: string, callback: T): () => void {
     if (!this.listeners.has(event)) {
@@ -132,11 +130,6 @@ class SocketService {
     if (this.deadLetter.length > SOCKET_QUEUE_CAP) this.deadLetter.shift();
     logger.warn('Socket', `Dead-letter [${queue}] ${event}: ${reason}`);
     this.emitInternal('socket_not_delivered', entry);
-    this.notDeliveredHandlers.forEach(fn => {
-      try {
-        fn(entry);
-      } catch {}
-    });
     if (this.queueUserId) {
       appendDeadLetter(this.queueUserId, entry).catch(() => {});
     }
@@ -233,31 +226,16 @@ class SocketService {
       await clearSession();
     } catch {}
     this.emitInternal('socket_unauthorized');
-    this.unauthorizedHandlers.forEach(fn => {
-      try {
-        fn();
-      } catch {}
-    });
   }
 
   /** Subscribe to auth-rejection (App routes to auth screen). */
   onUnauthorized(callback: () => void): () => void {
-    this.unauthorizedHandlers.add(callback);
-    const off = this.addEventListener('socket_unauthorized', callback as any);
-    return () => {
-      this.unauthorizedHandlers.delete(callback);
-      off();
-    };
+    return this.addEventListener('socket_unauthorized', callback as any);
   }
 
   /** Subscribe to dead-letter (never-silently-dropped) surfacing. */
   onNotDelivered(callback: (info: NotDeliveredInfo) => void): () => void {
-    this.notDeliveredHandlers.add(callback);
-    const off = this.addEventListener('socket_not_delivered', callback as any);
-    return () => {
-      this.notDeliveredHandlers.delete(callback);
-      off();
-    };
+    return this.addEventListener('socket_not_delivered', callback as any);
   }
 
   getDeadLetter(): DeadLetterEntry[] {
